@@ -10,10 +10,10 @@ import { SkeletonBar } from "./Loading";
 
 const NAV_LINKS = [
   { label: "Inicio", to: "/" },
-  { label: "viajes disponibles", to: "/viajes" },
-  { label: "fleteros", to: "/fleteros" },
-  { label: "rastrear envío", to: "/rastrear" },
-  { label: "nosotros", to: "/nosotros" },
+  { label: "Viajes disponibles", to: "/viajes" },
+  { label: "Fleteros", to: "/fleteros" },
+  { label: "Rastrear envío", to: "/rastrear" },
+  { label: "Nosotros", to: "/nosotros" },
 ];
 
 function NavLink({ label, to }: { label: string; to: string }) {
@@ -40,10 +40,8 @@ export function Header() {
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
-  const handleLogout = () => {
-    // logout es async porque primero revoca el token del lado del server; la
-    // navegación no espera, la UI se limpia al resolver
-    void logout();
+  const handleLogout = async () => {
+    await logout();
     navigate("/");
   };
 
@@ -125,7 +123,7 @@ export function Header() {
                 {/* Botón publicar viaje - CTA principal para CARRIER */}
                 {user.role === "CARRIER" && (
                   <Button asChild variant="primary" size="sm">
-                    <Link to="/viajes/nuevo">publicar viaje</Link>
+                    <Link to="/viajes/nuevo">Publicar viaje</Link>
                   </Button>
                 )}
 
@@ -152,7 +150,7 @@ export function Header() {
             <NotificationBell />
             {user?.role === "CARRIER" && (
               <Button asChild variant="primary" size="sm">
-                <Link to="/viajes/nuevo">publicar viaje</Link>
+                <Link to="/viajes/nuevo">Publicar viaje</Link>
               </Button>
             )}
             {/* bajo lg el menú se reduce al avatar (el nombre y el chevron
@@ -223,7 +221,7 @@ export function Header() {
                   className="w-full"
                   onClick={() => setMobileOpen(false)}
                 >
-                  <Link to="/perfil">mi perfil</Link>
+                  <Link to="/perfil">Mi perfil</Link>
                 </Button>
                 <Button
                   asChild
@@ -232,7 +230,7 @@ export function Header() {
                   className="w-full"
                   onClick={() => setMobileOpen(false)}
                 >
-                  <Link to="/solicitudes">solicitudes</Link>
+                  <Link to="/solicitudes">Solicitudes</Link>
                 </Button>
                 {user.role === "ADMIN" && (
                   <>
@@ -243,7 +241,7 @@ export function Header() {
                       className="w-full"
                       onClick={() => setMobileOpen(false)}
                     >
-                      <Link to="/admin">dashboard</Link>
+                      <Link to="/admin">Dashboard</Link>
                     </Button>
                     <Button
                       asChild
@@ -252,7 +250,7 @@ export function Header() {
                       className="w-full"
                       onClick={() => setMobileOpen(false)}
                     >
-                      <Link to="/admin/verificaciones">verificaciones</Link>
+                      <Link to="/admin/verificaciones">Verificaciones</Link>
                     </Button>
                   </>
                 )}
@@ -263,7 +261,7 @@ export function Header() {
                     className="w-full text-danger"
                     onClick={handleLogout}
                   >
-                    salir
+                    Cerrar sesión
                   </Button>
                 </div>
               </>

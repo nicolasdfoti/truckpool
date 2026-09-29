@@ -14,18 +14,18 @@ function formatTripDate(dateStr: string): string {
 }
 
 function formatTime(time: string | null): string {
-  if (!time) return "sin hora confirmada";
+  if (!time) return "Sin hora confirmada";
   return time;
 }
 
 function statusLabel(status: string): { label: string; className: string } {
   switch (status) {
     case "PENDING":
-      return { label: "pendiente de confirmar", className: "bg-brand/10 text-brand" };
+      return { label: "Pendiente de confirmar", className: "bg-brand/10 text-brand" };
     case "CONFIRMED":
-      return { label: "confirmada", className: "bg-success-bg text-success-deep" };
+      return { label: "Confirmada", className: "bg-success-bg text-success-deep" };
     case "CANCELLED":
-      return { label: "retirada", className: "bg-canvas-line text-ink-soft" };
+      return { label: "Retirada", className: "bg-canvas-line text-ink-soft" };
     default:
       return { label: status.toLowerCase(), className: "bg-canvas-line text-ink-soft" };
   }
@@ -34,13 +34,13 @@ function statusLabel(status: string): { label: string; className: string } {
 function tripStatusLabel(status: string): { label: string; className: string } {
   switch (status) {
     case "OPEN":
-      return { label: "abierto a cargas", className: "bg-brand/10 text-brand" };
+      return { label: "Abierto a cargas", className: "bg-brand/10 text-brand" };
     case "FULL":
-      return { label: "completo", className: "bg-brand/10 text-brand" };
+      return { label: "Completo", className: "bg-brand/10 text-brand" };
     case "IN_TRANSIT":
-      return { label: "en viaje", className: "bg-success-bg text-success-deep" };
+      return { label: "En viaje", className: "bg-success-bg text-success-deep" };
     case "COMPLETED":
-      return { label: "completado", className: "bg-canvas-line text-ink-soft" };
+      return { label: "Completado", className: "bg-canvas-line text-ink-soft" };
     default:
       return { label: status.toLowerCase(), className: "bg-canvas-line text-ink-soft" };
   }
@@ -76,7 +76,7 @@ export default function TrackPackage() {
             className="text-sm text-brand underline"
             onClick={handleClear}
           >
-            ← buscar otro código
+            ← Buscar otro código
           </Link>
           <LoadingBlock label="buscando envío" className="mt-8 space-y-4">
             <SkeletonBar className="h-7 w-1/2" />
@@ -97,20 +97,20 @@ export default function TrackPackage() {
             className="text-sm text-brand underline"
             onClick={handleClear}
           >
-            ← buscar otro código
+            ← Buscar otro código
           </Link>
           <div className="mt-8 rounded-[10px] border border-line bg-white p-6 text-center">
-            <h2 className="font-display text-xl font-medium">código no encontrado</h2>
+            <h2 className="font-display text-xl font-medium">Código no encontrado</h2>
             <p className="mt-2 text-sm text-ink-muted">
-              no existe ningún envío con el código{" "}
+              No existe ningún envío con el código{" "}
               <code className="font-mono">{code.toUpperCase()}</code>.
             </p>
             <p className="mt-2 text-sm text-ink-muted">
-              verificá que lo hayas copiado bien (formato: TP-XXXX-C#).
+              Verificá que lo hayas copiado bien (formato: TP-XXXX-C#).
             </p>
             <Button asChild variant="outline" size="md" className="mt-4">
               <Link to="/rastrear" onClick={handleClear}>
-                buscar otro código
+                Buscar otro código
               </Link>
             </Button>
           </div>

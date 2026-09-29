@@ -274,7 +274,11 @@ export default function Profile() {
                   id="bio"
                   value={bio}
                   onChange={(e) => setBio(e.target.value)}
-                  placeholder="ej: transportista hace 10 años, cubrimos todo el centro del país"
+                  placeholder={
+                    user.role === "COMPANY"
+                      ? "ej: somos una empresa de transporte con 10 años de experiencia en mudanzas."
+                      : "ej: fletero con camioneta, hago viajes a CABA y alrededores."
+                  }
                   rows={3}
                   className={inputClass}
                 />
@@ -293,8 +297,8 @@ export default function Profile() {
                 />
                 <p className="mt-1 text-xs text-ink-muted">
                   {user?.role === "COMPANY"
-                    ? "los fleteros usan este teléfono para coordinar la carga."
-                    : "si sos fletero, aparece en tu perfil público."}
+                    ? "Los fleteros usan este teléfono para coordinar la carga."
+                    : "Si sos fletero, aparece en tu perfil público."}
                 </p>
               </div>
 
