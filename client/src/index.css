@@ -1,0 +1,76 @@
+@import "leaflet/dist/leaflet.css";
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", sans-serif;
+  --font-display: "Space Grotesk", sans-serif;
+
+  --color-brand: #0b3d5c;
+  --color-brand-hover: #08304a;
+  --color-brand-deep: #042c53;
+  --color-brand-light: #6fa0bf;
+  --color-accent: #f58220;
+  --color-accent-hover: #e17516;
+  --color-accent-ink: #4a1b0c;
+  /* mismo naranja, pero legible sobre fondos claros: los usos de accent
+     (íconos, estrellas, títulos) necesitan >=3:1 y accent sólo da 2.3-2.6 */
+  --color-accent-strong: #c25f0d;
+  /* tono reservado para texto naranja chico sobre fondos claros (>=4.5:1) */
+  --color-accent-text: #a35209;
+  --color-surface: #fff6ec;
+  --color-surface-line: #f6d9b8;
+  --color-canvas: #eaf1f7;
+  --color-canvas-line: #d3e1ec;
+  --color-soft: #fdf8f0;
+  --color-line: #e2e6ea;
+  --color-line-strong: #d9dee3;
+  --color-line-dashed: #c7cdd4;
+  --color-ink: #1a2733;
+  --color-ink-soft: #4b5563;
+  --color-ink-muted: #646e7a;
+  --color-success: #1f7a48;
+  --color-success-soft: #e1f5ee;
+  --color-success-deep: #085041;
+  --color-success-bg: #dff0e5;
+  --color-danger: #c0392b;
+  --color-step-1: #fdeedd;
+  --color-step-2: #dce9f3;
+  --color-step-3: #dff0e5;
+}
+
+@layer components {
+  /* El checkbox nativo con accent-color dibuja la caja sin marcar con un borde
+     de ~1.35:1 contra el blanco: no se ve. Lo dibujamos nosotros para que el
+     borde llegue a 5.18:1 y el tilde tenga 11.44:1. */
+  .checkbox {
+    appearance: none;
+    -webkit-appearance: none;
+    display: inline-grid;
+    place-content: center;
+    width: 1rem;
+    height: 1rem;
+    flex-shrink: 0;
+    border: 1.5px solid var(--color-ink-muted);
+    border-radius: 0.25rem;
+    background-color: var(--color-white);
+    cursor: pointer;
+  }
+
+  .checkbox:checked {
+    background-color: var(--color-brand);
+    border-color: var(--color-brand);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23ffffff' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.5 8.5l3 3 6-7'/%3E%3C/svg%3E");
+    background-size: 100%;
+  }
+
+  .checkbox:disabled {
+    cursor: not-allowed;
+    background-color: var(--color-canvas-line);
+    border-color: var(--color-ink-soft);
+  }
+
+  .checkbox:focus-visible {
+    outline: 2px solid var(--color-accent-strong);
+    outline-offset: 2px;
+  }
+}

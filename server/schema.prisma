@@ -1,0 +1,369 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  COMPANY
+  CARRIER
+  ADMIN
+}
+
+// verificación manual de identidad del transportista: un admin aprueba el
+// DNI/CUIT antes de que pueda publicar viajes.
+enum VerificationStatus {
+  UNVERIFIED
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+model User {
+  id                 String             @id @default(cuid())
+  email              String             @unique
+  password           String
+  name               String
+  role               Role
+  bio                String?
+  phone              String?
+  taxId              String?
+  verificationStatus VerificationStatus @default(UNVERIFIED)
+  verificationNote   String?
+  // si es false, lib/email.ts no le manda nada a esta persona.
+  emailNotifications Boolean            @default(true)
+  // disponible para responder solicitudes ahora (solo aplica a CARRIER)
+  isAvailableNow Boolean        @default(true)
+  // Mercado Pago Marketplace: ID de usuario MP del transportista (OAuth)
+  mpUserId       String?
+  // Mercado Pago Marketplace: Access Token del transportista (OAuth)
+  // NUNCA se expone en respuestas de API; solo se usa server-side.
+  mpAccessToken  String?
+  createdAt          DateTime           @default(now())
+
+  tripsAsCarrier Trip[]      @relation("CarrierTrips")
+  cargoItems     CargoItem[] @relation("CompanyCargo")
+
+  reviewsGiven    Review[] @relation("ReviewsGiven")
+  reviewsReceived Review[] @relation("ReviewsReceived")
+
+  messagesSent     Message[] @relation("MessagesSent")
+  messagesReceived Message[] @relation("MessagesReceived")
+
+  notifications Notification[]
+
+  tripRequestsSent     TripRequest[] @relation("SentTripRequests")
+  tripRequestsReceived TripRequest[] @relation("ReceivedTripRequests")
+}
+
+enum TripStatus {
+  OPEN
+  FULL
+  IN_TRANSIT
+  COMPLETED
+}
+
+model Trip {
+  id            String     @id @default(cuid())
+  origin        String
+  destination   String
+  date          DateTime
+
+  // hora de salida en formato "HH:mm" (24h). va suelta del date porque la fecha
+  // es el día del viaje y la hora es la que el fletero promete: los viajes
+  // publicados antes de esta feature la tienen en null y se muestran sin hora.
+  departureTime String?
+
+  truckType     String
+  capacityTotal Float
+  price         Decimal    @db.Decimal(12, 2)
+  status        TripStatus @default(OPEN)
+
+  // porcentaje del precio que la empresa deja como seña al reservar espacio.
+  // es del viaje (no del usuario): cada carga suma precioShare y de ahí sale
+  // su depósito. Va entre 10 y 50, validado en el schema de publicación.
+  depositPercent Int @default(20)
+
+  // comisión de plataforma sobre cada priceShare confirmado (10% default).
+  // se retiene al fletero al momento del split en Mercado Pago.
+  platformFeePercent Int @default(10)
+
+  // coordenadas de origen y destino, geocodificadas contra Nominatim al crear
+  // el viaje. Son opcionales a propósito: los viajes creados antes de esta
+  // feature (y los que el geocode no pudo resolver) quedan en null y no
+  // matchean nunca una búsqueda por radio.
+  originLat Float?
+  originLng Float?
+  destLat   Float?
+  destLng   Float?
+  features  String[] @default([])
+  createdAt DateTime @default(now())
+
+  carrierId  String
+  carrier    User           @relation("CarrierTrips", fields: [carrierId], references: [id])
+  cargoItems CargoItem[]
+  reviews    Review[]
+  messages   Message[]
+  locations  TripLocation[]
+
+  @@index([status, date])
+  // para el filtro por proximidad en memoria: estado + origen
+  @@index([status, originLat])
+  @@index([status, destLat])
+}
+
+// calificación de una parte del viaje a la otra, una sola vez por dirección.
+model Review {
+  id        String   @id @default(cuid())
+  rating    Int
+  comment   String?
+  createdAt DateTime @default(now())
+
+  tripId     String
+  trip       Trip   @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  fromUserId String
+  fromUser   User   @relation("ReviewsGiven", fields: [fromUserId], references: [id])
+  toUserId   String
+  toUser     User   @relation("ReviewsReceived", fields: [toUserId], references: [id])
+
+  // única por (viaje, quién califica, a quién): no se puede calificar dos
+  // veces la misma dirección del mismo viaje.
+  @@unique([tripId, fromUserId, toUserId])
+  @@index([toUserId, createdAt])
+}
+
+// mensajes entre el transportista y las empresas con carga de un mismo viaje.
+model Message {
+  id        String    @id @default(cuid())
+  body      String
+  createdAt DateTime  @default(now())
+  readAt    DateTime?
+
+  tripId String
+  trip   Trip   @relation(fields: [tripId], references: [id], onDelete: Cascade)
+
+  fromUserId String
+  fromUser   User   @relation("MessagesSent", fields: [fromUserId], references: [id])
+  toUserId   String
+  toUser     User   @relation("MessagesReceived", fields: [toUserId], references: [id])
+
+  @@index([tripId, createdAt])
+  @@index([toUserId, readAt])
+}
+
+// tracking GPS del viaje en tránsito: el transportista postea su posición
+// desde el navegador (Geolocation API) y la empresa con carga la ve en un mapa.
+// Solo tiene puntos, sin map magic: es un historial de la ruta recorrida.
+model TripLocation {
+  id         String   @id @default(cuid())
+  lat        Float
+  lng        Float
+  recordedAt DateTime @default(now())
+
+  tripId String
+  trip   Trip   @relation(fields: [tripId], references: [id], onDelete: Cascade)
+
+  // para traer la última posición del viaje con un solo DESC
+  @@index([tripId, recordedAt])
+}
+
+enum CargoItemStatus {
+  PENDING
+  CONFIRMED
+  // la empresa retiró la carga antes de que el viaje arrancara. el registro
+  // queda (es historial) pero no ocupa capacidad ni cuenta para el manifiesto.
+  CANCELLED
+}
+
+model CargoItem {
+  id          String          @id @default(cuid())
+  description String
+  volume      Float
+  priceShare  Decimal         @default(0) @db.Decimal(12, 2)
+  status      CargoItemStatus @default(PENDING)
+  createdAt   DateTime        @default(now())
+
+  // la seña que se paga para reservar el lugar. se congela al crear la carga
+  // (no se recalcula): si el transportista cambia el porcentaje del viaje, las
+  // reservas ya hechas siguen valiendo lo que valían.
+  depositAmount Decimal @default(0) @db.Decimal(12, 2)
+
+  // retiro de la carga. cancellationFeeAmount es lo que la plataforma se queda
+  // de la seña según la ventana previa al viaje (>48h = 0, 24-48h = mitad,
+  // <24h = toda la seña). queda en null mientras la carga está viva.
+  cancelledAt           DateTime?
+  cancellationFeeAmount Decimal?  @db.Decimal(12, 2)
+
+  // --- pickups por carga (nueva feature) ---
+  // dirección de retiro (texto libre, lo que la empresa escribe)
+  pickupAddress String
+  // geocodificación del pickup (best-effort, igual que Trip)
+  pickupLat     Float?
+  pickupLng     Float?
+  // código de seguimiento público, corto y legible: TP-{tripId.slice(-4)}-C{n}
+  trackingCode  String  @unique
+  // orden de parada manual (null = cálculo automático por proyección sobre la
+  // línea origen-destino del viaje). Si el carrier lo reordena, persiste aquí.
+  stopOrder     Int?
+
+  tripId    String
+  trip      Trip   @relation(fields: [tripId], references: [id])
+  companyId String
+  company   User   @relation("CompanyCargo", fields: [companyId], references: [id])
+
+  payments Payment[]
+
+  @@index([tripId, stopOrder])
+}
+
+enum PaymentStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  REFUNDED
+}
+
+// una carga tiene hasta dos pagos: la seña que reserva el espacio y el saldo
+// que se cobra cuando el viaje ya salió. el par (carga, tipo) es único.
+enum PaymentType {
+  // seña: se paga al reservar, define si la carga se confirma
+  DEPOSIT
+  // saldo: lo que falta para el total una vez que el viaje está en camino
+  BALANCE
+}
+
+model Payment {
+  id             String        @id @default(cuid())
+  amount         Decimal       @db.Decimal(12, 2)
+  status         PaymentStatus @default(PENDING)
+  type           PaymentType   @default(DEPOSIT)
+  // cuánto le devolvimos a Mercado Pago hasta ahora. se llena recién con los
+  // reembolsos parciales (cancelación entre 24 y 48h): un pago APPROVED con
+  // refundedAmount menor que amount está a medio camino de su devolución.
+  refundedAmount Decimal?      @db.Decimal(12, 2)
+  mpPreferenceId String?
+  mpPaymentId    String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  // Fee de plataforma (10% default) y monto neto al fletero.
+  // El split lo hace MP vía marketplace_fee; acá guardamos para auditoría.
+  platformFeeAmount Decimal? @db.Decimal(12, 2)
+  carrierAmount     Decimal? @db.Decimal(12, 2)
+
+  cargoItemId String
+  cargoItem   CargoItem @relation(fields: [cargoItemId], references: [id])
+
+  @@unique([cargoItemId, type])
+  @@index([mpPreferenceId])
+  @@index([status])
+}
+
+enum TripRequestStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+}
+
+model TripRequest {
+  id                 String             @id @default(cuid())
+  origin             String
+  destination        String
+  desiredDate        DateTime
+  estimatedVolume    Float
+  note               String?
+  status             TripRequestStatus  @default(PENDING)
+  resultingTripId    String?
+  createdAt          DateTime           @default(now())
+
+  companyId          String
+  company            User               @relation("SentTripRequests", fields: [companyId], references: [id])
+  carrierId          String
+  carrier            User               @relation("ReceivedTripRequests", fields: [carrierId], references: [id])
+
+  @@index([carrierId, status])
+  @@index([companyId, createdAt])
+}
+
+// tipo de aviso. es un enum (no un string libre) para que el cliente pueda
+// elegir ícono/color por tipo y para que un typo no cree tipos nuevos.
+// Para agregar uno: el enum, la migración, y el label en el cliente.
+enum NotificationType {
+  MESSAGE
+  CARGO_ADDED
+  CARGO_CONFIRMED
+  CARGO_CANCELLED
+  TRIP_STATUS_CHANGED
+  PAYMENT_APPROVED
+  BALANCE_DUE
+  TRIP_REQUEST
+  TRIP_REQUEST_RESPONSE
+}
+
+// aviso in-app. el email es un canal opcional del mismo aviso (se manda solo si
+// el usuario tiene emailNotifications), no una fila aparte: así el usuario ve
+// lo mismo en la campanita y por email.
+model Notification {
+  id        String           @id @default(cuid())
+  type      NotificationType
+  title     String
+  body      String
+  // para linkear al viaje desde la campanita. null cuando el aviso no pertenece
+  // a un viaje puntual (o el viaje ya no existe).
+  tripId    String?
+  read      Boolean          @default(false)
+  createdAt DateTime         @default(now())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // la campanita siempre pregunta por "las mías no leídas, más recientes":
+  @@index([userId, read, createdAt])
+  @@index([userId, createdAt])
+}
+
+// Tokens de sesión que el usuario cerró explícitamente.
+//
+// Un JWT es válido hasta que expira y nadie lo puede "desfirmar", así que la
+// sesión de 7 días sobrevive al logout si no se anota el token somewhere. Acá se
+// guarda el `jti` (el id que lleva cada token) con la fecha en que expira: al
+// cerrar sesión se agrega el jti del token usado, y `requireAuth` lo consulta
+// antes de dejarlo pasar.
+//
+// Las filas se van borrando solas cuando el token que apuntan ya expiró (ver
+// lib/tokenRevocation.ts): un `jti` expirado no puede volver a ser presentado con
+// éxito, así que borrarlo no abre ningún agujero.
+model RevokedToken {
+  jti       String   @id
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  // la limpieza borra por expiresAt
+  @@index([expiresAt])
+}
+
+enum RefundStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model RefundRequest {
+  id              String       @id @default(cuid())
+  cargoItemId     String       @unique
+  targetAmount    Decimal      @db.Decimal(12, 2)
+  status          RefundStatus @default(PENDING)
+  attempts        Int          @default(0)
+  lastError       String?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@index([status])
+  @@index([createdAt])
+}
+
+// nota: capacityUsed no se guarda — se calcula sumando los CargoItem.volume
+// de cada Trip, así evitamos que quede desincronizado del dato real.

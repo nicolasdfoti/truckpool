@@ -1,0 +1,58 @@
+# Solo infraestructura local de desarrollo: PostgreSQL y pgAdmin.
+#
+# NO es el despliegue de producción y no levanta la aplicación. Ni el server
+# (server/) ni el front (client/) corren acá: se ejecutan con `npm run dev` en
+# cada carpeta. Para desplegar hay que definir el servicio aparte, con sus
+# migraciones, sus secretos y su dominio.
+#
+# Las imágenes van fijadas a una versión concreta, nunca a :latest: con :latest
+# un `docker compose pull` puede traerse una imagen distinta sin que cambie una
+# sola línea del repo, y eso no se puede reproducir ni auditar.
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: truckpool-postgres
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-truckpool}
+      POSTGRES_DB: ${POSTGRES_DB:-truckpool}
+
+    ports:
+      - "5433:5432"
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-truckpool}",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  pgadmin:
+    # pgAdmin 9.18.0. Es una herramienta de admin: si no la estás usando,
+    # comentá el servicio entero en vez de dejarla expuesta en el puerto 5051.
+    image: dpage/pgadmin4:9.18.0
+    container_name: truckpool-pgadmin
+    restart: unless-stopped
+
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD}
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+
+    ports:
+      - "5051:80"
+
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+
+volumes:
+  postgres_data:
+  pgadmin_data:

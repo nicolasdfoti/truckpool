@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.env
+coverage/
+*.local
+.DS_Store
+
+# Logs de los servidores de dev (client/dev.log, server/api.log, etc). Son
+# salida de consola, no datos: nunca van al repo.
+*.log

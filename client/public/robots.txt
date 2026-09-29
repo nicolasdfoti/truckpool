@@ -1,0 +1,12 @@
+User-agent: *
+Allow: /
+
+# Áreas privadas: sin sesión no se ven y no tienen nada que indexar.
+# /viajes/:id sí se indexa: son las fichas públicas de los viajes.
+Disallow: /perfil
+Disallow: /admin
+Disallow: /pagos/
+Disallow: /viajes/nuevo
+Disallow: /viajes/*/trackear
+
+Sitemap: https://truckpool.app/sitemap.xml

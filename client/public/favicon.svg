@@ -1,0 +1,15 @@
+<!-- Generado a partir del glifo Truck de src/components/icons.tsx (viewBox 24x24),
+     escalado x1.25 y con el fondo de marca. Mantener los dos en sincronía. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="TruckPool">
+  <rect width="32" height="32" rx="7" fill="#0B3D5C" />
+  <g transform="translate(1 1) scale(1.25)">
+    <path
+      d="M3 17V7a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v10M3 17h11M3 17a2 2 0 1 0 4 0m7-0a2 2 0 1 0 4 0m0 0h2a1 1 0 0 0 1-1v-3.6a1 1 0 0 0-.29-.7L19 8.3a1 1 0 0 0-.7-.3H14v9"
+      fill="none"
+      stroke="#F58220"
+      stroke-width="1.8"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    />
+  </g>
+</svg>
