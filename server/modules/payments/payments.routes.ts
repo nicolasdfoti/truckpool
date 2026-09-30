@@ -24,6 +24,15 @@ paymentsRouter.post(
   paymentsController.postPaymentPreference
 );
 
+// Traza de un pago de Mercado Pago (diagnóstico de desarrollo).
+// El control de acceso NO es requireRole: la visibilidad la resuelve
+// `tracePayment` en el service según quién es el dueño del recurso (la empresa
+// o el transportista del viaje) o si es ADMIN. Va con requireAuth sí o sí, así
+// que nunca hay una consulta a MP sin sesión. Un 404 de MP (pago de un
+// transportista, que el token de la plataforma no ve) sube como 404 con
+// mensaje explicativo, no como 500.
+paymentsRouter.get("/payments/mp/:id", requireAuth, paymentsController.getPaymentTrace);
+
 // Prueba de conexión con Mercado Pago (endpoint de diagnóstico, temporal).
 // Usa el token de la PLATAFORMA, no el del usuario, así que va restringido a
 // ADMIN: no es que un transportista no pueda ver que la integración anda, es

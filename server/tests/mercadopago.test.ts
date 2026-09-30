@@ -255,18 +255,28 @@ describe("createTestPreference", () => {
     });
 
     expect(preferenceCreate).toHaveBeenCalledTimes(1);
-    const body = (preferenceCreate.mock.calls[0]?.[0] as { body: unknown }).body;
-    expect(body).toEqual({
-      items: [
-        {
-          id: "transporte-truckpool-prueba",
-          title: "Transporte TruckPool - Prueba",
-          quantity: 2,
-          unit_price: 100,
-          currency_id: "ARS",
-        },
-      ],
+    const body = (preferenceCreate.mock.calls[0]?.[0] as { body: Record<string, unknown> })
+      .body;
+    // el id del item sigue siendo el slug derivado del título
+    expect(body.items).toEqual([
+      {
+        id: "transporte-truckpool-prueba",
+        title: "Transporte TruckPool - Prueba",
+        quantity: 2,
+        unit_price: 100,
+        currency_id: "ARS",
+      },
+    ]);
+    // y ahora hay clave de correlación: el prefijo la marca como prueba y el
+    // hex aleatorio evita que dos pruebas compartan external_reference
+    expect(body.external_reference).toMatch(/^truckpool-test:[0-9a-f]{12}$/);
+    expect(body.metadata).toEqual({
+      source: "truckpool-test",
+      external_reference: body.external_reference,
     });
+    expect(body.notification_url).toBe(
+      "http://localhost:4000/api/payments/webhook?source=test-preference"
+    );
     // usa MP_ACCESS_TOKEN, el del carrier no aparece por ningún lado
     expect(mpConfigs).toEqual([{ accessToken: "token-de-prueba" }]);
     expect(result).toEqual({
@@ -276,7 +286,7 @@ describe("createTestPreference", () => {
     });
   });
 
-  it("no manda back_urls, webhook ni marketplace", async () => {
+  it("no manda back_urls, marketplace ni auto_return, pero sí manda el webhook", async () => {
     preferenceCreate.mockResolvedValue({ id: "pref-1", init_point: "https://x.test" });
 
     await createTestPreference({ title: "Prueba", quantity: 1, unitPrice: 100 });
@@ -285,9 +295,13 @@ describe("createTestPreference", () => {
       (preferenceCreate.mock.calls[0]?.[0] as { body: unknown }).body
     );
     expect(body).not.toContain("back_urls");
-    expect(body).not.toContain("notification_url");
     expect(body).not.toContain("marketplace");
     expect(body).not.toContain("auto_return");
+    // ni un payment_id que no existe en la base: el webhook respondería 404
+    // y Mercado Pago lo reintentaría
+    expect(body).not.toContain("payment_id");
+    // pero sí el webhook, para que el pago se pueda cerrar de punta a punta
+    expect(body).toContain("notification_url");
   });
 
   it("deja sandbox_init_point vacío si la cuenta no lo devuelve", async () => {

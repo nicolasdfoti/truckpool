@@ -68,3 +68,18 @@ export async function postMpTestPreference(req: Request, res: Response) {
   const body = req.body as MpTestPreferenceBody;
   res.json(await paymentsService.getTestPreference(body));
 }
+
+/**
+ * GET /api/payments/mp/:id — traza de un pago en Mercado Pago.
+ *
+ * `:id` es el id del pago EN MERCADO PAGO, no el interno. Devuelve el detalle
+ * mapeado del pago (con `liveMode` explícito) más el `Payment` interno
+ * correlacionado, si lo hay. Quién puede verlo lo decide el service: la empresa
+ * o el transportista del viaje, o un ADMIN.
+ */
+export async function getPaymentTrace(req: Request, res: Response) {
+  if (!req.user) {
+    throw new AppError("no autenticado", 401, "UNAUTHORIZED");
+  }
+  res.json(await paymentsService.tracePayment(getParam(req, "id"), req.user));
+}

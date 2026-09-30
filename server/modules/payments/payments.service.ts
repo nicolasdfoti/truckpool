@@ -7,9 +7,11 @@ import {
   createTestPreference,
   checkAccountConnection,
   fetchPaymentState,
+  getPaymentDetails,
   refundPayment,
   toPaymentState,
 } from "../../lib/mercadopago.js";
+import type { MpPaymentDetails } from "../../lib/mercadopago.js";
 import {
   AppError,
   BalanceNotDueError,
@@ -347,6 +349,108 @@ export async function getTestPreference(input: {
 }) {
   const result = await createTestPreference(input);
   return { ok: true as const, ...result };
+}
+
+/** Usuario logueado: id y rol, como los deja `requireAuth` en `req.user`. */
+export type PaymentViewer = { id: string; role: "COMPANY" | "CARRIER" | "ADMIN" };
+
+/**
+ * Traza un pago de punta a punta: qué dice Mercado Pago, y qué pago interno
+ * de nuestra base le corresponde.
+ *
+ * Quién puede verlo, y por qué: el `Payment` se busca por `mpPaymentId`, así que
+ * el Dueño del recurso es quien está en el viaje: la empresa que Reservó la
+ * carga o el transportista que la transporta. ADMIN ve todos. Nadie más.
+ *
+ * La alternativa obvia —"sólo ADMIN" como los otros endpoints de diagnóstico de
+ * MP— dejaría el hueco que este endpoint viene a tapar: durante el desarrollo
+ * el que necesita ver la traza es la empresa o el transportista que está
+ * probando el pago, no el que administra la plataforma.
+ *
+ * Si el pago existe en MP pero no en nuestra base (una preference de prueba, o
+ * un pago cuyo webhook todavía no llegó), se devuelve el detalle de MP igual y
+ * `local: null`: la información pedida existe y esconderla porque falte el
+ * link interno no ayuda a depurar. Si tampoco existe en MP, el 404 understandable
+ * lo levanta `getPaymentDetails`.
+ *
+ * `liveMode` se devuelve explícito para poder distinguir a simple vista un pago
+ * de sandbox de uno real, y se loguea: es la señal de alarma barata contra
+ * cobrar plata real por error en desarrollo.
+ */
+export async function tracePayment(mpPaymentId: string, viewer: PaymentViewer) {
+  const local = await prisma.payment.findFirst({
+    where: { mpPaymentId },
+    select: {
+      id: true,
+      type: true,
+      status: true,
+      amount: true,
+      mpPaymentId: true,
+      mpPreferenceId: true,
+      platformFeeAmount: true,
+      carrierAmount: true,
+      refundedAmount: true,
+      cargoItem: { select: { id: true, companyId: true, tripId: true } },
+    },
+  });
+
+  if (local) {
+    const isOwner =
+      viewer.role === "ADMIN" ||
+      local.cargoItem.companyId === viewer.id ||
+      (await isTripCarrier(local.cargoItem.tripId, viewer.id));
+    if (!isOwner) {
+      // 404 y no 403 a propósito: no le confirmamos a un usuario ajeno que ese
+      // pago existe, igual que hacemos con los avisos de otro usuario.
+      throw new PaymentNotFoundError();
+    }
+  } else if (viewer.role !== "ADMIN") {
+    // sin pago interno no hay dueño contra el cual comparar, así que sin
+    // registro sólo puede mirarlo ADMIN.
+    throw new PaymentNotFoundError();
+  }
+
+  const details: MpPaymentDetails = await getPaymentDetails(mpPaymentId);
+
+  // sin datos de la tarjeta ni nada sensible: sólo el id de MP, si es real, y
+  // el estado. El `console.info` (no warn/error) es deliberado: esto no es un
+  // fallo, es la traza que se pidió.
+  console.info(
+    `[payments] traza mp=${details.id} status=${details.status} live_mode=${details.liveMode} ` +
+      `mapped=${details.mappedStatus ?? "-"} local=${local?.id ?? "sin-pago-interno"}`
+  );
+
+  return {
+    ok: true as const,
+    // replicado arriba del objeto para que se lea sin bajar a `details`:
+    // un `true` acá tiene que saltar a la vista.
+    liveMode: details.liveMode,
+    isTestPayment: details.liveMode === false,
+    details,
+    local: local
+      ? {
+          paymentId: local.id,
+          type: local.type,
+          status: local.status,
+          amount: Number(local.amount),
+          mpPreferenceId: local.mpPreferenceId,
+          platformFeeAmount: local.platformFeeAmount,
+          carrierAmount: local.carrierAmount,
+          refundedAmount: local.refundedAmount === null ? null : Number(local.refundedAmount),
+          cargoItemId: local.cargoItem.id,
+          tripId: local.cargoItem.tripId,
+        }
+      : null,
+  };
+}
+
+/** el transportista de ese viaje es `userId`? */
+async function isTripCarrier(tripId: string, userId: string): Promise<boolean> {
+  const trip = await prisma.trip.findUnique({
+    where: { id: tripId },
+    select: { carrierId: true },
+  });
+  return trip?.carrierId === userId;
 }
 
 export { balanceOf };

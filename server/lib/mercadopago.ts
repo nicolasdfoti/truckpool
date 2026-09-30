@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import {
   MercadoPagoConfig,
   Payment,
@@ -32,6 +32,11 @@ function mpConfig() {
     );
   }
   return new MercadoPagoConfig({ accessToken });
+}
+
+/** La URL pública de la API, de donde salen los back_urls y el webhook. */
+function apiUrl(): string {
+  return process.env.API_PUBLIC_URL ?? "http://localhost:4000";
 }
 
 export function mapMpStatus(status: string | undefined): MpPaymentState | null {
@@ -164,7 +169,7 @@ export async function createCheckoutPreference(input: PreferenceInput): Promise<
   }
 
   const clientUrl = process.env.APP_URL ?? "http://localhost:5173";
-  const apiUrl = process.env.API_PUBLIC_URL ?? "http://localhost:4000";
+  const api = apiUrl();
   // el tipo viaja en la URL de retorno para que la pantalla de thanks sepa si
   // la empresa acaba de pagar la seña o el saldo.
   const returnUrl = `${clientUrl}/pagos/retorno?tripId=${encodeURIComponent(input.tripId)}&cargoItemId=${encodeURIComponent(input.cargoItemId)}&type=${input.paymentType ?? "DEPOSIT"}`;
@@ -199,7 +204,7 @@ export async function createCheckoutPreference(input: PreferenceInput): Promise<
         cargo_item_id: input.cargoItemId,
         payment_type: input.paymentType ?? "DEPOSIT",
       },
-      notification_url: `${apiUrl}/api/payments/webhook?payment_id=${encodeURIComponent(input.paymentId)}`,
+      notification_url: `${api}/api/payments/webhook?payment_id=${encodeURIComponent(input.paymentId)}`,
       back_urls: {
         success: `${returnUrl}&status=approved`,
         failure: `${returnUrl}&status=rejected`,
@@ -243,6 +248,15 @@ export async function createTestPreference(input: {
 }> {
   const preferenceClient = new Preference(mpConfig());
 
+  // Clave de correlación para los pagos de prueba.
+  //
+  // Una preference de prueba no tiene un `Payment` en la base, así que el id
+  // interno no sirve: se manda un identificador propio, con el prefijo
+  // `truckpool-test:` para que un pago de prueba nunca se confunda con uno real
+  // al filtrar en el panel de Mercado Pago o al leer un webhook. El sufijo
+  // aleatorio evita que dos pruebas compartan external_reference.
+  const testReference = `truckpool-test:${randomBytes(6).toString("hex")}`;
+
   try {
     const body = {
       items: [
@@ -259,6 +273,16 @@ export async function createTestPreference(input: {
           currency_id: "ARS",
         },
       ],
+      // Sin esto el pago de prueba queda huérfano: nunca llega a la base y no
+      // hay forma de cerrarlo de punta a punta.
+      external_reference: testReference,
+      metadata: { source: "truckpool-test", external_reference: testReference },
+      // El webhook de la plataforma. Sin `payment_id` a propósito: una preference
+      // de prueba no corresponde a un `Payment` de la base, y mandarle un id
+      // inexistente haría que el handler respondiera 404 y Mercado Pago lo
+      // reintentara. Sin esos query params `findPaymentForNotification`
+      // devuelve null y el webhook responde 200 sin tocar nada.
+      notification_url: `${apiUrl()}/api/payments/webhook?source=test-preference`,
     };
 
     const created = await preferenceClient.create({ body });
@@ -290,6 +314,148 @@ export async function fetchPaymentState(
   const paymentClient = new Payment(mpConfig());
   const payment = await paymentClient.get({ id: mpPaymentId });
   return mapMpStatus(payment.status);
+}
+
+/**
+ * El pago de Mercado Pago completo, mapeado a los campos que sirven para
+ * trazar un cobro de punta a punta.
+ *
+ * `fetchPaymentState` devuelve sólo el status mapeado, que alcanza para mover
+ * el ciclo de vida pero no para responder "¿cuánto se cobró, en qué moneda, de
+ * qué preferencia salió y contra qué pago interno?" sin ir a leer la base a
+ * mano. Esto es ese detalle.
+ *
+ * `liveMode` va explícito a propósito: durante el desarrollo es la única forma
+ * barata de distinguir a simple vista un pago de sandbox de uno real. Un
+ * `true` donde se esperaba `false` significa que se está cobrando plata de
+ * verdad, y eso se tiene que notar sin tener que abrir el panel de MP.
+ *
+ * `externalReference` es la costura con la base: es el `Payment.id` interno
+ * que mandamos en `external_reference` al crear la preference, así que permite
+ * volver del id de MP al pago que lo originó.
+ */
+export type MpPaymentDetails = {
+  /** id del pago en Mercado Pago (no es el id interno) */
+  id: string;
+  /** status de MP, crudo ("approved", "in_process"…) sin mapear */
+  status: string;
+  /** status de MP, mapeado a nuestro vocabulario; null si es un estado que no conocemos */
+  mappedStatus: MpPaymentState | null;
+  /** detalle fino del status ("accredited", "cc_rejected_bad_filled_card_number"…) */
+  statusDetail: string | null;
+  /** monto cobrado, en la moneda del pago */
+  amount: number;
+  currencyId: string;
+  /**
+   * `true` = se cobró plata real. `false` = sandbox.
+   *
+   * OJO: se pide con el token de la PLATAFORMA (ver `getPaymentDetails`), así
+   * que para pagos creados en la cuenta de un transportista puede no existir y
+   * la respuesta es un 404. Es un riesgo conocido, no resuelto todavía.
+   */
+  liveMode: boolean;
+  /** lo que mandamos como `external_reference`: el `Payment.id` interno */
+  externalReference: string | null;
+  /** momento de acreditación que reporta MP, ISO o null si todavía no acreditó */
+  dateApproved: string | null;
+};
+
+/**
+ * El status HTTP que devolvió Mercado Pago, si vino. El SDK lo deja en
+ * `status`; algunos errores lo traen sólo dentro de `response.status`.
+ */
+function mpErrorStatus(err: unknown): number | null {
+  const candidates = [
+    (err as { status?: unknown }).status,
+    (err as { response?: { status?: unknown } }).response?.status,
+  ];
+  for (const value of candidates) {
+    if (typeof value === "number") return value;
+  }
+  return null;
+}
+
+function looksLikeNotFound(err: unknown): boolean {
+  if (mpErrorStatus(err) === 404) return true;
+  const message = err instanceof Error ? err.message.toLowerCase() : "";
+  return message.includes("not found") || message.includes("not_found");
+}
+
+/**
+ * Consulta un pago en Mercado Pago y devuelve el detalle mapeado.
+ *
+ * Traduce los errores de MP a `AppError` con un status útil, en vez de dejar
+ * que el 404 crudo suba al handler global y termine en un 500 genérico: un
+ * pago que no existe en MP y un error de red tienen que poder distinguirse.
+ *
+ * RIESGO CONOCIDO, no resuelto en esta pasada: siempre consulta con el token
+ * de la plataforma (`MP_ACCESS_TOKEN`). Los pagos de una preference creada con
+ * `carrierMpAccessToken` viven en la cuenta del transportista y la plataforma no
+ * los ve, así que este `get` puede devolver 404 para un pago que sí existe. El
+ * mensaje de error lo dice explícitamente para que un 404 no se lea como "el
+ * pago no se hizo". Cuando se resuelva, va a ser acá: elegir el token según de
+ * quién es la preference que originó el pago.
+ *
+ * @throws 404 MP_PAYMENT_NOT_FOUND si MP no lo tiene (o si es de un transportista)
+ * @throws 502 MP_ERROR si MP falló por otra razón
+ * @throws 503 MP_NOT_CONFIGURED si falta `MP_ACCESS_TOKEN`
+ */
+export async function getPaymentDetails(mpPaymentId: string): Promise<MpPaymentDetails> {
+  const paymentClient = new Payment(mpConfig());
+
+  let payment;
+  try {
+    payment = await paymentClient.get({ id: mpPaymentId });
+  } catch (err) {
+    // mpConfig() tira 503 MP_NOT_CONFIGURED: no es un error de MP, es que no
+    // hay con qué consultarlo. Sube tal cual.
+    if (err instanceof AppError) throw err;
+
+    // El detalle crudo del error de MP no se loguea ni se propaga: puede venir
+    // con echoed headers (y por lo tanto con el token). Sólo el status.
+    const status = mpErrorStatus(err);
+    console.warn("[mercadopago] getPaymentDetails falló", { status, mpPaymentId });
+
+    if (looksLikeNotFound(err)) {
+      throw new AppError(
+        "Mercado Pago no tiene este pago. O no existe, o fue creado en la cuenta de un transportista y la consulta con el token de la plataforma no lo ve (riesgo conocido, aún no resuelto)",
+        404,
+        "MP_PAYMENT_NOT_FOUND"
+      );
+    }
+    throw new AppError(
+      status === null
+        ? "no pudimos comunicarnos con Mercado Pago"
+        : `Mercado Pago rechazó la petición (HTTP ${status})`,
+      502,
+      "MP_ERROR"
+    );
+  }
+
+  if (!payment?.id) {
+    throw new AppError(
+      "Mercado Pago no devolvió un pago utilizable",
+      502,
+      "MP_INVALID_RESPONSE"
+    );
+  }
+
+  return {
+    // el SDK tipa `id` como number, pero Mercado Pago lo manda como string
+    // ("181493287400") y es lo que hay que usar para consultarlo después
+    id: String(payment.id),
+    status: payment.status ?? "",
+    mappedStatus: mapMpStatus(payment.status),
+    statusDetail: payment.status_detail ?? null,
+    amount: Number(payment.transaction_amount ?? 0),
+    currencyId: payment.currency_id ?? "",
+    // `=== true` y no un truthy: si el campo faltó, sandbox es el supuesto
+    // seguro para un endpoint que corre en desarrollo. Lo que hay que vigilar
+    // es el `true`, que es el que avisa que se cobró plata real.
+    liveMode: payment.live_mode === true,
+    externalReference: payment.external_reference ?? null,
+    dateApproved: payment.date_approved ?? null,
+  };
 }
 
 /**
