@@ -45,6 +45,8 @@ export const departureTimeSchema = z
 export const createTripSchema = z.object({
   origin: z.string().trim().min(1, "el origen es obligatorio"),
   destination: z.string().trim().min(1, "el destino es obligatorio"),
+  // punto exacto de salida (depósito, galpón). Opcional: si no viene se usa el origin general.
+  departureAddress: z.string().trim().optional().nullable(),
   date: z.coerce.date({ message: "la fecha es inválida" }),
   departureTime: departureTimeSchema,
   truckType: z.string().trim().min(1, "el tipo de vehículo es obligatorio"),

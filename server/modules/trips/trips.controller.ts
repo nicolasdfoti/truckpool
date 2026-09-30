@@ -262,6 +262,25 @@ export async function reorderTripStops(req: Request, res: Response) {
 }
 
 /**
+ * GET /api/trips/:id/route — recorrido del viaje en orden: punto de partida,
+ * cada pickup de carga viva, y el destino. Sin auth (es el mapa público del viaje).
+ */
+export async function getTripRoute(req: Request, res: Response) {
+  const route = await tripsService.getTripRoute(getParam(req, "id"));
+  res.json(route);
+}
+
+/**
+ * GET /api/trips/:id/route-geometry — geometría de la ruta real (calles) para
+ * dibujar sobre el mapa. Responde 200 con `{ geometry: null }` si OSRM no está,
+ * tardó o no pudo resolver: el front cae a líneas rectas sin molestar al usuario.
+ */
+export async function getTripRouteGeometry(req: Request, res: Response) {
+  const geometry = await tripsService.getTripRouteGeometry(getParam(req, "id"));
+  res.json({ geometry });
+}
+
+/**
  * GET /api/tracking/:trackingCode — tracking público por código.
  * Sin auth. Devuelve info limitada sin exponer precio, dirección exacta, ni datos de la empresa.
  */

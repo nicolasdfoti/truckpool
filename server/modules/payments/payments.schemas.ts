@@ -23,3 +23,13 @@ export const paymentPreferenceSchema = z
   .nullish();
 
 export type PaymentPreferenceBody = z.infer<typeof paymentPreferenceSchema>;
+
+// preference de prueba: sólo los campos mínimos de un item, sin back_urls ni
+// webhook. Sirve para chequear que la integración y el SDK funcionan.
+export const mpTestPreferenceSchema = z.object({
+  title: z.string().trim().min(1),
+  quantity: z.number().int().positive(),
+  unitPrice: z.number().positive(),
+});
+
+export type MpTestPreferenceBody = z.infer<typeof mpTestPreferenceSchema>;

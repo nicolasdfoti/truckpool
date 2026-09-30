@@ -8,6 +8,7 @@ import {
   toTripSummary,
 } from "../../lib/mappers.js";
 import { geocode, haversineKm, type LatLng } from "../../lib/geocode.js";
+import { fetchRouteGeometry } from "../../lib/routing.js";
 import {
   formatPesos,
   isPriceInRange,
@@ -390,12 +391,13 @@ export async function createTrip(carrierId: string, data: CreateTripInput) {
   }
 
   // Geocodificar es best-effort: si Nominatim no responde o no encuentra el
-  // lugar, el viaje se crea igual con las coordenadas en null. Son dos requests
+  // lugar, el viaje se crea igual con las coordenadas en null. Son tres requests
   // encolados a 1/segundo por el rate limit de Nominatim, por eso el submit
   // tarda un poco más.
-  const [origin, destination] = await Promise.all([
+  const [origin, destination, departure] = await Promise.all([
     geocode(data.origin),
     geocode(data.destination),
+    data.departureAddress ? geocode(data.departureAddress) : Promise.resolve(null),
   ]);
 
   // Con las dos puntas ya geocodificadas se puede sugerir precio y acotar lo
@@ -419,6 +421,7 @@ export async function createTrip(carrierId: string, data: CreateTripInput) {
       carrierId,
       origin: data.origin,
       destination: data.destination,
+      departureAddress: data.departureAddress ?? null,
       date: data.date,
       departureTime: data.departureTime ?? null,
       truckType: data.truckType,
@@ -430,6 +433,8 @@ export async function createTrip(carrierId: string, data: CreateTripInput) {
       originLng: origin?.lng ?? null,
       destLat: destination?.lat ?? null,
       destLng: destination?.lng ?? null,
+      departureLat: departure?.lat ?? null,
+      departureLng: departure?.lng ?? null,
     },
     include: { cargoItems: true, carrier: { select: { name: true } } },
   });
@@ -1692,6 +1697,235 @@ export async function reorderTripStops(
 
   // devolver lista ordenada actualizada
   return getTripStops(tripId, carrierId);
+}
+
+// --- ruta del viaje (mapa) -------------------------------------------------
+
+export type RoutePointKind = "DEPARTURE" | "PICKUP" | "DESTINATION";
+
+export type RoutePoint = {
+  /** 1-based, correlativo sobre los puntos que sí tienen coordenadas */
+  order: number;
+  kind: RoutePointKind;
+  /** texto corto para el tooltip del marker */
+  label: string;
+  /** la dirección tal como la escribió el usuario */
+  address: string;
+  lat: number;
+  lng: number;
+  cargoItemId: string | null;
+  trackingCode: string | null;
+};
+
+export type TripRoute = {
+  tripId: string;
+  /** true si la partida es el punto exacto (departureAddress) y no el origin */
+  departureIsExact: boolean;
+  points: RoutePoint[];
+  /**
+   * true cuando algún punto del recorrido quedó fuera por no tener
+   * coordenadas (geocode caído). El mapa dibuja lo que hay; no es un error.
+   */
+  incomplete: boolean;
+};
+
+type RouteCandidate = Omit<RoutePoint, "order">;
+
+/**
+ * El recorrido completo del viaje, en el orden en que el camión lo recorre:
+ * punto exacto de partida (o el origin general si el fletero no indicó uno),
+ * cada pickup de carga viva en su stopOrder, y el destino.
+ *
+ * Sin auth: el mapa del viaje es público, como el resto de /trips/:id.
+ *
+ * Los puntos sin coordenadas quedan afuera (no se pueden dibujar) y
+ * `incomplete` avisale al cliente que drew una versión recortada.
+ */
+export async function getTripRoute(tripId: string): Promise<TripRoute> {
+  const trip = await prisma.trip.findUnique({
+    where: { id: tripId },
+    select: {
+      origin: true,
+      destination: true,
+      originLat: true,
+      originLng: true,
+      destLat: true,
+      destLng: true,
+      departureAddress: true,
+      departureLat: true,
+      departureLng: true,
+      cargoItems: {
+        where: { status: { not: "CANCELLED" } },
+        select: {
+          id: true,
+          pickupAddress: true,
+          pickupLat: true,
+          pickupLng: true,
+          trackingCode: true,
+          description: true,
+          stopOrder: true,
+        },
+        orderBy: { createdAt: "asc" },
+      },
+    },
+  });
+  if (!trip) throw new TripNotFoundError();
+
+  // el stopOrder se calcula con la línea origin→destino (Fase 14C): el
+  // departureAddress es un refinamiento del punto de partida, no cambia el
+  // criterio con el que ya está familiarizado el fletero.
+  const order = calculateStopOrder(
+    {
+      originLat: trip.originLat,
+      originLng: trip.originLng,
+      destLat: trip.destLat,
+      destLng: trip.destLng,
+    },
+    trip.cargoItems.map((c) => ({
+      id: c.id,
+      pickupLat: c.pickupLat,
+      pickupLng: c.pickupLng,
+      stopOrder: c.stopOrder,
+    }))
+  );
+
+  const candidates: RouteCandidate[] = [];
+
+  // partida: el punto exacto si se pudo geocodificar, si no el origin general.
+  // (puede no tener ninguna de las dos: el viaje se creó con geocode caído)
+  const hasExactDeparture =
+    trip.departureLat !== null && trip.departureLng !== null;
+  if (hasExactDeparture) {
+    candidates.push({
+      kind: "DEPARTURE",
+      label: "salida",
+      address: trip.departureAddress ?? trip.origin,
+      lat: trip.departureLat as number,
+      lng: trip.departureLng as number,
+      cargoItemId: null,
+      trackingCode: null,
+    });
+  } else if (trip.originLat !== null && trip.originLng !== null) {
+    candidates.push({
+      kind: "DEPARTURE",
+      label: "salida",
+      address: trip.origin,
+      lat: trip.originLat,
+      lng: trip.originLng,
+      cargoItemId: null,
+      trackingCode: null,
+    });
+  }
+
+  const stops: RouteCandidate[] = trip.cargoItems
+    .map((c) => ({
+      kind: "PICKUP" as const,
+      label: `retiro ${c.description}`,
+      address: c.pickupAddress,
+      lat: c.pickupLat as number,
+      lng: c.pickupLng as number,
+      cargoItemId: c.id,
+      trackingCode: c.trackingCode,
+    }))
+    .filter((s) => s.lat !== null && s.lat !== undefined && s.lng !== null && s.lng !== undefined)
+    .sort(
+      (a, b) => (order.get(a.cargoItemId as string) ?? 0) - (order.get(b.cargoItemId as string) ?? 0)
+    );
+
+  candidates.push(...stops);
+
+  if (trip.destLat !== null && trip.destLng !== null) {
+    candidates.push({
+      kind: "DESTINATION",
+      label: "destino",
+      address: trip.destination,
+      lat: trip.destLat,
+      lng: trip.destLng,
+      cargoItemId: null,
+      trackingCode: null,
+    });
+  }
+
+  const points: RoutePoint[] = candidates.map((point, index) => ({
+    ...point,
+    order: index + 1,
+  }));
+
+  const drawn = points.length;
+  const expected = (hasExactDeparture || trip.originLat !== null ? 1 : 0) + trip.cargoItems.length + (trip.destLat !== null ? 1 : 0);
+
+  return {
+    tripId,
+    departureIsExact: hasExactDeparture,
+    points,
+    incomplete: drawn < expected,
+  };
+}
+
+/**
+ * Caché en memoria de la geometría por viaje.
+ *
+ * La clave incluye los propios puntos y el estado del viaje: si una carga entra
+ * o se retira, o el fletero cambia el estado, la firma cambia y la geometría se
+ * vuelve a pedir. Un viaje que no cambia reutiliza la respuesta en vez de pegarle
+ * a OSRM en cada request.
+ *
+ * Guardamos `null` también (falló): repetir el fetch a OSRM en cada request de
+ * un viaje que siempre falla solo gasta llamadas.
+ */
+const MAX_GEOMETRY_CACHE_ENTRIES = 500;
+const routeGeometryCache = new Map<
+  string,
+  { signature: string; geometry: [number, number][] | null }
+>();
+
+function routeSignature(
+  route: TripRoute,
+  status: string
+): string {
+  return JSON.stringify([status, route.departureIsExact, route.points.map((p) => [p.lat, p.lng])]);
+}
+
+export function clearRouteGeometryCache() {
+  routeGeometryCache.clear();
+}
+
+export function routeGeometryCacheSize() {
+  return routeGeometryCache.size;
+}
+
+/**
+ * Geometría de la ruta real (calles) del viaje, o null si OSRM no respondió,
+ * tardó más de 5s, o el recorrido tiene menos de dos puntos. Nunca throw: el
+ * frontend dibuja líneas rectas en ese caso.
+ */
+export async function getTripRouteGeometry(
+  tripId: string
+): Promise<[number, number][] | null> {
+  const trip = await prisma.trip.findUnique({
+    where: { id: tripId },
+    select: { status: true },
+  });
+  if (!trip) throw new TripNotFoundError();
+
+  const route = await getTripRoute(tripId);
+  if (route.points.length < 2) return null;
+
+  const signature = routeSignature(route, trip.status);
+  const cached = routeGeometryCache.get(tripId);
+  if (cached && cached.signature === signature) return cached.geometry;
+
+  const geometry = await fetchRouteGeometry(
+    route.points.map((p) => ({ lat: p.lat, lng: p.lng }))
+  );
+
+  if (routeGeometryCache.size >= MAX_GEOMETRY_CACHE_ENTRIES) {
+    const oldest = routeGeometryCache.keys().next().value as string | undefined;
+    if (oldest !== undefined) routeGeometryCache.delete(oldest);
+  }
+  routeGeometryCache.set(tripId, { signature, geometry });
+
+  return geometry;
 }
 
 /**

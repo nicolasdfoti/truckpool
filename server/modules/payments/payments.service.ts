@@ -4,6 +4,8 @@ import { prisma } from "../../lib/prisma.js";
 import { decryptSecret } from "../../lib/crypto.js";
 import {
   createCheckoutPreference,
+  createTestPreference,
+  checkAccountConnection,
   fetchPaymentState,
   refundPayment,
   toPaymentState,
@@ -323,6 +325,28 @@ async function findPaymentForNotification(input: PaymentNotificationInput) {
   }
 
   return null;
+}
+
+/**
+ * Prueba de conexión con Mercado Pago.
+ *
+ * Es un endpoint de diagnóstico: no toca la base ni el ciclo de pagos, sólo
+ * confirma que la API acepta `MP_ACCESS_TOKEN`. Va por el mismo service que el
+ * resto del módulo para que el token se lea siempre en un solo lugar
+ * (`lib/mercadopago.ts`).
+ */
+export async function getMpConnectionStatus() {
+  const result = await checkAccountConnection();
+  return { ok: true as const, ...result };
+}
+
+export async function getTestPreference(input: {
+  title: string;
+  quantity: number;
+  unitPrice: number;
+}) {
+  const result = await createTestPreference(input);
+  return { ok: true as const, ...result };
 }
 
 export { balanceOf };

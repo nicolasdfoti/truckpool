@@ -98,6 +98,15 @@ model Trip {
   originLng Float?
   destLat   Float?
   destLng   Float?
+
+  // punto exacto de salida (depósito, galpón, etc.). Distinto del origin
+  // general: origin es la zona/ciudad (ej. "Córdoba"), departureAddress
+  // es la dirección precisa de donde sale el camión (ej. "Av. Colón 1234, Córdoba").
+  // Ambos se geocodifican best-effort al crear el viaje.
+  departureAddress String?
+  departureLat     Float?
+  departureLng     Float?
+
   features  String[] @default([])
   createdAt DateTime @default(now())
 

@@ -19,6 +19,8 @@ import { useTripLocation } from "../hooks/useTripLocation";
 import { RatingInput, RatingStars } from "../components/RatingInput";
 import { MessageThread } from "../components/MessageThread";
 import { LazyTripMap } from "../components/LazyTripMap";
+import { LazyTripRouteMap } from "../components/LazyTripRouteMap";
+import { useTripRoute, useTripRouteGeometry } from "../hooks/useTripRoute";
 import { useDownloadManifest } from "../hooks/useTripManifest";
 import { usePlaceField } from "../hooks/usePlaceField";
 import type { CargoItem, CargoItemStatus } from "../types/trip";
@@ -159,6 +161,13 @@ export default function TripDetail() {
     enabled: canSeeLocation,
     isInTransit: Boolean(isInTransit),
   });
+  // El recorrido (partida → paradas → destino) es público y no depende de que
+  // el viaje esté en tránsito: se ve desde que se publica, que es justo cuando
+  // la empresa quiere ver dónde pasa a buscar su carga.
+  const { data: tripRoute } = useTripRoute(id ?? "");
+  // La geometría real es un extra: si OSRM no responde, la query queda vacía y
+  // el mapa del recorrido dibuja las rectas entre los puntos, sin avisar.
+  const { data: tripRouteGeometry } = useTripRouteGeometry(id ?? "");
 
   const [description, setDescription] = useState("");
   const [volume, setVolume] = useState("");
@@ -360,6 +369,41 @@ export default function TripDetail() {
             paradas de retiro
           </h2>
           <TripStops />
+        </section>
+
+        {/* Recorrido completo: salida, paradas en orden y llegada. */}
+        <section className="mt-8" aria-labelledby="route-heading">
+          <h2 id="route-heading" className="font-display text-[17px] font-medium">
+            recorrido del viaje
+          </h2>
+          <p className="mt-1 text-[13px] text-ink-muted">
+            los números son el orden en el que se pasan los puntos.
+          </p>
+          {tripRoute ? (
+            <>
+              <LazyTripRouteMap
+                className="mt-3 h-80"
+                route={tripRoute}
+                geometry={tripRouteGeometry?.geometry}
+              />
+              {tripRoute.departureIsExact && (
+                <p className="mt-2 text-[13px] text-ink-muted">
+                  sale desde {trip.departureAddress}, y desde ahí se ordena el resto del
+                  recorrido.
+                </p>
+              )}
+              {/* Un punto fuera es un geocode caído. Vale la pena decirlo, pero
+                  sin tapar ni attenuar el resto del recorrido. */}
+              {tripRoute.incomplete && (
+                <p className="mt-2 text-[13px] text-ink-muted">
+                  hay paradas sin ubicación confirmada, así que el recorrido puede no
+                  reflejar el orden real.
+                </p>
+              )}
+            </>
+          ) : (
+            <div className="mt-3 h-80 animate-pulse rounded-[10px] border border-line bg-canvas" />
+          )}
         </section>
 
         {canSeeLocation && (

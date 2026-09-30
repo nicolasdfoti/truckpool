@@ -42,6 +42,10 @@ export function toTripSummary(trip: TripWithCargo) {
     // la comisión que se lleva la plataforma en este viaje. No es secreto:
     // sale de multiplicar el priceShare, que ya es público.
     platformFeePercent: trip.platformFeePercent,
+    // punto exacto de salida (depósito/galpón), distinto del origin general
+    departureAddress: trip.departureAddress,
+    departureLat: trip.departureLat,
+    departureLng: trip.departureLng,
   };
 }
 

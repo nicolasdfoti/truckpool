@@ -40,6 +40,10 @@ export type Trip = {
   depositPercent: number;
   /** comisión de plataforma sobre cada priceShare confirmado (default 10%) */
   platformFeePercent: number;
+  /** punto exacto de salida (depósito/galpón), distinto del origin general */
+  departureAddress: string | null;
+  departureLat: number | null;
+  departureLng: number | null;
 };
 
 export type TripInput = {
@@ -48,12 +52,46 @@ export type TripInput = {
   date: string;
   /** "HH:mm" en 24h; opcional (undefined = el viaje se publica sin hora) */
   departureTime?: string;
+  /** punto exacto de salida (depósito/galpón); opcional */
+  departureAddress?: string;
   truckType: string;
   capacityTotal: number;
   price: number;
   features: TripFeature[];
   depositPercent: number;
 };
+
+/** Un punto del recorrido del viaje, ya ordenado por el backend. */
+export type RoutePointKind = "DEPARTURE" | "PICKUP" | "DESTINATION";
+
+export type RoutePoint = {
+  /** 1-based, correlativo sobre los puntos que sí tienen coordenadas */
+  order: number;
+  kind: RoutePointKind;
+  /** texto corto para el tooltip del marker */
+  label: string;
+  address: string;
+  lat: number;
+  lng: number;
+  cargoItemId: string | null;
+  trackingCode: string | null;
+};
+
+export type TripRoute = {
+  tripId: string;
+  /** true si la partida es el departureAddress exacto y no el origin general */
+  departureIsExact: boolean;
+  points: RoutePoint[];
+  /** algún punto quedó fuera por no tener coordenadas (geocode caído) */
+  incomplete: boolean;
+};
+
+/**
+ * Geometría de la ruta real siguiendo calles. Viene en formato GeoJSON
+ * LineString: [lng, lat]. Null si OSRM no respondió: el mapa dibuja líneas
+ * rectas en ese caso, sin molestar al usuario.
+ */
+export type TripRouteGeometry = { geometry: [number, number][] | null };
 
 export type CargoItemPayment = {
   id: string;

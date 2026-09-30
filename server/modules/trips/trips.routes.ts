@@ -111,5 +111,11 @@ tripsRouter.patch(
   tripsController.reorderTripStops
 );
 
+// Recorrido del viaje para el mapa. Sin auth: el mapa es público, como
+// GET /:id. "route" y "route-geometry" van declarados antes de "/:id" para que
+// quede explícito que no los matchea el id.
+tripsRouter.get("/:id/route", tripsController.getTripRoute);
+tripsRouter.get("/:id/route-geometry", tripsController.getTripRouteGeometry);
+
 // Tracking público (sin auth)
 tripsRouter.get("/tracking/:trackingCode", tripsController.getPublicTracking);

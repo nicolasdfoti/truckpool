@@ -29,6 +29,7 @@ vi.mock("../lib/mercadopago", async (importOriginal) => {
   return {
     ...actual,
     createCheckoutPreference: vi.fn(),
+    createTestPreference: vi.fn(),
     fetchPaymentState: vi.fn(),
     refundPayment: vi.fn(),
   };
@@ -681,6 +682,61 @@ describe("DELETE /api/trips/:tripId/cargo-items/:id", () => {
 
     expect(res.status).toBe(404);
     expect(res.body.code).toBe("CARGO_ITEM_NOT_FOUND");
+  });
+});
+
+describe("POST /api/payments/mp/test-preference", () => {
+  const body = { title: "Transporte TruckPool - Prueba", quantity: 1, unitPrice: 100 };
+
+  beforeEach(() => {
+    vi.mocked(mp.createTestPreference).mockReset();
+    vi.mocked(mp.createTestPreference).mockResolvedValue({
+      preferenceId: "pref-1",
+      sandboxInitPoint: "https://sandbox.mercadopago.com.ar/checkout/v1/redirect?pref_id=pref-1",
+      initPoint: "https://www.mercadopago.com.ar/checkout/v1/redirect?pref_id=pref-1",
+    });
+  });
+
+  it("requiere token (401)", async () => {
+    const res = await request(app).post("/api/payments/mp/test-preference").send(body);
+    expect(res.status).toBe(401);
+    expect(mp.createTestPreference).not.toHaveBeenCalled();
+  });
+
+  it("rechaza a un CARRIER (403)", async () => {
+    const res = await request(app)
+      .post("/api/payments/mp/test-preference")
+      .set("Authorization", `Bearer ${carrierToken}`)
+      .send(body);
+    expect(res.status).toBe(403);
+    expect(mp.createTestPreference).not.toHaveBeenCalled();
+  });
+
+  it("devuelve la preference sin filtrar el token (ADMIN)", async () => {
+    const res = await request(app)
+      .post("/api/payments/mp/test-preference")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send(body);
+
+    expect(res.status).toBe(200);
+    expect(mp.createTestPreference).toHaveBeenCalledWith(body);
+    expect(res.body).toEqual({
+      ok: true,
+      preferenceId: "pref-1",
+      sandboxInitPoint:
+        "https://sandbox.mercadopago.com.ar/checkout/v1/redirect?pref_id=pref-1",
+      initPoint: "https://www.mercadopago.com.ar/checkout/v1/redirect?pref_id=pref-1",
+    });
+    expect(JSON.stringify(res.body)).not.toContain("APP_USR");
+  });
+
+  it("rechaza un body incompleto (400)", async () => {
+    const res = await request(app)
+      .post("/api/payments/mp/test-preference")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ title: "sin precio" });
+    expect(res.status).toBe(400);
+    expect(mp.createTestPreference).not.toHaveBeenCalled();
   });
 });
 
@@ -1570,6 +1626,9 @@ describe("GET /api/trips/:id/manifest.pdf", () => {
     originLng: -64.1888,
     destLat: -32.9442,
     destLng: -60.6505,
+    departureAddress: null,
+    departureLat: null,
+    departureLng: null,
     cargoItems: [
       {
         description: "Cajas deurado",

@@ -1,5 +1,11 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { MercadoPagoConfig, Payment, PaymentRefund, Preference } from "mercadopago";
+import {
+  MercadoPagoConfig,
+  Payment,
+  PaymentMethod,
+  PaymentRefund,
+  Preference,
+} from "mercadopago";
 import { AppError } from "./errors.js";
 
 export type MpPaymentState = "PENDING" | "APPROVED" | "REJECTED" | "REFUNDED";
@@ -31,6 +37,82 @@ function mpConfig() {
 export function mapMpStatus(status: string | undefined): MpPaymentState | null {
   if (!status) return null;
   return STATUS_BY_MP_STATE[status.toLowerCase()] ?? null;
+}
+
+/**
+ * Un método de pago, reducido a lo que no es sensible.
+ *
+ * La respuesta de Mercado Pago trae además `settings` (patrones de BIN, largos
+ * de tarjeta, reglas de código de seguridad). Eso es de Mercado Pago y no
+ * nuestro: lo mapeamos a estos cuatro campos en vez de reenviar el objeto
+ * crudo, para que ningún endpoint termine filtrando el detalle de sus reglas.
+ */
+export type MpPaymentMethodInfo = {
+  id: string;
+  name: string;
+  paymentType: string;
+  status: string;
+};
+
+/** Lo que devuelve la prueba de conexión. No incluye el token, por diseño. */
+export type MpConnectionCheck = {
+  /** total de métodos de pago que habilitó la cuenta */
+  paymentMethodsCount: number;
+  /** los primeros, para confirmar a simple vista que es la cuenta esperada */
+  sample: MpPaymentMethodInfo[];
+};
+
+/**
+ * Prueba de humo contra la API de Mercado Pago: confirma que `MP_ACCESS_TOKEN`
+ * está presente y que la API lo acepta.
+ *
+ * Es la única forma barata de distinguir "el token está mal" de "Mercado Pago
+ * está caído" sin crear un preference de verdad (que sí deja basura en la
+ * cuenta). Pide `GET /v1/payment_methods`, que es de solo lectura.
+ *
+ * El token se lee por `mpConfig()` desde `process.env` y no sale de acá: el
+ * tipo de retorno no tiene dónde ponerlo. Si faltara, el `AppError` de
+ * `mpConfig()` sube tal cual (503 MP_NOT_CONFIGURED), que es justo lo que
+ * `lib/env.ts` quiere: Mercado Pago es opcional y cada módulo falla sólo
+ * cuando se lo usa.
+ */
+export async function checkAccountConnection(): Promise<MpConnectionCheck> {
+  let methods;
+  try {
+    // PaymentMethod.get() es exactamente GET /v1/payment_methods con
+    // Authorization: Bearer <MP_ACCESS_TOKEN> (lo arma el propio SDK).
+    methods = await new PaymentMethod(mpConfig()).get();
+  } catch (err) {
+    // 503 de mpConfig(): la variable no está, no hay nada que diagnosticar
+    // arriba y el mensaje ya lo dice.
+    if (err instanceof AppError) throw err;
+    // status de la respuesta de MP. No es una credencial, y es lo que
+    // diferencia un 401 (token malo) de un 5xx (MP caído).
+    const status =
+      typeof (err as { status?: unknown }).status === "number"
+        ? (err as { status: number }).status
+        : null;
+    // El detalle crudo del error de MP no se loguea: puede venir con echoed
+    // headers. Sólo el status, que es lo accionable.
+    console.warn("[mercadopago] checkAccountConnection falló", { status });
+    throw new AppError(
+      status === null
+        ? "no pudimos comunicarnos con Mercado Pago"
+        : `Mercado Pago rechazó la petición (HTTP ${status}): revisá MP_ACCESS_TOKEN`,
+      502,
+      "MP_ERROR"
+    );
+  }
+
+  return {
+    paymentMethodsCount: methods.length,
+    sample: methods.slice(0, 5).map((m) => ({
+      id: m.id ?? "",
+      name: m.name ?? "",
+      paymentType: m.payment_type_id ?? "",
+      status: m.status ?? "",
+    })),
+  };
 }
 
 export function toPaymentState(status: string | undefined): MpPaymentState {
@@ -140,6 +222,58 @@ export async function createCheckoutPreference(input: PreferenceInput): Promise<
     }
 
     return { preferenceId: created.id, initPoint, platformFeeAmount, carrierAmount };
+  } catch (err) {
+    if (err instanceof AppError) throw err;
+    throw new AppError(
+      "no pudimos generar el link de pago con Mercado Pago",
+      502,
+      "MP_ERROR"
+    );
+  }
+}
+
+export async function createTestPreference(input: {
+  title: string;
+  quantity: number;
+  unitPrice: number;
+}): Promise<{
+  preferenceId: string;
+  sandboxInitPoint: string;
+  initPoint: string;
+}> {
+  const preferenceClient = new Preference(mpConfig());
+
+  try {
+    const body = {
+      items: [
+        {
+          id: input.title
+            .toLowerCase()
+            .normalize("NFD")
+            .replace(/[\u0300-\u036f]/g, "")
+            .replace(/[^a-z0-9]+/g, "-")
+            .replace(/^-+|-+$/g, ""),
+          title: input.title,
+          quantity: input.quantity,
+          unit_price: input.unitPrice,
+          currency_id: "ARS",
+        },
+      ],
+    };
+
+    const created = await preferenceClient.create({ body });
+
+    const sandboxInitPoint = created.sandbox_init_point ?? "";
+    const initPoint = created.init_point ?? "";
+    if (!created.id || !initPoint) {
+      throw new AppError(
+        "Mercado Pago no devolvió una preference utilizable",
+        502,
+        "MP_INVALID_RESPONSE"
+      );
+    }
+
+    return { preferenceId: created.id, sandboxInitPoint, initPoint };
   } catch (err) {
     if (err instanceof AppError) throw err;
     throw new AppError(

@@ -2,7 +2,11 @@ import type { Request, Response } from "express";
 import * as paymentsService from "./payments.service.js";
 import { AppError } from "../../lib/errors.js";
 import { verifyWebhookSignature } from "../../lib/mercadopago.js";
-import type { PaymentPreferenceBody, PaymentWebhookBody } from "./payments.schemas.js";
+import type {
+  MpTestPreferenceBody,
+  PaymentPreferenceBody,
+  PaymentWebhookBody,
+} from "./payments.schemas.js";
 
 function getParam(req: Request, key: string): string {
   const value = req.params[key];
@@ -29,6 +33,18 @@ export async function postPaymentPreference(req: Request, res: Response) {
   res.status(201).json(preference);
 }
 
+/**
+ * GET /api/payments/mp/test — prueba de conexión con Mercado Pago.
+ *
+ * Endpoint de diagnóstico: no toca la base ni el ciclo de pagos, sólo pide
+ * `GET /v1/payment_methods` para confirmar que `MP_ACCESS_TOKEN` sirve. El
+ * token nunca se devuelve ni se loguea; la respuesta es sólo un booleano y
+ * cuántos métodos habilitó la cuenta.
+ */
+export async function getMpTestConnection(_req: Request, res: Response) {
+  res.json(await paymentsService.getMpConnectionStatus());
+}
+
 export async function postPaymentWebhook(req: Request, res: Response) {
   const body = (req.body ?? {}) as PaymentWebhookBody;
 
@@ -46,4 +62,9 @@ export async function postPaymentWebhook(req: Request, res: Response) {
   });
 
   res.json({ received: true, ...result });
+}
+
+export async function postMpTestPreference(req: Request, res: Response) {
+  const body = req.body as MpTestPreferenceBody;
+  res.json(await paymentsService.getTestPreference(body));
 }

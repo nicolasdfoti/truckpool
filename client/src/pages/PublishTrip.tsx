@@ -37,7 +37,7 @@ function formatPoint(point: { lat: number; lng: number }): string {
   return `${point.lat.toFixed(4)}, ${point.lng.toFixed(4)}`;
 }
 
-type PlaceKind = "origen" | "destino";
+type PlaceKind = "origen" | "destino" | "punto de salida";
 
 /**
  * Lo que el fletero necesita ver antes de publicar: dónde cayó el pin. Si el
@@ -87,6 +87,9 @@ export default function PublishTrip() {
 
   const [origin, setOrigin] = useState("");
   const [destination, setDestination] = useState("");
+  // punto exacto de salida (depósito/galpón). opcional: si queda vacío se usa
+  // el origin general como punto de partida en el mapa del recorrido.
+  const [departureAddress, setDepartureAddress] = useState("");
   const [date, setDate] = useState("");
   const [truckType, setTruckType] = useState(TRUCK_TYPES[0]);
   const [capacityTotal, setCapacityTotal] = useState("");
@@ -100,6 +103,7 @@ export default function PublishTrip() {
   // el fletero escribe y queda en sus manos si lo corrige a mano.
   const originPlace = usePlaceField(origin);
   const destinationPlace = usePlaceField(destination);
+  const departurePlace = usePlaceField(departureAddress);
 
   // Precio sugerido según distancia y vehículo. Cuando hay sugerencia, el
   // precio deja de ser un input libre y pasa a ser un control acotado al rango
@@ -186,6 +190,8 @@ export default function PublishTrip() {
       {
         origin: origin.trim(),
         destination: destination.trim(),
+        // sin punto exacto, el mapa del recorrido arranca en el origin general
+        ...(departureAddress.trim() ? { departureAddress: departureAddress.trim() } : {}),
         date: new Date(`${date}T12:00:00`).toISOString(),
         // sin hora, el viaje se publica igual: es un dato opcional
         ...(departureTime ? { departureTime } : {}),
@@ -317,16 +323,39 @@ export default function PublishTrip() {
             </div>
 
             <div className="mt-4">
+              <label className="text-[13px] text-ink-soft" htmlFor="departureAddress">
+                punto exacto de salida
+              </label>
+              <input
+                id="departureAddress"
+                value={departureAddress}
+                onChange={(e) => setDepartureAddress(e.target.value)}
+                placeholder="opcional — ej: depósito en Av. Colón 1234, Córdoba"
+                className={inputClass}
+              />
+              {departureAddress.trim() ? (
+                <PlaceHint place={departurePlace} kind="punto de salida" />
+              ) : (
+                <p className="mt-1 text-xs text-ink-muted">
+                  opcional. si lo completás, el mapa del recorrido arranca en este punto
+                  en vez de en el origen general.
+                </p>
+              )}
+            </div>
+
+            <div className="mt-4">
               <LazyTripPinMap
                 className="h-72 w-full"
                 origin={originPlace.point}
                 destination={destinationPlace.point}
                 onOriginChange={originPlace.setPointByHand}
                 onDestinationChange={destinationPlace.setPointByHand}
-                fitKey={`${originPlace.resolvedFor ?? ""}|${destinationPlace.resolvedFor ?? ""}`}
+                departure={departurePlace.point}
+                onDepartureChange={departurePlace.setPointByHand}
+                fitKey={`${departurePlace.resolvedFor ?? ""}|${originPlace.resolvedFor ?? ""}|${destinationPlace.resolvedFor ?? ""}`}
               />
               <p className="mt-2 text-xs text-ink-muted">
-                {originPlace.point || destinationPlace.point
+                {originPlace.point || destinationPlace.point || departurePlace.point
                   ? " revisá los pines: si alguno cayó en el lugar equivocado, movelo. el pin de salida es el azul y el de llegada el naranja."
                   : " escribí origen y destino y los ubicamos en el mapa. después podés corregir cada pin a mano."}
               </p>

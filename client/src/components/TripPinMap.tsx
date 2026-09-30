@@ -10,6 +10,12 @@ type TripPinMapProps = {
   onOriginChange: (point: LatLng) => void;
   onDestinationChange: (point: LatLng) => void;
   /**
+   * Punto exacto de partida (depósito/galpón). Opcional: si viene null no se
+   * dibuja, y el mapa sigue siendo el de dos extremos de siempre.
+   */
+  departure?: LatLng | null;
+  onDepartureChange?: (point: LatLng) => void;
+  /**
    * Identidad del punto de vista. Cambia solo cuando llega un geocode nuevo
    * (no cuando el fletero mueve un pin): encuadrar en cada drag le robaría el
    * mapa de debajo del cursor.
@@ -28,6 +34,14 @@ const pin = (color: string) =>
 
 const originIcon = pin("#0b3d5c");
 const destinationIcon = pin("#f58220");
+// el punto exacto de partida va en verde con un anillo azul, para distinguirlo
+// del origin general (que sigue siendo el azul) cuando están cerca uno del otro.
+const departureIcon = L.divIcon({
+  className: "",
+  html: '<div style="width:16px;height:16px;border-radius:9999px;background:#16a34a;border:3px solid #fff;box-shadow:0 0 0 2px #0b3d5c,0 1px 4px rgba(0,0,0,.45)"></div>',
+  iconSize: [16, 16],
+  iconAnchor: [8, 8],
+});
 
 /** Centro por defecto: Argentina, hasta que haya algún pin. */
 const DEFAULT_CENTER: [number, number] = [-31.4, -64.2];
@@ -53,20 +67,24 @@ function FitToPoints({ points, fitKey }: { points: [number, number][]; fitKey: s
 }
 
 /**
- * Mapa de publicación: dos pines arrastrables, uno por extremo. Los mueve el
- * geocode cuando el fletero escribe la dirección, y el fletero los puede
- * corregir a mano (un "Rosario" mal geocodificado se arregla moviendo el pin,
- * no escribiendo una dirección imposible de adivinar).
+ * Mapa de publicación: dos pines arrastrables, uno por extremo, y un tercero
+ * opcional para el punto exacto de salida. Los mueve el geocode cuando el
+ * fletero escribe la dirección, y el fletero los puede corregir a mano (un
+ * "Rosario" mal geocodificado se arregla moviendo el pin, no escribiendo una
+ * dirección imposible de adivinar).
  */
 export function TripPinMap({
   origin,
   destination,
   onOriginChange,
   onDestinationChange,
+  departure,
+  onDepartureChange,
   fitKey,
   className = "",
 }: TripPinMapProps) {
   const points: [number, number][] = [];
+  if (departure) points.push([departure.lat, departure.lng]);
   if (origin) points.push([origin.lat, origin.lng]);
   if (destination) points.push([destination.lat, destination.lng]);
 
@@ -93,6 +111,24 @@ export function TripPinMap({
             weight={3}
             opacity={0.7}
             dashArray="6 8"
+          />
+        )}
+        {departure && (
+          <Marker
+            position={[departure.lat, departure.lng]}
+            icon={departureIcon}
+            draggable={Boolean(onDepartureChange)}
+            title="punto exacto de salida: mové el pin si el lugar no es el correcto"
+            eventHandlers={
+              onDepartureChange
+                ? {
+                    dragend: (event) => {
+                      const { lat, lng } = (event.target as L.Marker).getLatLng();
+                      onDepartureChange({ lat, lng });
+                    },
+                  }
+                : undefined
+            }
           />
         )}
         {origin && (
