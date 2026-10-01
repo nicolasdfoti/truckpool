@@ -89,7 +89,7 @@ export function TripPinMap({
   if (destination) points.push([destination.lat, destination.lng]);
 
   return (
-    <div className={`overflow-hidden rounded-[10px] border border-line ${className}`}>
+    <div className={`isolate overflow-hidden rounded-[10px] border border-line ${className}`}>
       <MapContainer
         center={(points[0] as [number, number] | undefined) ?? DEFAULT_CENTER}
         zoom={points.length > 0 ? 11 : DEFAULT_ZOOM}

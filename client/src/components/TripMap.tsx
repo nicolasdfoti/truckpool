@@ -66,7 +66,7 @@ export function TripMap({ location, track, className = "" }: TripMapProps) {
   const fitPoints = path.length > 0 ? track! : [location];
 
   return (
-    <div className={`overflow-hidden rounded-[10px] border border-line ${className}`}>
+    <div className={`isolate overflow-hidden rounded-[10px] border border-line ${className}`}>
       <MapContainer
         center={[location.lat, location.lng]}
         zoom={12}

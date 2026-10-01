@@ -94,7 +94,7 @@ export function TripRouteMap({ route, geometry, className = "" }: TripRouteMapPr
   const routeKey = route.points.map((p) => p.cargoItemId ?? p.kind).join("|");
 
   return (
-    <div className={`overflow-hidden rounded-[10px] border border-line ${className}`}>
+    <div className={`isolate overflow-hidden rounded-[10px] border border-line ${className}`}>
       <MapContainer
         center={points[0]}
         zoom={points.length > 1 ? 11 : DEFAULT_ZOOM}

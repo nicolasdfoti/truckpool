@@ -33,6 +33,12 @@ export type Trip = {
   capacityUsed: number;
   price: number;
   status: TripStatus;
+  /**
+   * Derivado por el backend (status OPEN + fecha posterior a hoy en Argentina):
+   * si es false el viaje no acepta cargas nuevas. El status guardado no cambia
+   * cuando vence la fecha, por eso el badge sigue mostrando el estado real.
+   */
+  acceptsCargo: boolean;
   carrierId: string;
   carrierName: string;
   features: TripFeature[];

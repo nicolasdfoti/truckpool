@@ -8,6 +8,7 @@ import {
   VerificationNoteRequiredError,
 } from "../../lib/errors.js";
 import { toCargoItemResponse, toTripSummary } from "../../lib/mappers.js";
+import { endOfArgentinaDay } from "../../lib/dates.js";
 import { encryptSecret } from "../../lib/crypto.js";
 import { signOAuthState } from "../../lib/auth.js";
 import type {
@@ -166,7 +167,11 @@ export async function getCarrierProfile(id: string) {
       where: { id },
       include: {
         tripsAsCarrier: {
-          where: { status: "OPEN" },
+          // Esta vista es la de "viajes abiertos" del transportista: es donde una
+          // empresa busca un viaje para sumarle carga. Por eso
+          // comparte la regla de disponibilidad del listado público (status
+          // OPEN + fecha de un día posterior a hoy en Argentina).
+          where: { status: "OPEN", date: { gt: endOfArgentinaDay() } },
           include: { cargoItems: true, carrier: { select: { name: true } } },
           orderBy: { date: "asc" },
         },

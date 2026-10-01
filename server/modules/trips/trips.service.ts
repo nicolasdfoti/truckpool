@@ -6,9 +6,11 @@ import {
   isActiveCargo,
   toCargoItemResponse,
   toTripSummary,
+  tripAcceptsCargo,
 } from "../../lib/mappers.js";
 import { geocode, haversineKm, type LatLng } from "../../lib/geocode.js";
 import { fetchRouteGeometry } from "../../lib/routing.js";
+import { point, lineString, pointToLineDistance } from "@turf/turf";
 import {
   formatPesos,
   isPriceInRange,
@@ -31,6 +33,7 @@ import {
   tripStatusEmail,
 } from "../../lib/email.js";
 import { notifyUsers } from "../../lib/notifications.js";
+import { endOfArgentinaDay, isTripDateAvailable } from "../../lib/dates.js";
 import {
   AlreadyReviewedError,
   BalancePendingError,
@@ -42,6 +45,7 @@ import {
   PaymentRequiredError,
   ReviewTargetRequiredError,
   TripAlreadyStartedError,
+  TripDatePassedError,
   TripNotCompletedError,
   TripNotInTransitError,
   TripNotFoundError,
@@ -66,6 +70,8 @@ const MAX_RETRIES = 3;
  * es perezoso (ver releaseExpiredReservations).
  */
 const RESERVATION_TTL_MS = 24 * 60 * 60 * 1000;
+
+const MAX_STOP_DISTANCE_FROM_ROUTE_KM = Number(process.env.MAX_STOP_DISTANCE_FROM_ROUTE_KM ?? 8);
 
 /**
  * Los avisos nunca pueden romper la operación de negocio que los dispara: si
@@ -109,8 +115,13 @@ function endOfUtcDay(date: Date) {
   );
 }
 
-export async function listOpenTrips(filters: ListTripsQuery = {}) {
+export async function listOpenTrips(filters: ListTripsQuery = {}, now: Date = new Date()) {
   const where: Prisma.TripWhereInput = { status: "OPEN" };
+
+  // Un viaje deja de ser una oportunidad para sumar carga cuando llega su fecha,
+  // aunque el estado siga OPEN. El corte es el último instante del día de hoy en
+  // Argentina: más allá de ese instante el viaje es de un día posterior.
+  const dateFilter: Prisma.DateTimeFilter = { gt: endOfArgentinaDay(now) };
 
   if (filters.origin) {
     where.origin = { contains: filters.origin, mode: "insensitive" };
@@ -118,12 +129,13 @@ export async function listOpenTrips(filters: ListTripsQuery = {}) {
   if (filters.destination) {
     where.destination = { contains: filters.destination, mode: "insensitive" };
   }
-  if (filters.dateFrom || filters.dateTo) {
-    where.date = {
-      ...(filters.dateFrom ? { gte: startOfUtcDay(filters.dateFrom) } : {}),
-      ...(filters.dateTo ? { lte: endOfUtcDay(filters.dateTo) } : {}),
-    };
+  if (filters.dateFrom) {
+    dateFilter.gte = startOfUtcDay(filters.dateFrom);
   }
+  if (filters.dateTo) {
+    dateFilter.lte = endOfUtcDay(filters.dateTo);
+  }
+  where.date = dateFilter;
   if (filters.features && filters.features.length > 0) {
     where.features = { hasEvery: filters.features };
   }
@@ -311,6 +323,9 @@ export async function getTripById(id: string) {
     capacityUsed: activeVolume(trip.cargoItems),
     price: Number(trip.price),
     status: trip.status,
+    // misma bandera que manda en el listado y en la respuesta de detalle: el
+    // cliente la usa para no ofrecer el formulario de carga.
+    acceptsCargo: tripAcceptsCargo(trip),
     carrierId: trip.carrierId,
     depositPercent: trip.depositPercent,
     cargoItems: trip.cargoItems.map(toCargoItemResponse),
@@ -1034,6 +1049,10 @@ export async function addCargoItem(
           });
           if (!trip) throw new TripNotFoundError();
           if (trip.status !== "OPEN") throw new TripNotOpenError();
+          // Al llegar la fecha del viaje (día calendario Argentina) ya no entra
+          // carga nueva, aunque el estado siga OPEN. El estado no se toca: la
+          // transición a IN_TRANSIT sigue siendo del transportista.
+          if (!isTripDateAvailable(trip.date)) throw new TripDatePassedError();
 
           const used = activeVolume(trip.cargoItems);
           const remaining = trip.capacityTotal - used;
@@ -1055,6 +1074,28 @@ export async function addCargoItem(
 
           // geocodificar el pickup (best-effort: si falla, lat/lng quedan null)
           const pickupCoords = await geocode(data.pickupAddress);
+
+          // validar distancia del pickup al trayecto del viaje (si tenemos coordenadas y geometría)
+          if (pickupCoords) {
+            const routeGeometry = await getTripRouteGeometry(tripId);
+            if (routeGeometry && routeGeometry.length >= 2) {
+              const pickupPoint = point([pickupCoords.lng, pickupCoords.lat]);
+              const routeLine = lineString(routeGeometry);
+              const distanceKm = pointToLineDistance(pickupPoint, routeLine, { units: "kilometers" });
+              if (distanceKm > MAX_STOP_DISTANCE_FROM_ROUTE_KM) {
+                throw new AppError(
+                  `la parada está a ${distanceKm.toFixed(1)} km del trayecto, fuera del límite permitido (${MAX_STOP_DISTANCE_FROM_ROUTE_KM} km)`,
+                  400,
+                  "STOP_TOO_FAR_FROM_ROUTE"
+                );
+              }
+            } else {
+              console.warn(
+                "[addCargoItem] no se pudo obtener geometría del trayecto (OSRM falló o no hay puntos); se omite validación de distancia para pickup:",
+                data.pickupAddress
+              );
+            }
+          }
 
           // trackingCode: TP-{ultimos4TripId}-C{n} donde n es el orden dentro del viaje
           const cargoIndex = trip.cargoItems.length + 1;

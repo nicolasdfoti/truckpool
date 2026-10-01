@@ -1,4 +1,5 @@
 import type { CargoItem, CargoItemStatus, Payment, Trip } from "@prisma/client";
+import { isTripDateAvailable } from "./dates.js";
 
 /**
  * Una carga retirada (CANCELLED) queda en el historial pero no cuenta: ni para
@@ -18,6 +19,19 @@ export type TripWithCargo = Trip & {
   carrier?: { name: string } | null;
 };
 
+/**
+ * ¿Este viaje todavía puede recibir cargas? Es la regla de disponibilidad, y es
+ * derivada: la fecha no se guarda ni se cambia, se compara contra el día de hoy
+ * en Argentina. El estado guardado manda por delante: aunque la fecha siga
+ * siendo futura, un viaje FULL o IN_TRANSIT no entra carga.
+ *
+ * Vive acá (y no duplicado en cada service) porque la usan tanto el resumen
+ * de viajes como la respuesta de detalle.
+ */
+export function tripAcceptsCargo(trip: { status: Trip["status"]; date: Date }) {
+  return trip.status === "OPEN" && isTripDateAvailable(trip.date);
+}
+
 export function toTripSummary(trip: TripWithCargo) {
   const used = activeVolume(trip.cargoItems);
   return {
@@ -33,6 +47,11 @@ export function toTripSummary(trip: TripWithCargo) {
     capacityUsed: used,
     price: Number(trip.price),
     status: trip.status,
+    // Derivado, no persistido: un viaje acepta carga nueva sólo si está OPEN y
+    // su fecha (día calendario Argentina) todavía no llegó. El cliente usa esta
+    // bandera para no ofrecer el formulario; el backend igual valida en
+    // addCargoItem, así que saltarse la UI no habilita nada.
+    acceptsCargo: tripAcceptsCargo(trip),
     carrierId: trip.carrierId,
     carrierName: trip.carrier?.name ?? "",
     features: trip.features,

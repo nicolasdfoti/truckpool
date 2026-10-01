@@ -65,6 +65,18 @@ export class TripAlreadyStartedError extends AppError {
   }
 }
 
+/**
+ * El viaje sigue guardado como OPEN/FULL, pero su fecha (día calendario
+ * Argentina) ya llegó: no entra carga nueva. Es un error aparte de
+ * TripNotOpenError porque la causa y el arreglo en pantalla son distintos: acá
+ * el estado real del viaje no cambió, lo que venció es la fecha.
+ */
+export class TripDatePassedError extends AppError {
+  constructor() {
+    super("este viaje ya está en curso y no acepta nuevas cargas", 409, "TRIP_DATE_PASSED");
+  }
+}
+
 export class TripNotCompletedError extends AppError {
   constructor() {
     super("solo se puede calificar un viaje completado", 409, "TRIP_NOT_COMPLETED");

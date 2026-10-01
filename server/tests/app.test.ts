@@ -360,6 +360,9 @@ describe("POST /api/trips", () => {
 });
 
 describe("GET /api/trips con filtros", () => {
+  // El corte de disponibilidad (fin del día de hoy en Argentina) se calcula con
+  // la hora real en esta capa; el valor exacto ya está fijado en
+  // dates.test.ts y trips.service.test.ts.
   it("combina origin y features en el where (200)", async () => {
     vi.mocked(prisma.trip.findMany).mockResolvedValue([]);
 
@@ -374,6 +377,7 @@ describe("GET /api/trips con filtros", () => {
           status: "OPEN",
           origin: { contains: "rosario", mode: "insensitive" },
           features: { hasEvery: ["seguro", "expreso"] },
+          date: { gt: expect.any(Date) },
         },
       })
     );
@@ -386,7 +390,9 @@ describe("GET /api/trips con filtros", () => {
 
     expect(res.status).toBe(200);
     expect(prisma.trip.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { status: "OPEN" } })
+      expect.objectContaining({
+        where: { status: "OPEN", date: { gt: expect.any(Date) } },
+      })
     );
   });
 
@@ -397,7 +403,9 @@ describe("GET /api/trips con filtros", () => {
 
     expect(res.status).toBe(200);
     expect(prisma.trip.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { status: "OPEN" } })
+      expect.objectContaining({
+        where: { status: "OPEN", date: { gt: expect.any(Date) } },
+      })
     );
   });
 
@@ -414,6 +422,7 @@ describe("GET /api/trips con filtros", () => {
         where: {
           status: "OPEN",
           date: {
+            gt: expect.any(Date),
             gte: new Date("2026-10-01T00:00:00.000Z"),
             lte: new Date("2026-10-31T23:59:59.999Z"),
           },
@@ -432,6 +441,100 @@ describe("GET /api/trips con filtros", () => {
     const res = await request(app).get("/api/trips?dateFrom=lalala");
     expect(res.status).toBe(400);
     expect(res.body.code).toBe("VALIDATION_ERROR");
+  });
+});
+
+describe("POST /api/trips/:id/cargo-items y la fecha del viaje", () => {
+  /** El viaje que devuelve la transacción: estado OPEN y la fecha que se le pase. */
+  function viajeAbierto(date: Date) {
+    return {
+      id: "t1",
+      origin: "Rosario",
+      destination: "Córdoba",
+      date,
+      departureTime: null,
+      truckType: "Semi",
+      capacityTotal: 30,
+      price: new Prisma.Decimal("1500.00"),
+      depositPercent: 20,
+      platformFeePercent: 10,
+      status: "OPEN",
+      createdAt: new Date(),
+      carrierId: "u1",
+      carrier: { id: "u1", name: "Flete" },
+      features: [],
+      cargoItems: [],
+      originLat: null,
+      originLng: null,
+      destLat: null,
+      destLng: null,
+    };
+  }
+
+  /** La transacción de addCargoItem, con el viaje que cada test necesita. */
+  function mockTx(trip: unknown) {
+    const tx = {
+      trip: {
+        findUnique: vi.fn().mockResolvedValue(trip),
+        update: vi.fn().mockResolvedValue(undefined),
+      },
+      cargoItem: { create: vi.fn().mockResolvedValue({ id: "i1" }) },
+      payment: { create: vi.fn().mockResolvedValue({ id: "p1" }) },
+      user: {
+        findUnique: vi.fn().mockResolvedValue({
+          name: "Empresa",
+          email: "empresa@d.com",
+          emailNotifications: false,
+          mpUserId: "mp-u2",
+          mpAccessToken: "mp-token",
+        }),
+      },
+    };
+    vi.mocked(prisma.$transaction).mockImplementation(
+      (fn: unknown) => (fn as (c: unknown) => unknown)(tx) as never
+    );
+    return tx;
+  }
+
+  const agregar = () =>
+    request(app)
+      .post("/api/trips/t1/cargo-items")
+      .set("Authorization", `Bearer ${companyToken}`)
+      .send({ description: "Cajas", volume: 1, pickupAddress: "Córdoba, Córdoba" });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("rechaza por HTTP la carga de un viaje cuya fecha ya llegó (409)", async () => {
+    // el viaje es de hoy: el estado sigue OPEN, pero no admite carga nueva
+    const tx = mockTx(viajeAbierto(new Date()));
+
+    const res = await agregar();
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("TRIP_DATE_PASSED");
+    expect(res.body.error).toBe("este viaje ya está en curso y no acepta nuevas cargas");
+    expect(tx.cargoItem.create).not.toHaveBeenCalled();
+  });
+
+  it("también la rechaza si el viaje es de fecha pasada", async () => {
+    const tx = mockTx(viajeAbierto(new Date(Date.now() - 5 * 24 * 60 * 60 * 1000)));
+
+    const res = await agregar();
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("TRIP_DATE_PASSED");
+    expect(tx.cargoItem.create).not.toHaveBeenCalled();
+  });
+
+  it("acepta la carga si el viaje es de mañana (201)", async () => {
+    const tx = mockTx(viajeAbierto(new Date(Date.now() + 2 * 24 * 60 * 60 * 1000)));
+
+    const res = await agregar();
+
+    expect(res.status).toBe(201);
+    expect(tx.cargoItem.create).toHaveBeenCalled();
   });
 });
 

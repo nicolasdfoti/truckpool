@@ -1,29 +1,15 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { Prisma } from "@prisma/client";
-import {
-  addCargoItem,
-  cancelCargoItem,
-  confirmCargoItem,
-  createReview,
-  createTrip,
-  createTripMessage,
-  getTripById,
-  listOpenTrips,
-  listTripMessages,
-  getTripLocation,
-  markTripMessagesRead,
-  recordTripLocation,
-  releaseExpiredReservations,
-  updateTripStatus,
-  processRefundRequest,
-} from "../modules/trips/trips.service.js";
+import * as tripsService from "../modules/trips/trips.service.js";
 import { createCheckoutPreference } from "../lib/mercadopago.js";
+import { fetchRouteGeometry } from "../lib/routing.js";
 import {
   CargoItemNotCancellableError,
   CargoItemNotFoundError,
   InvalidTransitionError,
   NotEnoughCapacityError,
   TripAlreadyStartedError,
+  TripDatePassedError,
   TripNotFoundError,
   TripNotInTransitError,
   TripNotOpenError,
@@ -42,6 +28,11 @@ vi.mock("../lib/geocode.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/geocode.js")>();
   return { ...actual, geocode: vi.fn().mockResolvedValue(null) };
 });
+
+// los tests no pegan a OSRM: fetchRouteGeometry va mockeado
+vi.mock("../lib/routing.js", () => ({
+  fetchRouteGeometry: vi.fn().mockResolvedValue(null),
+}));
 
 vi.mock("../lib/notifications.js", () => ({
   notifyUsers: vi.fn().mockResolvedValue(1),
@@ -131,12 +122,30 @@ afterEach(() => {
   vi.restoreAllMocks(); // limpiar spies (p.ej. hoursUntilTrip) entre tests
 });
 
+/**
+ * Fecha de un viaje que todavía está disponible. El default de `baseTrip`
+ * tiene que caer en un día posterior al de hoy: un viaje con la fecha de hoy
+ * ya no acepta carga, y los tests que prueban el resto del flujo necesitan un
+ * viaje disponible.
+ */
+function futureTripDate(daysAhead = 3) {
+  return new Date(Date.now() + daysAhead * 24 * 60 * 60 * 1000);
+}
+
+/**
+ * "Hoy" fijo para los tests de disponibilidad: 09:00 del 30/09 en Argentina
+ * (UTC-3). El último instante de ese día local es el 30/09 23:59:59.999 AR,
+ * que en UTC es el 01/10 02:59:59.999Z.
+ */
+const AHORA = new Date("2026-09-30T12:00:00.000Z");
+const CORTE_ARGENTINA = new Date("2026-10-01T02:59:59.999Z");
+
 function baseTrip(overrides: Record<string, unknown> = {}) {
   return {
     id: "t1",
     origin: "A",
     destination: "B",
-    date: new Date(),
+    date: futureTripDate(),
     truckType: "Semi",
     capacityTotal: 30,
     price: new Prisma.Decimal("1500.00"),
@@ -225,31 +234,35 @@ describe("listOpenTrips", () => {
     } as never);
   });
 
-  it("sin filtros devuelve todos los viajes OPEN como antes", async () => {
-    await listOpenTrips();
+  it("sin filtros devuelve los viajes OPEN de fecha futura", async () => {
+    await tripsService.listOpenTrips({}, AHORA);
 
     expect(prisma.trip.findMany).toHaveBeenCalledWith({
-      where: { status: "OPEN" },
+      where: { status: "OPEN", date: { gt: CORTE_ARGENTINA } },
       include: { cargoItems: true, carrier: { select: { name: true } } },
       orderBy: { date: "asc" },
     });
   });
 
   it("filtra por origin con contains e insensible", async () => {
-    await listOpenTrips({ origin: "ros" });
+    await tripsService.listOpenTrips({ origin: "ros" }, AHORA);
 
     expect(prisma.trip.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: {
           status: "OPEN",
           origin: { contains: "ros", mode: "insensitive" },
+          date: { gt: CORTE_ARGENTINA },
         },
       })
     );
   });
 
   it("combina origin y features con AND", async () => {
-    await listOpenTrips({ origin: "Córdoba", features: ["seguro", "expreso"] });
+    await tripsService.listOpenTrips(
+      { origin: "Córdoba", features: ["seguro", "expreso"] },
+      AHORA
+    );
 
     expect(prisma.trip.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -257,22 +270,27 @@ describe("listOpenTrips", () => {
           status: "OPEN",
           origin: { contains: "Córdoba", mode: "insensitive" },
           features: { hasEvery: ["seguro", "expreso"] },
+          date: { gt: CORTE_ARGENTINA },
         },
       })
     );
   });
 
-  it("traduce dateFrom/dateTo a un rango UTC del día completo", async () => {
-    await listOpenTrips({
-      dateFrom: new Date("2026-10-01T00:00:00.000Z"),
-      dateTo: new Date("2026-10-31T00:00:00.000Z"),
-    });
+  it("traduce dateFrom/dateTo a un rango UTC del día completo y conserva el corte", async () => {
+    await tripsService.listOpenTrips(
+      {
+        dateFrom: new Date("2026-10-01T00:00:00.000Z"),
+        dateTo: new Date("2026-10-31T00:00:00.000Z"),
+      },
+      AHORA
+    );
 
     expect(prisma.trip.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: {
           status: "OPEN",
           date: {
+            gt: CORTE_ARGENTINA,
             gte: new Date("2026-10-01T00:00:00.000Z"),
             lte: new Date("2026-10-31T23:59:59.999Z"),
           },
@@ -282,13 +300,14 @@ describe("listOpenTrips", () => {
   });
 
   it("ignora un array de features vacío", async () => {
-    await listOpenTrips({ destination: "Rosario", features: [] });
+    await tripsService.listOpenTrips({ destination: "Rosario", features: [] }, AHORA);
 
     expect(prisma.trip.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: {
           status: "OPEN",
           destination: { contains: "Rosario", mode: "insensitive" },
+          date: { gt: CORTE_ARGENTINA },
         },
       })
     );
@@ -308,9 +327,47 @@ describe("listOpenTrips", () => {
       }
     );
 
-    const result = await listOpenTrips({ origin: "ROSAR" });
+    const result = await tripsService.listOpenTrips({ origin: "ROSAR" }, AHORA);
 
     expect(result.map((trip) => trip.id)).toEqual(["t-ros"]);
+  });
+
+  describe("disponibilidad por fecha", () => {
+    // El viaje se guarda con la hora con la que lo manda el cliente: 12:00 AR
+    // para "hoy", o sea ~15:00Z.
+    const filas = [
+      baseTrip({ id: "t-manana", date: new Date("2026-10-01T15:00:00.000Z") }),
+      baseTrip({ id: "t-hoy", date: new Date("2026-09-30T15:00:00.000Z") }),
+      baseTrip({ id: "t-ayer", date: new Date("2026-09-29T15:00:00.000Z") }),
+    ];
+
+    beforeEach(() => {
+      // el mock aplica el mismo filtro que hace la base, para que el test
+      // compruebe de punta a punta qué viajes entran.
+      (prisma.trip.findMany as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+        ({ where }: { where: { date?: { gt?: Date } } }) =>
+          Promise.resolve(filas.filter((row) => row.date > where.date!.gt!))
+      );
+    });
+
+    it("deja fuera el viaje de hoy y el de ayer, y deja el de mañana", async () => {
+      const result = await tripsService.listOpenTrips({}, AHORA);
+
+      expect(result.map((trip) => trip.id)).toEqual(["t-manana"]);
+    });
+
+    it("no toca Trip.status: el viaje de hoy sigue OPEN, sólo deja de estar disponible", async () => {
+      const result = await tripsService.listOpenTrips({}, AHORA);
+
+      expect(filas.find((t) => t.id === "t-hoy")?.status).toBe("OPEN");
+      expect(result.some((t) => t.id === "t-hoy")).toBe(false);
+    });
+
+    it("el viaje disponible llega con acceptsCargo", async () => {
+      const result = await tripsService.listOpenTrips({}, AHORA);
+
+      expect(result.map((trip) => trip.acceptsCargo)).toEqual([true]);
+    });
   });
 });
 
@@ -386,7 +443,7 @@ describe("cancelCargoItem", () => {
   });
 
   it("retira una carga PENDING de la empresa y la marca CANCELLED sin borrarla", async () => {
-    const result = await cancelCargoItem("t1", "i1", "c1");
+    const result = await tripsService.cancelCargoItem("t1", "i1", "c1");
 
     expect(tx.cargoItem.update).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -407,7 +464,7 @@ describe("cancelCargoItem", () => {
   });
 
   it("deja asentado que no se cobró nada de una carga sin pagar", async () => {
-    await cancelCargoItem("t1", "i1", "c1");
+    await tripsService.cancelCargoItem("t1", "i1", "c1");
 
     // sin plata cobrada no hay fee: el fee es lo que la plataforma se queda, y
     // no se puede quedar nada de un pago que nunca entró.
@@ -425,7 +482,7 @@ describe("cancelCargoItem", () => {
       baseCargoItem({ status: "CONFIRMED", payments: [], company: { name: "Acero SA" } })
     );
 
-    await expect(cancelCargoItem("t1", "i1", "c1")).rejects.toBeInstanceOf(
+    await expect(tripsService.cancelCargoItem("t1", "i1", "c1")).rejects.toBeInstanceOf(
       CargoItemNotCancellableError
     );
     expect(tx.cargoItem.update).not.toHaveBeenCalled();
@@ -436,7 +493,7 @@ describe("cancelCargoItem", () => {
       baseCargoItem({ status: "CANCELLED", payments: [], company: { name: "Acero SA" } })
     );
 
-    await expect(cancelCargoItem("t1", "i1", "c1")).rejects.toBeInstanceOf(
+    await expect(tripsService.cancelCargoItem("t1", "i1", "c1")).rejects.toBeInstanceOf(
       CargoItemNotCancellableError
     );
     expect(tx.cargoItem.update).not.toHaveBeenCalled();
@@ -447,7 +504,7 @@ describe("cancelCargoItem", () => {
       baseTrip({ status: "IN_TRANSIT", date: tripDateIn(72) })
     );
 
-    await expect(cancelCargoItem("t1", "i1", "c1")).rejects.toBeInstanceOf(
+    await expect(tripsService.cancelCargoItem("t1", "i1", "c1")).rejects.toBeInstanceOf(
       TripAlreadyStartedError
     );
     expect(tx.cargoItem.update).not.toHaveBeenCalled();
@@ -458,13 +515,13 @@ describe("cancelCargoItem", () => {
       baseTrip({ status: "COMPLETED", date: tripDateIn(72) })
     );
 
-    await expect(cancelCargoItem("t1", "i1", "c1")).rejects.toBeInstanceOf(
+    await expect(tripsService.cancelCargoItem("t1", "i1", "c1")).rejects.toBeInstanceOf(
       TripAlreadyStartedError
     );
   });
 
   it("no deja retirar la carga de otra empresa", async () => {
-    await expect(cancelCargoItem("t1", "i1", "otra-empresa")).rejects.toMatchObject({
+    await expect(tripsService.cancelCargoItem("t1", "i1", "otra-empresa")).rejects.toMatchObject({
       statusCode: 403,
     });
     expect(tx.cargoItem.update).not.toHaveBeenCalled();
@@ -472,7 +529,7 @@ describe("cancelCargoItem", () => {
 
   it("da 404 si la carga no existe o es de otro viaje", async () => {
     tx.cargoItem.findUnique.mockResolvedValue(null);
-    await expect(cancelCargoItem("t1", "i1", "c1")).rejects.toBeInstanceOf(
+    await expect(tripsService.cancelCargoItem("t1", "i1", "c1")).rejects.toBeInstanceOf(
       CargoItemNotFoundError
     );
 
@@ -483,7 +540,7 @@ describe("cancelCargoItem", () => {
         company: { name: "Acero SA" },
       })
     );
-    await expect(cancelCargoItem("t1", "i1", "c1")).rejects.toBeInstanceOf(
+    await expect(tripsService.cancelCargoItem("t1", "i1", "c1")).rejects.toBeInstanceOf(
       CargoItemNotFoundError
     );
   });
@@ -501,7 +558,7 @@ describe("cancelCargoItem", () => {
       })
     );
 
-    await cancelCargoItem("t1", "i1", "c1");
+    await tripsService.cancelCargoItem("t1", "i1", "c1");
 
     expect(tx.trip.update).toHaveBeenCalledWith({
       where: { id: "t1" },
@@ -523,7 +580,7 @@ describe("cancelCargoItem", () => {
       })
     );
 
-    await cancelCargoItem("t1", "i1", "c1");
+    await tripsService.cancelCargoItem("t1", "i1", "c1");
 
     expect(tx.trip.update).toHaveBeenCalledWith({
       where: { id: "t1" },
@@ -532,7 +589,7 @@ describe("cancelCargoItem", () => {
   });
 
   it("no toca el estado de un viaje OPEN", async () => {
-    await cancelCargoItem("t1", "i1", "c1");
+    await tripsService.cancelCargoItem("t1", "i1", "c1");
 
     expect(tx.trip.update).not.toHaveBeenCalled();
   });
@@ -568,7 +625,7 @@ describe("cancelCargoItem con seña pagada", () => {
   });
 
   it("más de 48hs: crea RefundRequest PENDING con monto total (outbox)", async () => {
-    await cancelCargoItem("t1", "i1", "c1");
+    await tripsService.cancelCargoItem("t1", "i1", "c1");
 
     expect(refundPayment).not.toHaveBeenCalled(); // outbox: processor lo hace después
     expect(tx.payment.update).not.toHaveBeenCalled(); // outbox: processor lo hace después
@@ -592,7 +649,7 @@ describe("cancelCargoItem con seña pagada", () => {
     );
     vi.mocked(refundPayment).mockResolvedValue(50);
 
-    await cancelCargoItem("t1", "i1", "c1");
+    await tripsService.cancelCargoItem("t1", "i1", "c1");
 
     expect(refundPayment).not.toHaveBeenCalled();
     expect(tx.payment.update).not.toHaveBeenCalled();
@@ -615,7 +672,7 @@ describe("cancelCargoItem con seña pagada", () => {
       baseTrip({ carrier: baseCarrier(), date: tripDateIn(10) })
     );
 
-    await cancelCargoItem("t1", "i1", "c1");
+    await tripsService.cancelCargoItem("t1", "i1", "c1");
 
     expect(refundPayment).not.toHaveBeenCalled();
     expect(tx.payment.update).not.toHaveBeenCalled();
@@ -636,7 +693,7 @@ describe("cancelCargoItem con seña pagada", () => {
     );
     vi.mocked(refundPayment).mockResolvedValue(50);
 
-    await cancelCargoItem("t1", "i1", "c1");
+    await tripsService.cancelCargoItem("t1", "i1", "c1");
 
     expect(refundPayment).not.toHaveBeenCalled();
     expect(tx.refundRequest.create).toHaveBeenCalledWith({
@@ -656,7 +713,7 @@ describe("cancelCargoItem con seña pagada", () => {
     );
     vi.mocked(refundPayment).mockResolvedValue(50)
 
-    await cancelCargoItem("t1", "i1", "c1")
+    await tripsService.cancelCargoItem("t1", "i1", "c1")
 
     expect(refundPayment).not.toHaveBeenCalled()
     expect(tx.refundRequest.create).toHaveBeenCalledWith({
@@ -685,7 +742,7 @@ describe("cancelCargoItem con seña pagada", () => {
       })
     );
 
-    await cancelCargoItem("t1", "i1", "c1");
+    await tripsService.cancelCargoItem("t1", "i1", "c1");
 
     // OUTBOX: se crea RefundRequest PENDING (el test de arriba ya verifica el monto)
     expect(tx.refundRequest.create).toHaveBeenCalledWith(
@@ -709,7 +766,7 @@ describe("cancelCargoItem con seña pagada", () => {
     );
 
     // OUTBOX: la cancelacion NO falla; el reembolso se reintentara luego
-    await cancelCargoItem("t1", "i1", "c1");
+    await tripsService.cancelCargoItem("t1", "i1", "c1");
 
     expect(tx.refundRequest.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
@@ -734,7 +791,7 @@ describe("cancelCargoItem con seña pagada", () => {
       })
     );
 
-    const result = await cancelCargoItem("t1", "i1", "c1");
+    const result = await tripsService.cancelCargoItem("t1", "i1", "c1");
 
     expect(refundPayment).not.toHaveBeenCalled();
     expect(tx.payment.update).not.toHaveBeenCalled();
@@ -761,7 +818,7 @@ describe("cancelCargoItem con seña pagada", () => {
       })
     );
 
-    await cancelCargoItem("t1", "i1", "c1");
+    await tripsService.cancelCargoItem("t1", "i1", "c1");
 
     // sin seña cobrada no hay devolución, aunque haya un saldo aprobado (que en
     // la práctica no puede existir con la carga PENDING).
@@ -807,7 +864,7 @@ describe("addCargoItem con cargas retiradas", () => {
       })
     );
 
-    const result = await addCargoItem("t1", "c1", {
+    const result = await tripsService.addCargoItem("t1", "c1", {
       description: "Maquinaria",
       pickupAddress: "Córdoba, Córdoba",
       volume: 10,
@@ -832,7 +889,7 @@ describe("addCargoItem con cargas retiradas", () => {
     );
 
     await expect(
-      addCargoItem("t1", "c1", {
+      tripsService.addCargoItem("t1", "c1", {
         description: "Maquinaria",
         pickupAddress: "Córdoba, Córdoba",
         volume: 11,
@@ -867,7 +924,7 @@ describe("addCargoItem", () => {
   it("prorratea el precio por volumen y guarda el item", async () => {
     tx.trip.findUnique.mockResolvedValue(baseTrip());
 
-    const result = await addCargoItem("t1", "c1", {
+    const result = await tripsService.addCargoItem("t1", "c1", {
       description: "Maquinaria",
       pickupAddress: "Córdoba, Córdoba",
       volume: 10,
@@ -893,7 +950,7 @@ describe("addCargoItem", () => {
     // pide 20% de seña: 100.
     tx.trip.findUnique.mockResolvedValue(baseTrip({ depositPercent: 20 }));
 
-    const result = await addCargoItem("t1", "c1", {
+    const result = await tripsService.addCargoItem("t1", "c1", {
       description: "Maquinaria",
       pickupAddress: "Córdoba, Córdoba",
       volume: 10,
@@ -925,7 +982,7 @@ describe("addCargoItem", () => {
   it("respeta un porcentaje de seña distinto al 20%", async () => {
     tx.trip.findUnique.mockResolvedValue(baseTrip({ depositPercent: 50 }));
 
-    const result = await addCargoItem("t1", "c1", {
+    const result = await tripsService.addCargoItem("t1", "c1", {
       description: "Maquinaria",
       pickupAddress: "Córdoba, Córdoba",
       volume: 10,
@@ -943,7 +1000,7 @@ describe("addCargoItem", () => {
       })
     );
 
-    await addCargoItem("t1", "c1", {
+    await tripsService.addCargoItem("t1", "c1", {
       description: "Maquinaria",
       pickupAddress: "Córdoba, Córdoba",
       volume: 10,
@@ -963,7 +1020,7 @@ describe("addCargoItem", () => {
     tx.trip.findUnique.mockResolvedValue(baseTrip());
     vi.mocked(notifyUsers).mockRejectedValueOnce(new Error("la base de avisos cayó"));
 
-    const result = await addCargoItem("t1", "c1", {
+    const result = await tripsService.addCargoItem("t1", "c1", {
       description: "Maquinaria",
       pickupAddress: "Córdoba, Córdoba",
       volume: 10,
@@ -977,7 +1034,7 @@ describe("addCargoItem", () => {
     tx.trip.findUnique.mockResolvedValue(baseTrip({ cargoItems: [{ volume: 28 }] }));
 
     await expect(
-      addCargoItem("t1", "c1", {
+      tripsService.addCargoItem("t1", "c1", {
         description: "Grande",
         pickupAddress: "Córdoba, Córdoba",
         volume: 5,
@@ -990,7 +1047,7 @@ describe("addCargoItem", () => {
     tx.trip.findUnique.mockResolvedValue(baseTrip({ cargoItems: [{ volume: 28 }] }));
 
     await expect(
-      addCargoItem("t1", "c1", {
+      tripsService.addCargoItem("t1", "c1", {
         description: "Grande",
         pickupAddress: "Córdoba, Córdoba",
         volume: 5,
@@ -1002,7 +1059,7 @@ describe("addCargoItem", () => {
   it("marca el viaje como FULL cuando se completa", async () => {
     tx.trip.findUnique.mockResolvedValue(baseTrip({ cargoItems: [{ volume: 20 }] }));
 
-    await addCargoItem("t1", "c1", {
+    await tripsService.addCargoItem("t1", "c1", {
       description: "Completa",
       pickupAddress: "Córdoba, Córdoba",
       volume: 10,
@@ -1020,7 +1077,7 @@ describe("addCargoItem", () => {
     );
 
     await expect(
-      addCargoItem("t1", "c1", {
+      tripsService.addCargoItem("t1", "c1", {
         description: "X",
         pickupAddress: "Córdoba, Córdoba",
         volume: 1,
@@ -1033,12 +1090,196 @@ describe("addCargoItem", () => {
     tx.trip.findUnique.mockResolvedValue(null);
 
     await expect(
-      addCargoItem("nope", "c1", {
+      tripsService.addCargoItem("nope", "c1", {
         description: "X",
         pickupAddress: "Córdoba, Córdoba",
         volume: 1,
       })
     ).rejects.toBeInstanceOf(TripNotFoundError);
+  });
+
+  describe("disponibilidad por fecha", () => {
+    const alta = () =>
+      tripsService.addCargoItem("t1", "c1", {
+        description: "Maquinaria",
+        pickupAddress: "Córdoba, Córdoba",
+        volume: 1,
+      });
+
+    it("permite la carga si el viaje es de mañana", async () => {
+      tx.trip.findUnique.mockResolvedValue(baseTrip({ date: futureTripDate(1) }));
+
+      await alta();
+
+      expect(tx.cargoItem.create).toHaveBeenCalled();
+    });
+
+    it("rechaza la carga si el viaje es de hoy, aunque siga OPEN", async () => {
+      // date = ahora: el viaje es de hoy (o de ayer, si el test corrió cerca de
+      // la medianoche) en cualquier caso no admite carga nueva.
+      tx.trip.findUnique.mockResolvedValue(baseTrip({ date: new Date(), status: "OPEN" }));
+
+      await expect(alta()).rejects.toBeInstanceOf(TripDatePassedError);
+      expect(tx.cargoItem.create).not.toHaveBeenCalled();
+    });
+
+    it("rechaza la carga si el viaje ya pasó", async () => {
+      tx.trip.findUnique.mockResolvedValue(baseTrip({ date: futureTripDate(-2) }));
+
+      await expect(alta()).rejects.toBeInstanceOf(TripDatePassedError);
+      expect(tx.cargoItem.create).not.toHaveBeenCalled();
+    });
+
+    it("el error dice que el viaje está en curso y trae su code", async () => {
+      tx.trip.findUnique.mockResolvedValue(baseTrip({ date: futureTripDate(-2) }));
+
+      await expect(alta()).rejects.toMatchObject({
+        statusCode: 409,
+        code: "TRIP_DATE_PASSED",
+        message: "este viaje ya está en curso y no acepta nuevas cargas",
+      });
+    });
+
+    it("no cambia el estado del viaje: sigue OPEN, sólo no entra carga", async () => {
+      tx.trip.findUnique.mockResolvedValue(baseTrip({ date: new Date(), status: "OPEN" }));
+
+      await expect(alta()).rejects.toBeInstanceOf(TripDatePassedError);
+      // ni FULL ni IN_TRANSIT: la transición sigue siendo del transportista.
+      expect(tx.trip.update).not.toHaveBeenCalled();
+    });
+
+    it("mantiene el rechazo por estado cuando el viaje es FULL pero de fecha futura", async () => {
+      tx.trip.findUnique.mockResolvedValue(
+        baseTrip({ status: "FULL", date: futureTripDate(1), cargoItems: [{ volume: 20 }] })
+      );
+
+      await expect(alta()).rejects.toBeInstanceOf(TripNotOpenError);
+    });
+  });
+
+  describe("validación de distancia parada ↔ trayecto", () => {
+    beforeEach(() => {
+      vi.clearAllMocks();
+      (prisma.$transaction as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+        (fn: unknown) => (fn as (t: unknown) => unknown)(tx)
+      );
+      // mock para prisma.trip.findUnique (usado por getTripRouteGeometry y getTripRoute)
+      const fullTrip = baseTrip({
+        id: "t1",
+        status: "OPEN",
+        originLat: -31.4201,
+        originLng: -64.1888,
+        destLat: -32.9442,
+        destLng: -60.6505,
+        cargoItems: [],
+      });
+      (prisma.trip.findUnique as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(
+        fullTrip
+      );
+      // mock para tx.trip.findUnique dentro de la transacción de addCargoItem
+      tx.trip.findUnique.mockResolvedValue(fullTrip);
+      tx.cargoItem.create.mockImplementation(({ data }: { data: unknown }) => ({
+        id: "i1",
+        ...(data as object),
+      }));
+      tx.payment.create.mockImplementation(({ data }: { data: unknown }) => ({
+        id: "p1",
+        ...(data as object),
+      }));
+      tx.user.findUnique.mockResolvedValue({
+        name: "Transportes Flete",
+        email: "flete@truckpool.app",
+        emailNotifications: true,
+        mpUserId: "mp-user-123",
+        mpAccessToken: "access-token-123",
+      });
+      // mock del geocode para el pickup (por defecto cerca del trayecto)
+      vi.mocked(geocode).mockResolvedValue({ lat: -31.42, lng: -64.18 });
+    });
+
+    it("pasa cuando el pickup está cerca del trayecto (distancia <= 8 km)", async () => {
+      // geometría de ruta Córdoba → Rosario (simula OSRM)
+      const routeGeometry: [number, number][] = [
+        [-64.1888, -31.4201], // Córdoba
+        [-63.5, -32.0], // punto intermedio
+        [-60.6505, -32.9442], // Rosario
+      ];
+      vi.mocked(fetchRouteGeometry).mockResolvedValue(routeGeometry);
+
+      const result = await tripsService.addCargoItem("t1", "c1", {
+        description: "Maquinaria",
+        pickupAddress: "Córdoba, Córdoba",
+        volume: 10,
+      });
+
+      expect(result.volume).toBe(10);
+    });
+
+    it("falla con STOP_TOO_FAR_FROM_ROUTE cuando el pickup está lejos del trayecto (distancia > 8 km)", async () => {
+      // geometría de ruta Córdoba → Rosario
+      const routeGeometry: [number, number][] = [
+        [-64.1888, -31.4201],
+        [-63.5, -32.0],
+        [-60.6505, -32.9442],
+      ];
+      vi.mocked(fetchRouteGeometry).mockResolvedValue(routeGeometry);
+      // pickup en Buenos Aires (muy lejos de la ruta Córdoba-Rosario)
+      vi.mocked(geocode).mockResolvedValue({ lat: -34.6037, lng: -58.3816 });
+
+      await expect(
+        tripsService.addCargoItem("t1", "c1", {
+          description: "Maquinaria",
+          pickupAddress: "Buenos Aires, CABA",
+          volume: 10,
+        })
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        code: "STOP_TOO_FAR_FROM_ROUTE",
+      });
+
+      // no se crea el cargo ni el pago
+      expect(tx.cargoItem.create).not.toHaveBeenCalled();
+      expect(tx.payment.create).not.toHaveBeenCalled();
+    });
+
+    it("pasa (sin bloquear) cuando fetchRouteGeometry devuelve null (OSRM caído)", async () => {
+      vi.mocked(fetchRouteGeometry).mockResolvedValue(null);
+
+      const result = await tripsService.addCargoItem("t1", "c1", {
+        description: "Maquinaria",
+        pickupAddress: "Buenos Aires, CABA",
+        volume: 10,
+      });
+
+      expect(result.volume).toBe(10);
+      // no lanza error aunque el pickup esté lejos, porque no hay geometría con qué comparar
+    });
+
+    it("pasa (sin bloquear) cuando fetchRouteGeometry devuelve geometría con menos de 2 puntos", async () => {
+      vi.mocked(fetchRouteGeometry).mockResolvedValue([
+        [-64.1888, -31.4201],
+      ]); // solo 1 punto
+
+      const result = await tripsService.addCargoItem("t1", "c1", {
+        description: "Maquinaria",
+        pickupAddress: "Buenos Aires, CABA",
+        volume: 10,
+      });
+
+      expect(result.volume).toBe(10);
+    });
+
+    it("pasa cuando el pickup no tiene coordenadas (geocode falló)", async () => {
+      vi.mocked(geocode).mockResolvedValue(null);
+
+      const result = await tripsService.addCargoItem("t1", "c1", {
+        description: "Maquinaria",
+        pickupAddress: "Lugar sin geocodificar",
+        volume: 10,
+      });
+
+      expect(result.volume).toBe(10);
+    });
   });
 
   describe("reservas vencidas", () => {
@@ -1086,7 +1327,7 @@ describe("addCargoItem", () => {
         prisma.cargoItem.findMany as unknown as ReturnType<typeof vi.fn>
       ).mockResolvedValue([]);
 
-      const released = await releaseExpiredReservations();
+      const released = await tripsService.releaseExpiredReservations();
 
       expect(released).toBe(0);
       expect(prisma.cargoItem.updateMany).not.toHaveBeenCalled();
@@ -1097,7 +1338,7 @@ describe("addCargoItem", () => {
         prisma.cargoItem.findMany as unknown as ReturnType<typeof vi.fn>
       ).mockResolvedValue([expiredItem()]);
 
-      const released = await releaseExpiredReservations();
+      const released = await tripsService.releaseExpiredReservations();
 
       expect(released).toBe(1);
       expect(prisma.cargoItem.findMany).toHaveBeenCalledWith(
@@ -1146,7 +1387,7 @@ describe("addCargoItem", () => {
         cargoItems: [{ id: "i1", volume: 10, status: "PENDING" }],
       });
 
-      expect(await releaseExpiredReservations()).toBe(0);
+      expect(await tripsService.releaseExpiredReservations()).toBe(0);
     });
 
     it("reabre el viaje FULL que quedó con lugar libre", async () => {
@@ -1163,7 +1404,7 @@ describe("addCargoItem", () => {
         ],
       });
 
-      await releaseExpiredReservations();
+      await tripsService.releaseExpiredReservations();
 
       // 30 - 10 (la vencida) = 20, y quedaban 20 ocupados: vuelve a haber lugar.
       expect(prisma.trip.update).toHaveBeenCalledWith({
@@ -1185,7 +1426,7 @@ describe("addCargoItem", () => {
         ],
       });
 
-      await releaseExpiredReservations();
+      await tripsService.releaseExpiredReservations();
 
       expect(prisma.trip.update).not.toHaveBeenCalled();
     });
@@ -1208,7 +1449,7 @@ describe("addCargoItem", () => {
         ],
       });
 
-      const released = await releaseExpiredReservations();
+      const released = await tripsService.releaseExpiredReservations();
 
       expect(released).toBe(2);
       expect(prisma.cargoItem.updateMany).toHaveBeenCalledTimes(1);
@@ -1225,7 +1466,7 @@ describe("addCargoItem", () => {
       ).mockResolvedValue([expiredItem()]);
       (prisma.trip.findMany as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([]);
 
-      await listOpenTrips();
+      await tripsService.listOpenTrips();
 
       expect(prisma.cargoItem.updateMany).toHaveBeenCalled();
     });
@@ -1238,9 +1479,44 @@ describe("addCargoItem", () => {
         baseTrip({ carrier: { name: "Flete" }, reviews: [] })
       );
 
-      await getTripById("t1");
+      await tripsService.getTripById("t1");
 
       expect(prisma.cargoItem.updateMany).toHaveBeenCalled();
+    });
+  });
+
+  describe("getTripById y la disponibilidad", () => {
+    beforeEach(() => {
+      vi.clearAllMocks();
+      (prisma.cargoItem.findMany as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    });
+
+    async function detalleDe(overrides: Record<string, unknown>) {
+      (prisma.trip.findUnique as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(
+        baseTrip({ carrier: { name: "Flete" }, reviews: [], ...overrides })
+      );
+      return tripsService.getTripById("t1");
+    }
+
+    it("el detalle de un viaje de mañana llega con acceptsCargo", async () => {
+      const trip = await detalleDe({ date: futureTripDate(1) });
+
+      expect(trip.acceptsCargo).toBe(true);
+    });
+
+    it("el detalle de un viaje de hoy llega con el estado real y sin carga", async () => {
+      // el detalle es lo que lee la pantalla del viaje: sin acceptsCargo el
+      // formulario de sumar carga se escondería siempre (o nunca).
+      const trip = await detalleDe({ date: new Date(), status: "OPEN" });
+
+      expect(trip.status).toBe("OPEN");
+      expect(trip.acceptsCargo).toBe(false);
+    });
+
+    it("un viaje de fecha futura que ya está IN_TRANSIT tampoco acepta carga", async () => {
+      const trip = await detalleDe({ date: futureTripDate(2), status: "IN_TRANSIT" });
+
+      expect(trip.acceptsCargo).toBe(false);
     });
   });
 
@@ -1258,7 +1534,7 @@ describe("addCargoItem", () => {
         baseTrip()
       );
 
-      const result = await createTrip("u1", {
+      const result = await tripsService.createTrip("u1", {
         origin: "Córdoba",
         destination: "Rosario",
         date: new Date("2026-10-01T10:00:00.000Z"),
@@ -1287,7 +1563,7 @@ describe("addCargoItem", () => {
         baseTrip({ features: ["seguro", "expreso"] })
       );
 
-      const result = await createTrip("u1", {
+      const result = await tripsService.createTrip("u1", {
         origin: "Córdoba",
         destination: "Rosario",
         date: new Date("2026-10-01T10:00:00.000Z"),
@@ -1349,7 +1625,7 @@ describe("addCargoItem", () => {
     it("avanza FULL → IN_TRANSIT", async () => {
       tx.trip.findUnique.mockResolvedValue(baseTrip({ status: "FULL" }));
 
-      const result = await updateTripStatus("t1", "u1", "IN_TRANSIT");
+      const result = await tripsService.updateTripStatus("t1", "u1", "IN_TRANSIT");
 
       expect(tx.trip.update).toHaveBeenCalledWith({
         where: { id: "t1" },
@@ -1365,7 +1641,7 @@ describe("addCargoItem", () => {
         baseTrip({ status: "FULL", cargoItems: [confirmedWithDeposit()] })
       );
 
-      await updateTripStatus("t1", "u1", "IN_TRANSIT");
+      await tripsService.updateTripStatus("t1", "u1", "IN_TRANSIT");
 
       expect(tx.payment.upsert).toHaveBeenCalledWith({
         where: { cargoItemId_type: { cargoItemId: "i1", type: "BALANCE" } },
@@ -1391,7 +1667,7 @@ describe("addCargoItem", () => {
         })
       );
 
-      await updateTripStatus("t1", "u1", "IN_TRANSIT");
+      await tripsService.updateTripStatus("t1", "u1", "IN_TRANSIT");
 
       expect(tx.payment.upsert).not.toHaveBeenCalled();
     });
@@ -1406,7 +1682,7 @@ describe("addCargoItem", () => {
         })
       );
 
-      await updateTripStatus("t1", "u1", "IN_TRANSIT");
+      await tripsService.updateTripStatus("t1", "u1", "IN_TRANSIT");
 
       expect(tx.payment.upsert).not.toHaveBeenCalled();
     });
@@ -1435,7 +1711,7 @@ describe("addCargoItem", () => {
         })
       );
 
-      await updateTripStatus("t1", "u1", "IN_TRANSIT");
+      await tripsService.updateTripStatus("t1", "u1", "IN_TRANSIT");
 
       expect(tx.payment.upsert).toHaveBeenCalledWith(
         expect.objectContaining({ update: {} })
@@ -1460,7 +1736,7 @@ describe("addCargoItem", () => {
         })
       );
 
-      await updateTripStatus("t1", "u1", "IN_TRANSIT");
+      await tripsService.updateTripStatus("t1", "u1", "IN_TRANSIT");
 
       expect(tx.payment.upsert).not.toHaveBeenCalled();
       expect(
@@ -1480,7 +1756,7 @@ describe("addCargoItem", () => {
         })
       );
 
-      await updateTripStatus("t1", "u1", "IN_TRANSIT");
+      await tripsService.updateTripStatus("t1", "u1", "IN_TRANSIT");
 
       const aviso = avisoA("c1");
       expect(aviso.type).toBe("BALANCE_DUE");
@@ -1509,7 +1785,7 @@ describe("addCargoItem", () => {
         })
       );
 
-      await updateTripStatus("t1", "u1", "IN_TRANSIT");
+      await tripsService.updateTripStatus("t1", "u1", "IN_TRANSIT");
 
       // un aviso, con la suma: 400+240 de saldo sobre 500+300 de viaje
       const avisos = vi
@@ -1537,7 +1813,7 @@ describe("addCargoItem", () => {
         })
       );
 
-      const result = await updateTripStatus("t1", "u1", "COMPLETED");
+      const result = await tripsService.updateTripStatus("t1", "u1", "COMPLETED");
       expect(result.status).toBe("COMPLETED");
     });
 
@@ -1565,7 +1841,7 @@ describe("addCargoItem", () => {
         })
       );
 
-      await expect(updateTripStatus("t1", "u1", "COMPLETED")).rejects.toMatchObject({
+      await expect(tripsService.updateTripStatus("t1", "u1", "COMPLETED")).rejects.toMatchObject({
         statusCode: 409,
         code: "BALANCE_PENDING",
       });
@@ -1590,14 +1866,14 @@ describe("addCargoItem", () => {
         })
       );
 
-      const result = await updateTripStatus("t1", "u1", "COMPLETED");
+      const result = await tripsService.updateTripStatus("t1", "u1", "COMPLETED");
       expect(result.status).toBe("COMPLETED");
     });
 
     it("lanza InvalidTransitionError para transiciones inválidas", async () => {
       tx.trip.findUnique.mockResolvedValue(baseTrip({ status: "OPEN" }));
 
-      await expect(updateTripStatus("t1", "u1", "COMPLETED")).rejects.toBeInstanceOf(
+      await expect(tripsService.updateTripStatus("t1", "u1", "COMPLETED")).rejects.toBeInstanceOf(
         InvalidTransitionError
       );
     });
@@ -1605,7 +1881,7 @@ describe("addCargoItem", () => {
     it("lanza FORBIDDEN si no es el transportista dueño", async () => {
       tx.trip.findUnique.mockResolvedValue(baseTrip({ carrierId: "otro" }));
 
-      await expect(updateTripStatus("t1", "u1", "IN_TRANSIT")).rejects.toMatchObject({
+      await expect(tripsService.updateTripStatus("t1", "u1", "IN_TRANSIT")).rejects.toMatchObject({
         statusCode: 403,
         code: "FORBIDDEN",
       });
@@ -1629,7 +1905,7 @@ describe("addCargoItem", () => {
         { description: "Vidrio", companyId: "c2" },
       ]);
 
-      await updateTripStatus("t1", "u1", "IN_TRANSIT");
+      await tripsService.updateTripStatus("t1", "u1", "IN_TRANSIT");
 
       // 2 avisos, uno por empresa: la de 2 cargas no recibe dos
       const avisos = vi
@@ -1660,7 +1936,7 @@ describe("addCargoItem", () => {
         prisma.cargoItem.findMany as unknown as ReturnType<typeof vi.fn>
       ).mockResolvedValue([{ description: "Maquinaria", companyId: "c1" }]);
 
-      await updateTripStatus("t1", "u1", "COMPLETED");
+      await tripsService.updateTripStatus("t1", "u1", "COMPLETED");
 
       const aviso = avisoA("c1");
       expect(aviso.type).toBe("TRIP_STATUS_CHANGED");
@@ -1672,7 +1948,7 @@ describe("addCargoItem", () => {
     it("no avisa a nadie si el viaje no tiene cargas", async () => {
       tx.trip.findUnique.mockResolvedValue(baseTrip({ status: "FULL" }));
 
-      await updateTripStatus("t1", "u1", "IN_TRANSIT");
+      await tripsService.updateTripStatus("t1", "u1", "IN_TRANSIT");
 
       expect(notifyUsers).not.toHaveBeenCalled();
     });
@@ -1684,7 +1960,7 @@ describe("addCargoItem", () => {
       ).mockResolvedValue([{ description: "Maquinaria", companyId: "c1" }]);
       vi.mocked(notifyUsers).mockRejectedValueOnce(new Error("la base de avisos cayó"));
 
-      const result = await updateTripStatus("t1", "u1", "IN_TRANSIT");
+      const result = await tripsService.updateTripStatus("t1", "u1", "IN_TRANSIT");
       expect(result.status).toBe("IN_TRANSIT");
     });
 
@@ -1693,7 +1969,7 @@ describe("addCargoItem", () => {
         baseTrip({ status: "FULL", cargoItems: [confirmedWithDeposit()] })
       );
 
-      await updateTripStatus("t1", "u1", "IN_TRANSIT");
+      await tripsService.updateTripStatus("t1", "u1", "IN_TRANSIT");
 
       // si el cobro del saldo fallara, el viaje no debería quedar en camino.
       expect(prisma.$transaction).toHaveBeenCalledWith(
@@ -1719,7 +1995,7 @@ describe("addCargoItem", () => {
         basePaidCargoItem({ status: "CONFIRMED" })
       );
 
-      const result = await confirmCargoItem("t1", "i1", "u1");
+      const result = await tripsService.confirmCargoItem("t1", "i1", "u1");
 
       expect(prisma.cargoItem.update).toHaveBeenCalledWith({
         where: { id: "i1" },
@@ -1749,7 +2025,7 @@ describe("addCargoItem", () => {
         basePaidCargoItem({ status: "CONFIRMED" })
       );
 
-      await confirmCargoItem("t1", "i1", "u1");
+      await tripsService.confirmCargoItem("t1", "i1", "u1");
 
       const aviso = avisoA("c1");
       expect(notifyUsers).toHaveBeenCalledTimes(1);
@@ -1771,7 +2047,7 @@ describe("addCargoItem", () => {
       );
       vi.mocked(notifyUsers).mockRejectedValueOnce(new Error("la base de avisos cayó"));
 
-      const result = await confirmCargoItem("t1", "i1", "u1");
+      const result = await tripsService.confirmCargoItem("t1", "i1", "u1");
       expect(result.status).toBe("CONFIRMED");
     });
 
@@ -1780,7 +2056,7 @@ describe("addCargoItem", () => {
         prisma.cargoItem.findUnique as unknown as ReturnType<typeof vi.fn>
       ).mockResolvedValue(basePaidCargoItem({ status: "CONFIRMED" }));
 
-      const result = await confirmCargoItem("t1", "i1", "u1");
+      const result = await tripsService.confirmCargoItem("t1", "i1", "u1");
 
       expect(result.status).toBe("CONFIRMED");
       expect(notifyUsers).not.toHaveBeenCalled();
@@ -1797,7 +2073,7 @@ describe("addCargoItem", () => {
         basePaidCargoItem({ status: "CONFIRMED" })
       );
 
-      const result = await confirmCargoItem("t1", "i1", "c1");
+      const result = await tripsService.confirmCargoItem("t1", "i1", "c1");
       expect(result.status).toBe("CONFIRMED");
     });
 
@@ -1809,7 +2085,7 @@ describe("addCargoItem", () => {
         carrierId: "u1",
       });
 
-      await expect(confirmCargoItem("t1", "i1", "x9")).rejects.toMatchObject({
+      await expect(tripsService.confirmCargoItem("t1", "i1", "x9")).rejects.toMatchObject({
         statusCode: 403,
         code: "FORBIDDEN",
       });
@@ -1821,7 +2097,7 @@ describe("addCargoItem", () => {
         prisma.cargoItem.findUnique as unknown as ReturnType<typeof vi.fn>
       ).mockResolvedValue(basePaidCargoItem({ tripId: "otro-viaje" }));
 
-      await expect(confirmCargoItem("t1", "i1", "u1")).rejects.toBeInstanceOf(
+      await expect(tripsService.confirmCargoItem("t1", "i1", "u1")).rejects.toBeInstanceOf(
         CargoItemNotFoundError
       );
     });
@@ -1836,7 +2112,7 @@ describe("addCargoItem", () => {
         carrierId: "u1",
       });
 
-      await expect(confirmCargoItem("t1", "i1", "u1")).rejects.toMatchObject({
+      await expect(tripsService.confirmCargoItem("t1", "i1", "u1")).rejects.toMatchObject({
         statusCode: 409,
         code: "PAYMENT_REQUIRED",
       });
@@ -1851,7 +2127,7 @@ describe("addCargoItem", () => {
         carrierId: "u1",
       });
 
-      await expect(confirmCargoItem("t1", "i1", "c1")).rejects.toMatchObject({
+      await expect(tripsService.confirmCargoItem("t1", "i1", "c1")).rejects.toMatchObject({
         statusCode: 409,
         code: "PAYMENT_REQUIRED",
       });
@@ -1870,7 +2146,7 @@ describe("addCargoItem", () => {
         carrierId: "u1",
       });
 
-      await expect(confirmCargoItem("t1", "i1", "c1")).rejects.toMatchObject({
+      await expect(tripsService.confirmCargoItem("t1", "i1", "c1")).rejects.toMatchObject({
         statusCode: 409,
         code: "PAYMENT_REQUIRED",
       });
@@ -1882,7 +2158,7 @@ describe("addCargoItem", () => {
         prisma.cargoItem.findUnique as unknown as ReturnType<typeof vi.fn>
       ).mockResolvedValue(basePaidCargoItem({ status: "CONFIRMED" }));
 
-      const result = await confirmCargoItem("t1", "i1", "u1");
+      const result = await tripsService.confirmCargoItem("t1", "i1", "u1");
       expect(result.status).toBe("CONFIRMED");
       expect(prisma.cargoItem.update).not.toHaveBeenCalled();
     });
@@ -1923,7 +2199,7 @@ describe("addCargoItem", () => {
         cargoItems: [{ companyId: "u2" }],
       } as never);
 
-      await expect(createReview("t1", "u1", { rating: 5 })).rejects.toMatchObject({
+      await expect(tripsService.createReview("t1", "u1", { rating: 5 })).rejects.toMatchObject({
         statusCode: 409,
         code: "TRIP_NOT_COMPLETED",
       });
@@ -1934,7 +2210,7 @@ describe("addCargoItem", () => {
       vi.mocked(prisma.trip.findUnique).mockResolvedValue(completedTrip(["u2"]) as never);
       vi.mocked(prisma.review.findUnique).mockResolvedValue(baseReview as never);
 
-      await expect(createReview("t1", "u1", { rating: 5 })).rejects.toMatchObject({
+      await expect(tripsService.createReview("t1", "u1", { rating: 5 })).rejects.toMatchObject({
         statusCode: 409,
         code: "ALREADY_REVIEWED",
       });
@@ -1949,7 +2225,7 @@ describe("addCargoItem", () => {
     it("no deja calificar a alguien que no participó del viaje", async () => {
       vi.mocked(prisma.trip.findUnique).mockResolvedValue(completedTrip(["u2"]) as never);
 
-      await expect(createReview("t1", "u9", { rating: 1 })).rejects.toMatchObject({
+      await expect(tripsService.createReview("t1", "u9", { rating: 1 })).rejects.toMatchObject({
         statusCode: 403,
         code: "FORBIDDEN",
       });
@@ -1960,7 +2236,7 @@ describe("addCargoItem", () => {
       vi.mocked(prisma.trip.findUnique).mockResolvedValue(completedTrip(["u2"]) as never);
 
       await expect(
-        createReview("t1", "u1", { rating: 5, toUserId: "u7" })
+        tripsService.createReview("t1", "u1", { rating: 5, toUserId: "u7" })
       ).rejects.toMatchObject({ statusCode: 403, code: "FORBIDDEN" });
     });
 
@@ -1969,7 +2245,7 @@ describe("addCargoItem", () => {
       vi.mocked(prisma.review.findUnique).mockResolvedValue(null);
       vi.mocked(prisma.review.create).mockResolvedValue(baseReview as never);
 
-      const fromCarrier = await createReview("t1", "u1", {
+      const fromCarrier = await tripsService.createReview("t1", "u1", {
         rating: 5,
         comment: "puntual",
       });
@@ -1999,7 +2275,7 @@ describe("addCargoItem", () => {
         toUserId: "u1",
       } as never);
 
-      const fromCompany = await createReview("t1", "u2", { rating: 4 });
+      const fromCompany = await tripsService.createReview("t1", "u2", { rating: 4 });
       expect(prisma.review.create).toHaveBeenLastCalledWith({
         data: {
           tripId: "t1",
@@ -2021,7 +2297,7 @@ describe("addCargoItem", () => {
         completedTrip(["u2", "u3"]) as never
       );
 
-      await expect(createReview("t1", "u1", { rating: 5 })).rejects.toMatchObject({
+      await expect(tripsService.createReview("t1", "u1", { rating: 5 })).rejects.toMatchObject({
         statusCode: 400,
         code: "REVIEW_TARGET_REQUIRED",
       });
@@ -2032,13 +2308,13 @@ describe("addCargoItem", () => {
         toUserId: "u3",
       } as never);
 
-      const review = await createReview("t1", "u1", { rating: 5, toUserId: "u3" });
+      const review = await tripsService.createReview("t1", "u1", { rating: 5, toUserId: "u3" });
       expect(review.toUserId).toBe("u3");
     });
 
     it("lanza 404 si el viaje no existe", async () => {
       vi.mocked(prisma.trip.findUnique).mockResolvedValue(null);
-      await expect(createReview("nope", "u1", { rating: 5 })).rejects.toMatchObject({
+      await expect(tripsService.createReview("nope", "u1", { rating: 5 })).rejects.toMatchObject({
         statusCode: 404,
         code: "TRIP_NOT_FOUND",
       });
@@ -2068,7 +2344,7 @@ describe("addCargoItem", () => {
           verificationStatus: status,
         } as never);
 
-        await expect(createTrip("u1", data)).rejects.toMatchObject({
+        await expect(tripsService.createTrip("u1", data)).rejects.toMatchObject({
           statusCode: 403,
           code: "CARRIER_NOT_VERIFIED",
         });
@@ -2083,7 +2359,7 @@ describe("addCargoItem", () => {
         mpAccessToken: "access-token-123",
       } as never);
 
-      const trip = await createTrip("u1", data);
+      const trip = await tripsService.createTrip("u1", data);
       expect(prisma.trip.create).toHaveBeenCalled();
       expect(trip.id).toBe("t1");
     });
@@ -2148,7 +2424,7 @@ describe("addCargoItem", () => {
           prisma.message.findMany as unknown as ReturnType<typeof vi.fn>
         ).mockResolvedValue([baseMessage()]);
 
-        const result = await listTripMessages("t1", "u1");
+        const result = await tripsService.listTripMessages("t1", "u1");
 
         expect(prisma.message.findMany).toHaveBeenCalledWith(
           expect.objectContaining({
@@ -2171,14 +2447,14 @@ describe("addCargoItem", () => {
 
       it("una empresa con carga también puede verlos", async () => {
         mockTripWithCompanies([companyUno, companyDos]);
-        const result = await listTripMessages("t1", "c2");
+        const result = await tripsService.listTripMessages("t1", "c2");
         expect(result.messages).toEqual([]);
         expect(result.participants.companies).toEqual([companyUno, companyDos]);
       });
 
       it("un usuario que no participa recibe 403", async () => {
         mockTripWithCompanies([companyUno]);
-        await expect(listTripMessages("t1", "c9")).rejects.toMatchObject({
+        await expect(tripsService.listTripMessages("t1", "c9")).rejects.toMatchObject({
           statusCode: 403,
           code: "FORBIDDEN",
         });
@@ -2187,7 +2463,7 @@ describe("addCargoItem", () => {
 
       it("una empresa sin carga en el viaje recibe 403", async () => {
         mockTripWithCompanies([companyUno]);
-        await expect(listTripMessages("t1", "c2")).rejects.toMatchObject({
+        await expect(tripsService.listTripMessages("t1", "c2")).rejects.toMatchObject({
           statusCode: 403,
           code: "FORBIDDEN",
         });
@@ -2197,7 +2473,7 @@ describe("addCargoItem", () => {
         (prisma.trip.findUnique as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(
           null
         );
-        await expect(listTripMessages("nope", "u1")).rejects.toBeInstanceOf(
+        await expect(tripsService.listTripMessages("nope", "u1")).rejects.toBeInstanceOf(
           TripNotFoundError
         );
       });
@@ -2207,7 +2483,7 @@ describe("addCargoItem", () => {
       it("la empresa le escribe al transportista", async () => {
         mockTripWithCompanies([companyUno]);
 
-        const message = await createTripMessage("t1", "c1", {
+        const message = await tripsService.createTripMessage("t1", "c1", {
           body: "  ¿a qué hora podés llegar?  ",
           toUserId: "u1",
         });
@@ -2233,7 +2509,7 @@ describe("addCargoItem", () => {
       it("el transportista le escribe a una de las empresas", async () => {
         mockTripWithCompanies([companyUno, companyDos]);
 
-        const message = await createTripMessage("t1", "u1", {
+        const message = await tripsService.createTripMessage("t1", "u1", {
           body: "salgo mañana temprano",
           toUserId: "c2",
         });
@@ -2245,7 +2521,7 @@ describe("addCargoItem", () => {
         mockTripWithCompanies([companyUno]);
 
         await expect(
-          createTripMessage("t1", "u1", { body: "hola", toUserId: "c9" })
+          tripsService.createTripMessage("t1", "u1", { body: "hola", toUserId: "c9" })
         ).rejects.toMatchObject({ statusCode: 403, code: "NOT_A_PARTICIPANT" });
         expect(prisma.message.create).not.toHaveBeenCalled();
       });
@@ -2253,14 +2529,14 @@ describe("addCargoItem", () => {
       it("no te podés mandar un mensaje a vos mismo", async () => {
         mockTripWithCompanies([companyUno]);
         await expect(
-          createTripMessage("t1", "u1", { body: "hola", toUserId: "u1" })
+          tripsService.createTripMessage("t1", "u1", { body: "hola", toUserId: "u1" })
         ).rejects.toMatchObject({ statusCode: 400, code: "INVALID_TARGET" });
       });
 
       it("quien no participa no puede escribir", async () => {
         mockTripWithCompanies([companyUno]);
         await expect(
-          createTripMessage("t1", "c9", { body: "hola", toUserId: "u1" })
+          tripsService.createTripMessage("t1", "c9", { body: "hola", toUserId: "u1" })
         ).rejects.toMatchObject({ statusCode: 403, code: "FORBIDDEN" });
       });
     });
@@ -2269,7 +2545,7 @@ describe("addCargoItem", () => {
       it("marca solo los mensajes dirigidos al usuario logueado", async () => {
         mockTripWithCompanies([companyUno]);
 
-        const result = await markTripMessagesRead("t1", "c1");
+        const result = await tripsService.markTripMessagesRead("t1", "c1");
 
         expect(prisma.message.updateMany).toHaveBeenCalledWith({
           where: { tripId: "t1", toUserId: "c1", readAt: null },
@@ -2280,7 +2556,7 @@ describe("addCargoItem", () => {
 
       it("el transportista no marca como leídos los mensajes de la empresa", async () => {
         mockTripWithCompanies([companyUno]);
-        await markTripMessagesRead("t1", "u1");
+        await tripsService.markTripMessagesRead("t1", "u1");
         expect(prisma.message.updateMany).toHaveBeenCalledWith(
           expect.objectContaining({ where: expect.objectContaining({ toUserId: "u1" }) })
         );
@@ -2288,7 +2564,7 @@ describe("addCargoItem", () => {
 
       it("un usuario que no participa no puede marcar leídos", async () => {
         mockTripWithCompanies([companyUno]);
-        await expect(markTripMessagesRead("t1", "c9")).rejects.toMatchObject({
+        await expect(tripsService.markTripMessagesRead("t1", "c9")).rejects.toMatchObject({
           statusCode: 403,
           code: "FORBIDDEN",
         });
@@ -2330,7 +2606,7 @@ describe("addCargoItem", () => {
       );
       vi.mocked(prisma.trip.create).mockResolvedValue(baseTrip({ id: "t1" }) as never);
 
-      await createTrip("u1", validTrip);
+      await tripsService.createTrip("u1", validTrip);
 
       expect(geocode).toHaveBeenCalledWith("Rosario");
       expect(geocode).toHaveBeenCalledWith("Córdoba");
@@ -2355,7 +2631,7 @@ describe("addCargoItem", () => {
       vi.mocked(geocode).mockResolvedValue(null);
       vi.mocked(prisma.trip.create).mockResolvedValue(baseTrip({ id: "t1" }) as never);
 
-      const trip = await createTrip("u1", validTrip);
+      const trip = await tripsService.createTrip("u1", validTrip);
 
       expect(trip.id).toBe("t1");
       expect(prisma.trip.create).toHaveBeenCalledWith(
@@ -2379,7 +2655,7 @@ describe("addCargoItem", () => {
       vi.mocked(prisma.trip.create).mockResolvedValue(baseTrip({ id: "t1" }) as never);
 
       // 374 km de Semi: 9.000 + 380 × 374 × 1.25 = 186.500
-      const trip = await createTrip("u1", validTrip);
+      const trip = await tripsService.createTrip("u1", validTrip);
 
       expect(trip.id).toBe("t1");
       expect(prisma.trip.create).toHaveBeenCalled();
@@ -2396,7 +2672,7 @@ describe("addCargoItem", () => {
       // -15% y +15% del sugerido, redondeados a centenas
       for (const price of [158_500, 214_400]) {
         vi.mocked(prisma.trip.create).mockClear();
-        await createTrip("u1", { ...validTrip, price });
+        await tripsService.createTrip("u1", { ...validTrip, price });
         expect(prisma.trip.create).toHaveBeenCalled();
       }
     });
@@ -2410,11 +2686,11 @@ describe("addCargoItem", () => {
 
       // la mitad de lo sugerido: un fletero que se cuelga con el número
       await expect(
-        createTrip("u1", { ...validTrip, price: 90_000 })
+        tripsService.createTrip("u1", { ...validTrip, price: 90_000 })
       ).rejects.toMatchObject({ statusCode: 400, code: "PRICE_OUT_OF_RANGE" });
 
       // y el mensaje dice qué sí vale, para que el fletero se arregle solo
-      await expect(createTrip("u1", { ...validTrip, price: 90_000 })).rejects.toThrow(
+      await expect(tripsService.createTrip("u1", { ...validTrip, price: 90_000 })).rejects.toThrow(
         /\$158\.500/
       );
 
@@ -2429,7 +2705,7 @@ describe("addCargoItem", () => {
       );
 
       await expect(
-        createTrip("u1", { ...validTrip, price: 900_000 })
+        tripsService.createTrip("u1", { ...validTrip, price: 900_000 })
       ).rejects.toMatchObject({ code: "PRICE_OUT_OF_RANGE" });
       expect(prisma.trip.create).not.toHaveBeenCalled();
     });
@@ -2440,7 +2716,7 @@ describe("addCargoItem", () => {
       vi.mocked(geocode).mockResolvedValue(null);
       vi.mocked(prisma.trip.create).mockResolvedValue(baseTrip({ id: "t1" }) as never);
 
-      const trip = await createTrip("u1", { ...validTrip, price: 1 });
+      const trip = await tripsService.createTrip("u1", { ...validTrip, price: 1 });
 
       expect(trip.id).toBe("t1");
       expect(prisma.trip.create).toHaveBeenCalled();
@@ -2452,7 +2728,7 @@ describe("addCargoItem", () => {
       );
       vi.mocked(prisma.trip.create).mockResolvedValue(baseTrip({ id: "t1" }) as never);
 
-      await createTrip("u1", { ...validTrip, price: 5_000 });
+      await tripsService.createTrip("u1", { ...validTrip, price: 5_000 });
 
       expect(prisma.trip.create).toHaveBeenCalled();
     });
@@ -2463,7 +2739,7 @@ describe("addCargoItem", () => {
       );
       vi.mocked(prisma.trip.create).mockResolvedValue(baseTrip({ id: "t1" }) as never);
 
-      await createTrip("u1", validTrip);
+      await tripsService.createTrip("u1", validTrip);
 
       const data = vi.mocked(prisma.trip.create).mock.calls[0]?.[0].data;
       expect(data).toMatchObject({
@@ -2516,7 +2792,7 @@ describe("addCargoItem", () => {
     });
 
     it("devuelve solo los viajes dentro del radio del origen", async () => {
-      const trips = await listOpenTrips({
+      const trips = await tripsService.listOpenTrips({
         nearOrigin: { ...cordoba, radiusKm: 20 },
       });
       // "sin-coords-dest" entra: su origen sí está cerca de Córdoba. Lo que no
@@ -2527,14 +2803,14 @@ describe("addCargoItem", () => {
     it("devuelve solo los viajes dentro del radio del destino", async () => {
       // cerca-1 y cerca-2 llegan a Mendoza; lejos-1 llega a Córdoba, así que
       // queda afuera aunque su origen esté en la zona.
-      const trips = await listOpenTrips({
+      const trips = await tripsService.listOpenTrips({
         nearDestination: { ...mendoza, radiusKm: 20 },
       });
       expect(trips.map((t) => t.id)).toEqual(["cerca-1", "cerca-2"]);
     });
 
     it("exige que coincidan origen y destino si vienen los dos", async () => {
-      const trips = await listOpenTrips({
+      const trips = await tripsService.listOpenTrips({
         nearOrigin: { ...cordoba, radiusKm: 20 },
         nearDestination: { ...mendoza, radiusKm: 20 },
       });
@@ -2544,7 +2820,7 @@ describe("addCargoItem", () => {
     it("excluye los viajes sin coordenadas geocodificadas", async () => {
       // radio de 4000km: entra todo menos "sin-coords", que no tiene
       // coordenadas. Es el null (no la distancia) lo que lo saca.
-      const trips = await listOpenTrips({ nearOrigin: { ...cordoba, radiusKm: 4000 } });
+      const trips = await tripsService.listOpenTrips({ nearOrigin: { ...cordoba, radiusKm: 4000 } });
       expect(trips.map((t) => t.id)).toEqual([
         "cerca-1",
         "cerca-2",
@@ -2554,7 +2830,7 @@ describe("addCargoItem", () => {
     });
 
     it("exige el destino geocodificado si el filtro es por llegada", async () => {
-      const trips = await listOpenTrips({
+      const trips = await tripsService.listOpenTrips({
         nearDestination: { ...mendoza, radiusKm: 4000 },
       });
       // "sin-coords-dest" tiene el origen cerca de Córdoba pero el destino sin
@@ -2563,7 +2839,7 @@ describe("addCargoItem", () => {
     });
 
     it("devuelve los viajes originales si no hay filtro de radio", async () => {
-      const trips = await listOpenTrips({});
+      const trips = await tripsService.listOpenTrips({});
       expect(trips).toHaveLength(5);
       expect(trips.map((t) => t.id)).toContain("sin-coords");
     });
@@ -2602,7 +2878,7 @@ describe("addCargoItem", () => {
       vi.mocked(prisma.trip.findUnique).mockResolvedValue(tripInTransit() as never);
       vi.mocked(prisma.tripLocation.create).mockResolvedValue(baseLocation() as never);
 
-      const result = await recordTripLocation("t1", "u1", {
+      const result = await tripsService.recordTripLocation("t1", "u1", {
         lat: -32.9468,
         lng: -60.6393,
       });
@@ -2622,7 +2898,7 @@ describe("addCargoItem", () => {
       vi.mocked(prisma.trip.findUnique).mockResolvedValue(tripInTransit() as never);
 
       await expect(
-        recordTripLocation("t1", "u5", { lat: -32.9468, lng: -60.6393 })
+        tripsService.recordTripLocation("t1", "u5", { lat: -32.9468, lng: -60.6393 })
       ).rejects.toMatchObject({ statusCode: 403, code: "FORBIDDEN" });
       expect(prisma.tripLocation.create).not.toHaveBeenCalled();
     });
@@ -2635,7 +2911,7 @@ describe("addCargoItem", () => {
         );
 
         await expect(
-          recordTripLocation("t1", "u1", { lat: -32.9468, lng: -60.6393 })
+          tripsService.recordTripLocation("t1", "u1", { lat: -32.9468, lng: -60.6393 })
         ).rejects.toBeInstanceOf(TripNotInTransitError);
         expect(prisma.tripLocation.create).not.toHaveBeenCalled();
       }
@@ -2644,7 +2920,7 @@ describe("addCargoItem", () => {
     it("falla con 404 si el viaje no existe", async () => {
       vi.mocked(prisma.trip.findUnique).mockResolvedValue(null);
       await expect(
-        recordTripLocation("no-existe", "u1", { lat: -32.9468, lng: -60.6393 })
+        tripsService.recordTripLocation("no-existe", "u1", { lat: -32.9468, lng: -60.6393 })
       ).rejects.toBeInstanceOf(TripNotFoundError);
     });
 
@@ -2652,7 +2928,7 @@ describe("addCargoItem", () => {
       vi.mocked(prisma.trip.findUnique).mockResolvedValue(tripInTransit() as never);
       vi.mocked(prisma.tripLocation.findFirst).mockResolvedValue(baseLocation() as never);
 
-      const result = await getTripLocation("t1", "u1", { history: false });
+      const result = await tripsService.getTripLocation("t1", "u1", { history: false });
 
       expect(result.location).toMatchObject({ lat: -32.9468, lng: -60.6393 });
       // sin historial no leemos la tabla entera
@@ -2663,14 +2939,14 @@ describe("addCargoItem", () => {
       vi.mocked(prisma.trip.findUnique).mockResolvedValue(tripInTransit() as never);
       vi.mocked(prisma.tripLocation.findFirst).mockResolvedValue(baseLocation() as never);
 
-      const result = await getTripLocation("t1", "u2", { history: false });
+      const result = await tripsService.getTripLocation("t1", "u2", { history: false });
       expect(result.location).toMatchObject({ id: "loc1" });
     });
 
     it("un usuario que no tiene nada que ver con el viaje no puede leer la ubicación", async () => {
       vi.mocked(prisma.trip.findUnique).mockResolvedValue(tripInTransit() as never);
 
-      await expect(getTripLocation("t1", "u9", { history: false })).rejects.toMatchObject(
+      await expect(tripsService.getTripLocation("t1", "u9", { history: false })).rejects.toMatchObject(
         {
           statusCode: 403,
           code: "FORBIDDEN",
@@ -2683,7 +2959,7 @@ describe("addCargoItem", () => {
       vi.mocked(prisma.trip.findUnique).mockResolvedValue(tripInTransit() as never);
       vi.mocked(prisma.tripLocation.findFirst).mockResolvedValue(null);
 
-      const result = await getTripLocation("t1", "u2", { history: false });
+      const result = await tripsService.getTripLocation("t1", "u2", { history: false });
       expect(result).toEqual({ location: null });
     });
 
@@ -2695,7 +2971,7 @@ describe("addCargoItem", () => {
         baseLocation({ id: "loc3", lat: -33.4, lng: -61.9, recordedAt: new Date(3) }),
       ] as never);
 
-      const result = await getTripLocation("t1", "u2", { history: true });
+      const result = await tripsService.getTripLocation("t1", "u2", { history: true });
 
       expect(result.track).toHaveLength(3);
       expect(result.track?.map((p) => p.id)).toEqual(["loc1", "loc2", "loc3"]);
@@ -2708,7 +2984,7 @@ describe("addCargoItem", () => {
       vi.mocked(prisma.trip.findUnique).mockResolvedValue(tripInTransit() as never);
       vi.mocked(prisma.tripLocation.findMany).mockResolvedValue([]);
 
-      const result = await getTripLocation("t1", "u1", { history: true });
+      const result = await tripsService.getTripLocation("t1", "u1", { history: true });
       expect(result).toEqual({ location: null, track: [] });
     });
   });
@@ -2739,7 +3015,7 @@ describe("addCargoItem", () => {
         baseTrip({ id: "t1", departureTime: "05:45" }) as never
       );
 
-      const trip = await createTrip("u1", { ...base, departureTime: "05:45" });
+      const trip = await tripsService.createTrip("u1", { ...base, departureTime: "05:45" });
 
       expect(prisma.trip.create).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -2754,7 +3030,7 @@ describe("addCargoItem", () => {
         baseTrip({ id: "t1", departureTime: null }) as never
       );
 
-      const trip = await createTrip("u1", base);
+      const trip = await tripsService.createTrip("u1", base);
 
       expect(trip.departureTime).toBeNull();
     });
@@ -2765,7 +3041,7 @@ describe("addCargoItem", () => {
         baseTrip({ id: "t2", departureTime: null }),
       ] as never);
 
-      const trips = await listOpenTrips();
+      const trips = await tripsService.listOpenTrips();
 
       expect(trips.map((t) => [t.id, t.departureTime])).toEqual([
         ["t1", "05:45"],
@@ -2783,7 +3059,7 @@ describe("processRefundRequest (outbox processor)", () => {
   it("si no hay RefundRequest, no hace nada", async () => {
     vi.mocked(prisma.refundRequest.findUnique).mockResolvedValue(null);
 
-    await processRefundRequest("i1");
+    await tripsService.processRefundRequest("i1");
 
     expect(prisma.refundRequest.findUnique).toHaveBeenCalledWith({
       where: { cargoItemId: "i1" },
@@ -2799,7 +3075,7 @@ describe("processRefundRequest (outbox processor)", () => {
       status: "COMPLETED",
     });
 
-    await processRefundRequest("i1");
+    await tripsService.processRefundRequest("i1");
 
     expect(prisma.refundRequest.update).not.toHaveBeenCalled();
   });
@@ -2821,7 +3097,7 @@ describe("processRefundRequest (outbox processor)", () => {
       mpPaymentId: null,
     });
 
-    await processRefundRequest("i1");
+    await tripsService.processRefundRequest("i1");
 
     expect(refundPayment).not.toHaveBeenCalled();
     expect(prisma.refundRequest.update).toHaveBeenCalledWith({
@@ -2849,7 +3125,7 @@ describe("processRefundRequest (outbox processor)", () => {
     });
     vi.mocked(refundPayment).mockResolvedValue(100);
 
-    await processRefundRequest("i1");
+    await tripsService.processRefundRequest("i1");
 
     expect(prisma.refundRequest.update).toHaveBeenCalledWith({
       where: { id: "rr1" },
@@ -2885,7 +3161,7 @@ describe("processRefundRequest (outbox processor)", () => {
     });
     vi.mocked(refundPayment).mockResolvedValue(50);
 
-    await processRefundRequest("i1");
+    await tripsService.processRefundRequest("i1");
 
     expect(refundPayment).toHaveBeenCalledWith("mp-77", 50);
     expect(prisma.payment.update).toHaveBeenCalledWith({
@@ -2923,7 +3199,7 @@ describe("processRefundRequest (outbox processor)", () => {
       new Error("network timeout")
     );
 
-    await processRefundRequest("i1");
+    await tripsService.processRefundRequest("i1");
 
     expect(refundPayment).toHaveBeenCalledWith("mp-77", 100);
     // El processor llama update dos veces: 1) PROCESSING, 2) PENDING con error
@@ -2960,7 +3236,7 @@ describe("processRefundRequest (outbox processor)", () => {
       new AppError("MP rechazó el reembolso", 502, "MP_ERROR")
     );
 
-    await processRefundRequest("i1");
+    await tripsService.processRefundRequest("i1");
 
     // El processor llama update dos veces: 1) PROCESSING, 2) PENDING con error
     // Verificamos la ÚLTIMA llamada (estado final)
@@ -2994,7 +3270,7 @@ describe("processRefundRequest (outbox processor)", () => {
     // refundPayment (ya idempotente por Fase 2.1) devuelve lo que MP ya procesó
     vi.mocked(refundPayment).mockResolvedValue(100);
 
-    await processRefundRequest("i1");
+    await tripsService.processRefundRequest("i1");
 
     expect(refundPayment).toHaveBeenCalledWith("mp-77", 100);
     expect(prisma.payment.update).toHaveBeenCalledWith({

@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 import { useParams, Link } from "react-router-dom";
 import { CargoFillDiagram } from "../components/CargoFillDiagram";
 import { Button } from "../components/Button";
+import { Modal } from "../components/Modal";
 import { StatusBadge } from "../components/StatusBadge";
 import { LoadingBlock, SkeletonBar } from "../components/Loading";
 import { TripFeatureBadge } from "../components/TripFeatureBadge";
@@ -23,6 +24,7 @@ import { LazyTripRouteMap } from "../components/LazyTripRouteMap";
 import { useTripRoute, useTripRouteGeometry } from "../hooks/useTripRoute";
 import { useDownloadManifest } from "../hooks/useTripManifest";
 import { usePlaceField } from "../hooks/usePlaceField";
+import { ApiError } from "../api/client";
 import type { CargoItem, CargoItemStatus } from "../types/trip";
 import { TRIP_STATUS_LABELS } from "../types/trip";
 import { cancellationNote, fetchCancellationQuote } from "../lib/cancellation";
@@ -173,6 +175,8 @@ export default function TripDetail() {
   const [volume, setVolume] = useState("");
   const [pickupAddress, setPickupAddress] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
+  const [stopDistanceError, setStopDistanceError] = useState<string | null>(null);
+  const [tripStartedError, setTripStartedError] = useState<string | null>(null);
   const [rating, setRating] = useState(0);
   const [comment, setComment] = useState("");
   const [reviewError, setReviewError] = useState<string | null>(null);
@@ -285,10 +289,27 @@ export default function TripDetail() {
           setDescription("");
           setVolume("");
           setPickupAddress("");
+          setStopDistanceError(null);
+          setTripStartedError(null);
         },
         onError: (err: unknown) => {
           const message =
             err instanceof Error ? err.message : "no se pudo sumar la carga.";
+          // Dos rechazos del backend llegan con code y se explican mejor en un
+          // modal que en el error del formulario: la parada fuera del trayecto y
+          // el viaje que ya llegó a su fecha (TRIP_DATE_PASSED).
+          if (err instanceof ApiError) {
+            if (err.code === "STOP_TOO_FAR_FROM_ROUTE") {
+              setStopDistanceError(err.message);
+              setFormError(null);
+              return;
+            }
+            if (err.code === "TRIP_DATE_PASSED") {
+              setTripStartedError(err.message);
+              setFormError(null);
+              return;
+            }
+          }
           setFormError(message);
         },
       }
@@ -775,13 +796,20 @@ export default function TripDetail() {
           <h2 className="font-display text-[17px] font-medium">
             sumar carga a este viaje
           </h2>
+          {/* La fecha manda aunque el estado siga OPEN: un viaje de hoy ya no
+              admite cargas, y el badge sigue mostrando el estado real. */}
+          {trip.status === "OPEN" && !trip.acceptsCargo && (
+            <p className="mt-2 text-[13px] text-ink-muted">
+              este viaje ya comenzó y no admite cargas nuevas.
+            </p>
+          )}
           {trip.status !== "OPEN" && (
             <p className="mt-2 text-[13px] text-ink-muted">
               este viaje está {TRIP_STATUS_LABELS[trip.status]} y ya no admite cargas
               nuevas.
             </p>
           )}
-          {trip.status === "OPEN" && !user && (
+          {trip.acceptsCargo && !user && (
             <p className="mt-2 text-[13px] text-ink-muted">
               para sumar carga necesitás una cuenta de empresa:{" "}
               <Link
@@ -796,7 +824,7 @@ export default function TripDetail() {
               </Link>
             </p>
           )}
-          {trip.status === "OPEN" && user && user.role !== "COMPANY" && (
+          {trip.acceptsCargo && user && user.role !== "COMPANY" && (
             <p className="mt-2 text-[13px] text-ink-muted">
               para sumar carga necesitás una cuenta de empresa.{" "}
               <Link
@@ -807,7 +835,7 @@ export default function TripDetail() {
               </Link>
             </p>
           )}
-          {canAddCargo && trip.status === "OPEN" && (
+          {canAddCargo && trip.acceptsCargo && (
             <>
               <div className="mt-4 grid gap-4">
                 <div>
@@ -853,6 +881,37 @@ export default function TripDetail() {
             </>
           )}
         </form>
+
+        {stopDistanceError && (
+          <Modal
+            isOpen={!!stopDistanceError}
+            onClose={() => setStopDistanceError(null)}
+            title="Parada fuera del trayecto"
+          >
+            <p className="text-sm text-ink-soft whitespace-pre-line">
+              {stopDistanceError}
+            </p>
+            <p className="mt-3 text-xs text-ink-muted">
+              Por favor, elegí una dirección de retiro más cercana al recorrido del
+              viaje.
+            </p>
+          </Modal>
+        )}
+      {tripStartedError && (
+          <Modal
+            isOpen={!!tripStartedError}
+            onClose={() => setTripStartedError(null)}
+            title="El viaje ya está en curso"
+          >
+            <p className="text-sm text-ink-soft whitespace-pre-line">
+              {tripStartedError}
+            </p>
+            <p className="mt-3 text-xs text-ink-muted">
+              Un viaje deja de aceptar cargas nuevas el día de su salida. Podés
+              seguir consultando el viaje y las cargas que ya tenés en él.
+            </p>
+          </Modal>
+        )}
       </main>
     </div>
   );

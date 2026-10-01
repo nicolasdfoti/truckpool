@@ -139,6 +139,58 @@ describe("users.service", () => {
     );
   });
 
+  it("getCarrierProfile pide sólo viajes abiertos y de fecha futura", async () => {
+    // esta vista es donde una empresa busca viaje para sumarle carga, así que
+    // comparte el corte del listado público.
+    vi.mocked(prisma.user.findUnique).mockResolvedValue({
+      ...baseUser(),
+      tripsAsCarrier: [],
+      reviewsReceived: [],
+    } as PrismaUser & { tripsAsCarrier: unknown[]; reviewsReceived: unknown[] });
+    vi.mocked(prisma.review.aggregate).mockResolvedValue({
+      _avg: { rating: null },
+      _count: { _all: 0 },
+    } as never);
+
+    await usersService.getCarrierProfile("u1");
+
+    const include = vi.mocked(prisma.user.findUnique).mock.calls[0]?.[0]?.include as {
+      tripsAsCarrier: { where: unknown };
+    };
+    expect(include.tripsAsCarrier.where).toEqual({
+      status: "OPEN",
+      date: { gt: expect.any(Date) },
+    });
+  });
+
+  it("listMyTrips no filtra por fecha: el historial del transportista se mantiene", async () => {
+    const pasado = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    vi.mocked(prisma.trip.findMany).mockResolvedValue([
+      {
+        id: "t-pasado",
+        origin: "Córdoba",
+        destination: "Rosario",
+        date: pasado,
+        truckType: "Semi",
+        capacityTotal: 30,
+        price: 1500,
+        status: "OPEN",
+        createdAt: new Date(),
+        carrierId: "u1",
+        cargoItems: [],
+      },
+    ] as unknown as Awaited<ReturnType<typeof prisma.trip.findMany>>);
+
+    const trips = await usersService.listMyTrips("u1");
+
+    // sigue apareciendo aunque su fecha ya haya pasado y el estado sea OPEN:
+    // dejó de estar disponible, no desapareció.
+    expect(trips).toHaveLength(1);
+    expect(trips.map((trip) => [trip.id, trip.status, trip.acceptsCargo])).toEqual([
+      ["t-pasado", "OPEN", false],
+    ]);
+  });
+
   it("listMyCargoItems incluye los datos básicos del viaje", async () => {
     vi.mocked(prisma.cargoItem.findMany).mockResolvedValue([
       {
@@ -175,6 +227,38 @@ describe("users.service", () => {
       priceShare: 500,
       trip: { origin: "Córdoba", status: "OPEN" },
     });
+  });
+
+  it("listMyCargoItems no filtra por la fecha del viaje: la carga sigue visible", async () => {
+    vi.mocked(prisma.cargoItem.findMany).mockResolvedValue([
+      {
+        id: "i1",
+        description: "cajas",
+        volume: 10,
+        priceShare: 500,
+        status: "PENDING",
+        createdAt: new Date(),
+        tripId: "t1",
+        companyId: "u2",
+        trip: {
+          id: "t1",
+          origin: "Córdoba",
+          destination: "Rosario",
+          date: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000),
+          status: "OPEN",
+        },
+      },
+    ] as unknown as Awaited<ReturnType<typeof prisma.cargoItem.findMany>>);
+
+    const items = await usersService.listMyCargoItems("u2");
+
+    // el viaje ya no acepta cargas, pero la carga que la empresa tiene ahí
+    // sigue en su historial, con el estado real del viaje.
+    expect(items).toHaveLength(1);
+    expect(items.map((item) => item.trip)).toMatchObject([{ id: "t1", status: "OPEN" }]);
+    expect(
+      vi.mocked(prisma.cargoItem.findMany).mock.calls[0]?.[0]?.where
+    ).toEqual({ companyId: "u2" });
   });
 });
 

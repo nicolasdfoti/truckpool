@@ -11,6 +11,19 @@ export function setToken(token: string | null) {
   else localStorage.removeItem(TOKEN_KEY);
 }
 
+/** Error de la API: conserva el code del backend para poder bifurcar en la UI. */
+export class ApiError extends Error {
+  readonly code: string | null;
+  readonly status: number;
+
+  constructor(message: string, code: string | null, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.code = code;
+    this.status = status;
+  }
+}
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const token = getToken();
   const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -23,7 +36,14 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.error ?? `error ${res.status}`);
+    // El backend responde { error, code }. El code va en la excepción porque
+    // hay errores que la UI tiene que tratar distinto (por ejemplo
+    // TRIP_DATE_PASSED, que no se explica en un toast).
+    throw new ApiError(
+      body.error ?? `error ${res.status}`,
+      body.code ?? null,
+      res.status
+    );
   }
 
   return res.json();
