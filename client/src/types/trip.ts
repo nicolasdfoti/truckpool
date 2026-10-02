@@ -152,7 +152,6 @@ export type Review = {
 export type CreateReviewInput = {
   rating: number;
   comment?: string;
-  toUserId?: string;
 };
 
 export type TripDetail = Trip & {

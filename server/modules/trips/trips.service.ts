@@ -1,6 +1,6 @@
 import { prisma } from "../../lib/prisma.js";
 import { Prisma } from "@prisma/client";
-import type { Trip } from "@prisma/client";
+import type { Role, Trip } from "@prisma/client";
 import {
   activeVolume,
   isActiveCargo,
@@ -43,7 +43,6 @@ import {
   InvalidTransitionError,
   NotEnoughCapacityError,
   PaymentRequiredError,
-  ReviewTargetRequiredError,
   TripAlreadyStartedError,
   TripDatePassedError,
   TripNotCompletedError,
@@ -1207,15 +1206,31 @@ export function toReviewResponse(review: {
 }
 
 /**
- * Calificación de una parte del viaje a la otra. Solo al completar el viaje,
- * solo para quienes participaron (el fletero o una empresa con carga) y una
- * sola vez por dirección.
+ * Calificación de una empresa al fletero que llevó su carga. Solo al completar
+ * el viaje, solo la empresa con carga activa en él y una sola vez.
+ *
+ * El fletero no califica: el rating de un servicio que él mismo prestó no es un
+ * dato que la plataforma pueda usar, y abre la puerta a represalias contra el
+ * transportista. Por eso el rol se chequea acá además del `requireRole` de la
+ * ruta: la autorización real nunca vive solo en el middleware.
+ *
+ * El destinatario tampoco se recibe del cliente: es siempre el fletero del viaje,
+ * derivado del viaje mismo, así que no hay forma de calificar a un tercero.
  */
 export async function createReview(
   tripId: string,
   fromUserId: string,
+  fromRole: Role,
   input: CreateReviewInput
 ) {
+  if (fromRole !== "COMPANY") {
+    throw new AppError(
+      "solo las empresas pueden calificar un viaje",
+      403,
+      "FORBIDDEN"
+    );
+  }
+
   const trip = await prisma.trip.findUnique({
     where: { id: tripId },
     select: {
@@ -1230,22 +1245,16 @@ export async function createReview(
   if (!trip) throw new TripNotFoundError();
   if (trip.status !== "COMPLETED") throw new TripNotCompletedError();
 
-  const companyIds = [...new Set(trip.cargoItems.map((item) => item.companyId))];
-  const isCarrier = trip.carrierId === fromUserId;
-  const isCompany = companyIds.includes(fromUserId);
-  if (!isCarrier && !isCompany) {
+  const hasCargo = trip.cargoItems.some((item) => item.companyId === fromUserId);
+  if (!hasCargo) {
     throw new AppError(
-      "solo podemás calificar a alguien con quien compartiste un viaje",
+      "solo podés calificar un viaje en el que tengas carga",
       403,
       "FORBIDDEN"
     );
   }
 
-  const toUserId = resolveReviewTarget(input.toUserId, {
-    isCarrier,
-    companyIds,
-    carrierId: trip.carrierId,
-  });
+  const toUserId = trip.carrierId;
 
   const existing = await prisma.review.findUnique({
     where: { tripId_fromUserId_toUserId: { tripId, fromUserId, toUserId } },
@@ -1266,34 +1275,6 @@ export async function createReview(
     },
   });
   return toReviewResponse(review);
-}
-
-function resolveReviewTarget(
-  requestedToUserId: string | undefined,
-  ctx: { isCarrier: boolean; companyIds: string[]; carrierId: string }
-): string {
-  if (requestedToUserId !== undefined) {
-    const valid = ctx.isCarrier
-      ? ctx.companyIds.includes(requestedToUserId)
-      : requestedToUserId === ctx.carrierId;
-    if (!valid) {
-      throw new AppError(
-        "esa persona no participó de este viaje como contraparte tuya",
-        403,
-        "FORBIDDEN"
-      );
-    }
-    return requestedToUserId;
-  }
-
-  if (ctx.isCarrier) {
-    if (ctx.companyIds.length > 1) throw new ReviewTargetRequiredError();
-    const [onlyCompany] = ctx.companyIds;
-    if (!onlyCompany) throw new ReviewTargetRequiredError();
-    return onlyCompany;
-  }
-
-  return ctx.carrierId;
 }
 
 /**

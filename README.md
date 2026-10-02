@@ -68,8 +68,8 @@ estaba haciendo; la empresa evita el flete completo.
 
 | Rol | Qué hace | Cómo se entra |
 | --- | --- | --- |
-| **`COMPANY`** | Publica solicitudes de carga, reserva espacio en viajes abiertos, paga señas, sigue el tracking, califica | `POST /api/auth/register` |
-| **`CARRIER`** | Publica viajes, acepta solicitudes, sube GPS, gestiona paradas y manifest, cobra | `POST /api/auth/register` |
+| **`COMPANY`** | Publica solicitudes de carga, reserva espacio en viajes abiertos, paga señas, sigue el tracking, califica al transportista | `POST /api/auth/register` |
+| **`CARRIER`** | Publica viajes, acepta solicitudes, sube GPS, gestiona paradas y manifest, cobra. No califica viajes | `POST /api/auth/register` |
 | **`ADMIN`** | Aprueba/rechaza verificaciones de identidad, ve métricas de la plataforma | Solo por seed (no hay registro público de admin) |
 
 La verificación de identidad (`UNVERIFIED → PENDING → VERIFIED | REJECTED`) es
@@ -101,7 +101,7 @@ obligatoria para que un transportista pueda publicar: el admin la aprueba desde
     ↓
 7.  Durante el viaje: GPS en vivo, chat, tracking público por código
     ↓
-8.  Al llegar: la empresa paga el saldo, ambas partes se califican
+8.  Al llegar: la empresa paga el saldo y califica al transportista
     ↓
 9.  ADMIN ve las métricas de la plataforma
 ```
@@ -126,8 +126,9 @@ puede aceptarla y termina creando un viaje.
   con la penalización real según cuán cerca está la fecha del viaje.
 - Solicitudes de viaje inversas (`TripRequest`) cuando la empresa no encuentra
   capacidad y prefiere que sea el transportista el que publique.
-- Reseñas bilaterales: cada parte califica a la otra una sola vez, solo en viajes
-  `COMPLETED`, y las dos calificaciones se muestran en el perfil público.
+- Reseñas de una sola dirección: califica **solo la empresa** (quien mandó la
+  carga), una vez por viaje `COMPLETED`, y siempre al fletero de ese viaje. El
+  fletero no califica, y el rating se muestra en su perfil público.
 
 ### Pagos con Mercado Pago
 
@@ -265,7 +266,7 @@ Trip (publicada por un CARRIER)
  │   └─ trackingCode      código público único
  ├─ Message[]             chat del viaje
  ├─ TripLocation[]        puntos GPS
- └─ Review[]              calificaciones bilaterales
+ └─ Review[]              calificación empresa → fletero
 
 User (COMPANY | CARRIER | ADMIN)
  ├─ cargoItems[]          como empresa
@@ -344,7 +345,7 @@ Todas bajo `/api`, salvo `/health`. `Bearer` = JWT required.
 | GET | `/:id/messages` | participante | Chat del viaje |
 | POST | `/:id/messages` | participante | Envía mensaje |
 | PATCH | `/:id/messages/read` | participante | Marca leídos |
-| POST | `/:id/reviews` | participante | Califica (1 vez) |
+| POST | `/:id/reviews` | role:COMPANY + carga activa | Califica al fletero (1 vez) |
 
 ### Tracking
 
@@ -540,6 +541,10 @@ omitirlos.
   mensajes, GPS, paradas, reviews, cargas y pagos chequean que el usuario sea el
   transportista del viaje o la empresa con una carga activa. Los mensajes
   además restringen el `toUserId` a las contrapartes reales del viaje.
+- **Solo la empresa califica**: `POST /:id/reviews` exige `COMPANY`, y el
+  service vuelve a verificar el rol aunque el middleware ya lo hizo. El
+  destinatario de la reseña no lo elige el cliente: es siempre el fletero del
+  viaje, derivado del viaje.
 - **Marketplace OAuth**: el `state` del callback está firmado, con `purpose` y
   expiración de 10 minutos. El `userId` sale del token verificado, nunca de un
   parámetro de la request.

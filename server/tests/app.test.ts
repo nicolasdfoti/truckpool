@@ -1373,16 +1373,46 @@ describe("POST /api/trips/:id/reviews", () => {
     cargoItems: [{ companyId: "u2" }],
   };
 
+  beforeEach(() => {
+    vi.mocked(prisma.review.create).mockReset();
+  });
+
   it("requiere token (401)", async () => {
     const res = await request(app).post("/api/trips/t1/reviews").send({ rating: 5 });
     expect(res.status).toBe(401);
+  });
+
+  it("no deja calificar al fletero del viaje (403)", async () => {
+    vi.mocked(prisma.trip.findUnique).mockResolvedValue(completedTrip as never);
+
+    const res = await request(app)
+      .post("/api/trips/t1/reviews")
+      .set("Authorization", `Bearer ${carrierToken}`)
+      .send({ rating: 5 });
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("FORBIDDEN");
+    expect(prisma.review.create).not.toHaveBeenCalled();
+  });
+
+  it("no deja calificar a un admin (403)", async () => {
+    vi.mocked(prisma.trip.findUnique).mockResolvedValue(completedTrip as never);
+
+    const res = await request(app)
+      .post("/api/trips/t1/reviews")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ rating: 5 });
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("FORBIDDEN");
+    expect(prisma.review.create).not.toHaveBeenCalled();
   });
 
   it("rechaza rating fuera de 1..5 (400)", async () => {
     for (const rating of [0, 6, 2.5, "cinco"]) {
       const res = await request(app)
         .post("/api/trips/t1/reviews")
-        .set("Authorization", `Bearer ${carrierToken}`)
+        .set("Authorization", `Bearer ${companyToken}`)
         .send({ rating });
       expect(res.status).toBe(400);
       expect(res.body.code).toBe("VALIDATION_ERROR");
@@ -1393,7 +1423,7 @@ describe("POST /api/trips/:id/reviews", () => {
   it("rechaza un comentario de más de 500 caracteres (400)", async () => {
     const res = await request(app)
       .post("/api/trips/t1/reviews")
-      .set("Authorization", `Bearer ${carrierToken}`)
+      .set("Authorization", `Bearer ${companyToken}`)
       .send({ rating: 4, comment: "a".repeat(501) });
     expect(res.status).toBe(400);
   });
@@ -1406,40 +1436,67 @@ describe("POST /api/trips/:id/reviews", () => {
 
     const res = await request(app)
       .post("/api/trips/t1/reviews")
-      .set("Authorization", `Bearer ${carrierToken}`)
+      .set("Authorization", `Bearer ${companyToken}`)
       .send({ rating: 5 });
 
     expect(res.status).toBe(409);
     expect(res.body.code).toBe("TRIP_NOT_COMPLETED");
   });
 
-  it("crea la calificación del fletero a la empresa (201)", async () => {
+  it("crea la calificación de la empresa al fletero (201)", async () => {
     vi.mocked(prisma.trip.findUnique).mockResolvedValue(completedTrip as never);
     vi.mocked(prisma.review.findUnique).mockResolvedValue(null);
     vi.mocked(prisma.review.create).mockResolvedValue({
       id: "r1",
       tripId: "t1",
-      fromUserId: "u1",
-      toUserId: "u2",
+      fromUserId: "u2",
+      toUserId: "u1",
       rating: 5,
       comment: "carga y descarga sin dramas",
       createdAt: new Date("2026-09-26T10:00:00.000Z"),
-      fromUser: { name: "Transportes Flete" },
-      toUser: { name: "Comercial Norte" },
+      fromUser: { name: "Comercial Norte" },
+      toUser: { name: "Transportes Flete" },
     } as never);
 
     const res = await request(app)
       .post("/api/trips/t1/reviews")
-      .set("Authorization", `Bearer ${carrierToken}`)
+      .set("Authorization", `Bearer ${companyToken}`)
       .send({ rating: 5, comment: "carga y descarga sin dramas" });
 
     expect(res.status).toBe(201);
     expect(res.body).toMatchObject({
-      fromUserId: "u1",
-      toUserId: "u2",
+      fromUserId: "u2",
+      toUserId: "u1",
       rating: 5,
-      fromName: "Transportes Flete",
-      toName: "Comercial Norte",
+      fromName: "Comercial Norte",
+      toName: "Transportes Flete",
+    });
+  });
+
+  it("ignora un toUserId que manda el cliente y califica al fletero del viaje", async () => {
+    vi.mocked(prisma.trip.findUnique).mockResolvedValue(completedTrip as never);
+    vi.mocked(prisma.review.findUnique).mockResolvedValue(null);
+    vi.mocked(prisma.review.create).mockResolvedValue({
+      id: "r1",
+      tripId: "t1",
+      fromUserId: "u2",
+      toUserId: "u1",
+      rating: 5,
+      comment: null,
+      createdAt: new Date("2026-09-26T10:00:00.000Z"),
+      fromUser: { name: "Comercial Norte" },
+      toUser: { name: "Transportes Flete" },
+    } as never);
+
+    const res = await request(app)
+      .post("/api/trips/t1/reviews")
+      .set("Authorization", `Bearer ${companyToken}`)
+      .send({ rating: 5, toUserId: "u7" });
+
+    expect(res.status).toBe(201);
+    expect(res.body.toUserId).toBe("u1");
+    expect(vi.mocked(prisma.review.create).mock.calls[0]?.[0]?.data).toMatchObject({
+      toUserId: "u1",
     });
   });
 
@@ -1449,23 +1506,24 @@ describe("POST /api/trips/:id/reviews", () => {
 
     const res = await request(app)
       .post("/api/trips/t1/reviews")
-      .set("Authorization", `Bearer ${carrierToken}`)
+      .set("Authorization", `Bearer ${companyToken}`)
       .send({ rating: 5 });
 
     expect(res.status).toBe(409);
     expect(res.body.code).toBe("ALREADY_REVIEWED");
   });
 
-  it("no deja calificar a un usuario ajeno al viaje (403)", async () => {
+  it("no deja calificar a una empresa sin carga en el viaje (403)", async () => {
     vi.mocked(prisma.trip.findUnique).mockResolvedValue(completedTrip as never);
 
     const res = await request(app)
       .post("/api/trips/t1/reviews")
       .set("Authorization", `Bearer ${strangerToken}`)
-      .send({ rating: 5, toUserId: "u1" });
+      .send({ rating: 5 });
 
     expect(res.status).toBe(403);
     expect(res.body.code).toBe("FORBIDDEN");
+    expect(prisma.review.create).not.toHaveBeenCalled();
   });
 });
 

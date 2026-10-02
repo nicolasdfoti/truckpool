@@ -1,55 +1,35 @@
 import { useMemo } from "react";
 import type { TripDetail } from "../types/trip";
+import type { UserRole } from "../types/user";
 
 export type ReviewStatus = {
-  /** el usuario logueado es el fletero o tiene carga en este viaje */
-  participated: boolean;
-  /** ya calificación a alguien en este viaje */
-  reviewed: boolean;
-  /** se puede mostrar el form:trip completado + participó + no calificó */
+  /** se puede mostrar el form: viaje completado + empresa con carga viva + sin calificar */
   canReview: boolean;
-  /** a quién le corresponde la calificación si es única (sin ambigüedad) */
-  targetUserId: string | null;
-  /** empresas con carga en el viaje, para cuando hay más de una y hay que elegir */
-  companyOptions: { id: string; name: string }[];
+  /** ya calificó al fletero en este viaje */
+  reviewed: boolean;
 };
 
 export function useTripReviewStatus(
   trip: TripDetail | undefined,
-  userId: string | undefined
+  user: { id: string; role: UserRole } | null | undefined
 ): ReviewStatus {
   return useMemo(() => {
-    const companies = new Map<string, string>();
-    for (const item of trip?.cargoItems ?? []) {
-      companies.set(item.companyId, item.companyName || item.companyId);
-    }
-    const companyOptions = [...companies].map(([id, name]) => ({ id, name }));
-
-    if (!trip || !userId) {
-      return {
-        participated: false,
-        reviewed: false,
-        canReview: false,
-        targetUserId: null,
-        companyOptions,
-      };
+    if (!trip || !user || user.role !== "COMPANY") {
+      return { canReview: false, reviewed: false };
     }
 
-    const isCarrier = trip.carrierId === userId;
-    const isCompany = companies.has(userId);
-    const participated = isCarrier || isCompany;
-    const reviewed = trip.reviews.some((review) => review.fromUserId === userId);
-
-    let targetUserId: string | null = null;
-    if (isCarrier && companyOptions.length === 1) targetUserId = companyOptions[0].id;
-    if (isCompany) targetUserId = trip.carrierId;
+    // el backend exige carga no cancelada: si la única carga de la empresa está
+    // cancelada, el form no se muestra (el server igual la rechazaría con 403).
+    const hasCargo = trip.cargoItems.some(
+      (item) => item.companyId === user.id && item.status !== "CANCELLED"
+    );
+    const reviewed = trip.reviews.some(
+      (review) => review.fromUserId === user.id && review.toUserId === trip.carrierId
+    );
 
     return {
-      participated,
+      canReview: trip.status === "COMPLETED" && hasCargo && !reviewed,
       reviewed,
-      canReview: trip.status === "COMPLETED" && participated && !reviewed,
-      targetUserId,
-      companyOptions,
     };
-  }, [trip, userId]);
+  }, [trip, user]);
 }

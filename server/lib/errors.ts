@@ -89,16 +89,6 @@ export class AlreadyReviewedError extends AppError {
   }
 }
 
-export class ReviewTargetRequiredError extends AppError {
-  constructor() {
-    super(
-      "indicá a quién querés calificar: el viaje tiene varias empresas con carga",
-      400,
-      "REVIEW_TARGET_REQUIRED"
-    );
-  }
-}
-
 export class AlreadyVerifiedError extends AppError {
   constructor() {
     super(

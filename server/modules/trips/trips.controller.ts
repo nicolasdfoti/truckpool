@@ -142,6 +142,7 @@ export async function postReview(req: Request, res: Response) {
   const review = await tripsService.createReview(
     getParam(req, "id"),
     req.user.id,
+    req.user.role,
     req.body
   );
   res.status(201).json(review);

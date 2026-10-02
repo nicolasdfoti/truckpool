@@ -95,9 +95,13 @@ tripsRouter.patch(
   requireAuth,
   tripsController.patchTripMessagesRead
 );
+// Solo las empresas (las que mandan la carga) califican el viaje. El fletero
+// queda afuera: calificar un servicio que él mismo prestó no aporta nada que la
+// plataforma no pueda verificar sola, y abre la puerta a represalias.
 tripsRouter.post(
   "/:id/reviews",
   requireAuth,
+  requireRole("COMPANY"),
   validateBody(createReviewSchema),
   tripsController.postReview
 );

@@ -209,6 +209,8 @@ export const locationQuerySchema = z.object({
 
 export type LocationQuery = z.infer<typeof locationQuerySchema>;
 
+// Solo la empresa con carga califica, y siempre al fletero del viaje: por eso
+// el schema no acepta destinatario, el backend lo deriva del viaje.
 export const createReviewSchema = z.object({
   rating: z
     .number({ message: "rating debe ser un número" })
@@ -220,9 +222,6 @@ export const createReviewSchema = z.object({
     .trim()
     .max(500, "el comentario puede tener hasta 500 caracteres")
     .optional(),
-  // solo hace falta cuando el viaje tiene más de una empresa con carga:
-  // el fletero tiene que indicar a cuál de ellas está calificando.
-  toUserId: z.string().trim().min(1).optional(),
 });
 
 export type CreateReviewInput = z.infer<typeof createReviewSchema>;

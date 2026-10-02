@@ -2180,17 +2180,33 @@ describe("addCargoItem", () => {
       cargoItems: cargoCompanyIds.map((companyId) => ({ companyId })),
     });
 
-    const baseReview = {
+    const companyReview = {
       id: "r1",
       tripId: "t1",
-      fromUserId: "u1",
-      toUserId: "u2",
+      fromUserId: "u2",
+      toUserId: "u1",
       rating: 5,
       comment: "puntual",
       createdAt: new Date(),
-      fromUser: { name: "Transportes Flete" },
-      toUser: { name: "Comercial Norte" },
+      fromUser: { name: "Comercial Norte" },
+      toUser: { name: "Transportes Flete" },
     };
+
+    it("no deja calificar al fletero del viaje (403)", async () => {
+      await expect(
+        tripsService.createReview("t1", "u1", "CARRIER", { rating: 5 })
+      ).rejects.toMatchObject({ statusCode: 403, code: "FORBIDDEN" });
+      // el rol se corta antes de tocar la base: ni siquiera se busca el viaje
+      expect(prisma.trip.findUnique).not.toHaveBeenCalled();
+      expect(prisma.review.create).not.toHaveBeenCalled();
+    });
+
+    it("no deja calificar a un admin (403)", async () => {
+      await expect(
+        tripsService.createReview("t1", "u0", "ADMIN", { rating: 5 })
+      ).rejects.toMatchObject({ statusCode: 403, code: "FORBIDDEN" });
+      expect(prisma.review.create).not.toHaveBeenCalled();
+    });
 
     it("no deja calificar antes de que el viaje esté COMPLETED", async () => {
       vi.mocked(prisma.trip.findUnique).mockResolvedValue({
@@ -2199,7 +2215,9 @@ describe("addCargoItem", () => {
         cargoItems: [{ companyId: "u2" }],
       } as never);
 
-      await expect(tripsService.createReview("t1", "u1", { rating: 5 })).rejects.toMatchObject({
+      await expect(
+        tripsService.createReview("t1", "u2", "COMPANY", { rating: 5 })
+      ).rejects.toMatchObject({
         statusCode: 409,
         code: "TRIP_NOT_COMPLETED",
       });
@@ -2208,52 +2226,49 @@ describe("addCargoItem", () => {
 
     it("no deja calificar dos veces la misma dirección del mismo viaje", async () => {
       vi.mocked(prisma.trip.findUnique).mockResolvedValue(completedTrip(["u2"]) as never);
-      vi.mocked(prisma.review.findUnique).mockResolvedValue(baseReview as never);
+      vi.mocked(prisma.review.findUnique).mockResolvedValue(companyReview as never);
 
-      await expect(tripsService.createReview("t1", "u1", { rating: 5 })).rejects.toMatchObject({
+      await expect(
+        tripsService.createReview("t1", "u2", "COMPANY", { rating: 5 })
+      ).rejects.toMatchObject({
         statusCode: 409,
         code: "ALREADY_REVIEWED",
       });
       expect(prisma.review.create).not.toHaveBeenCalled();
       expect(prisma.review.findUnique).toHaveBeenCalledWith({
         where: {
-          tripId_fromUserId_toUserId: { tripId: "t1", fromUserId: "u1", toUserId: "u2" },
+          tripId_fromUserId_toUserId: { tripId: "t1", fromUserId: "u2", toUserId: "u1" },
         },
       });
     });
 
-    it("no deja calificar a alguien que no participó del viaje", async () => {
+    it("no deja calificar a una empresa sin carga en el viaje (403)", async () => {
       vi.mocked(prisma.trip.findUnique).mockResolvedValue(completedTrip(["u2"]) as never);
 
-      await expect(tripsService.createReview("t1", "u9", { rating: 1 })).rejects.toMatchObject({
+      await expect(
+        tripsService.createReview("t1", "u9", "COMPANY", { rating: 1 })
+      ).rejects.toMatchObject({
         statusCode: 403,
         code: "FORBIDDEN",
       });
       expect(prisma.review.create).not.toHaveBeenCalled();
     });
 
-    it("no deja calificar a un tercero que no es la contraparte del viaje", async () => {
-      vi.mocked(prisma.trip.findUnique).mockResolvedValue(completedTrip(["u2"]) as never);
-
-      await expect(
-        tripsService.createReview("t1", "u1", { rating: 5, toUserId: "u7" })
-      ).rejects.toMatchObject({ statusCode: 403, code: "FORBIDDEN" });
-    });
-
-    it("el fletero califica a la empresa y la empresa al fletero sin pasar toUserId", async () => {
+    it("la empresa califica al fletero del viaje, sin pedirle el destinatario", async () => {
       vi.mocked(prisma.trip.findUnique).mockResolvedValue(completedTrip(["u2"]) as never);
       vi.mocked(prisma.review.findUnique).mockResolvedValue(null);
-      vi.mocked(prisma.review.create).mockResolvedValue(baseReview as never);
+      vi.mocked(prisma.review.create).mockResolvedValue(companyReview as never);
 
-      const fromCarrier = await tripsService.createReview("t1", "u1", {
+      const review = await tripsService.createReview("t1", "u2", "COMPANY", {
         rating: 5,
         comment: "puntual",
       });
+
       expect(prisma.review.create).toHaveBeenLastCalledWith({
         data: {
           tripId: "t1",
-          fromUserId: "u1",
-          toUserId: "u2",
+          fromUserId: "u2",
+          toUserId: "u1",
           rating: 5,
           comment: "puntual",
         },
@@ -2262,59 +2277,34 @@ describe("addCargoItem", () => {
           toUser: { select: { name: true } },
         },
       });
-      expect(fromCarrier).toMatchObject({
-        fromUserId: "u1",
-        toUserId: "u2",
-        fromName: "Transportes Flete",
-      });
-
-      vi.mocked(prisma.review.create).mockResolvedValue({
-        ...baseReview,
-        id: "r2",
+      expect(review).toMatchObject({
         fromUserId: "u2",
         toUserId: "u1",
-      } as never);
-
-      const fromCompany = await tripsService.createReview("t1", "u2", { rating: 4 });
-      expect(prisma.review.create).toHaveBeenLastCalledWith({
-        data: {
-          tripId: "t1",
-          fromUserId: "u2",
-          toUserId: "u1",
-          rating: 4,
-          comment: null,
-        },
-        include: {
-          fromUser: { select: { name: true } },
-          toUser: { select: { name: true } },
-        },
+        fromName: "Comercial Norte",
+        toName: "Transportes Flete",
       });
-      expect(fromCompany).toMatchObject({ fromUserId: "u2", toUserId: "u1" });
     });
 
-    it("el fletero debe indicar toUserId cuando el viaje tiene varias empresas", async () => {
+    it("cada empresa del viaje califica al fletero aunque haya varias", async () => {
       vi.mocked(prisma.trip.findUnique).mockResolvedValue(
         completedTrip(["u2", "u3"]) as never
       );
-
-      await expect(tripsService.createReview("t1", "u1", { rating: 5 })).rejects.toMatchObject({
-        statusCode: 400,
-        code: "REVIEW_TARGET_REQUIRED",
-      });
-
       vi.mocked(prisma.review.findUnique).mockResolvedValue(null);
-      vi.mocked(prisma.review.create).mockResolvedValue({
-        ...baseReview,
-        toUserId: "u3",
-      } as never);
+      vi.mocked(prisma.review.create).mockResolvedValue(companyReview as never);
 
-      const review = await tripsService.createReview("t1", "u1", { rating: 5, toUserId: "u3" });
-      expect(review.toUserId).toBe("u3");
+      await tripsService.createReview("t1", "u3", "COMPANY", { rating: 3 });
+      expect(prisma.review.create).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ fromUserId: "u3", toUserId: "u1" }),
+        })
+      );
     });
 
     it("lanza 404 si el viaje no existe", async () => {
       vi.mocked(prisma.trip.findUnique).mockResolvedValue(null);
-      await expect(tripsService.createReview("nope", "u1", { rating: 5 })).rejects.toMatchObject({
+      await expect(
+        tripsService.createReview("nope", "u2", "COMPANY", { rating: 5 })
+      ).rejects.toMatchObject({
         statusCode: 404,
         code: "TRIP_NOT_FOUND",
       });

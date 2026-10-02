@@ -150,7 +150,7 @@ export default function TripDetail() {
   const cancelCargoItem = useCancelCargoItem(id ?? "");
   const createPaymentPreference = useCreatePaymentPreference(id ?? "");
   const createReview = useCreateReview(id ?? "");
-  const reviewStatus = useTripReviewStatus(trip, user?.id);
+  const reviewStatus = useTripReviewStatus(trip, user);
   // el mapa solo aparece con el viaje en tránsito, y solo lo ven los que tienen
   // algo que ver con él (el fletero y las empresas con carga).
   const isInTransit = trip?.status === "IN_TRANSIT";
@@ -180,7 +180,6 @@ export default function TripDetail() {
   const [rating, setRating] = useState(0);
   const [comment, setComment] = useState("");
   const [reviewError, setReviewError] = useState<string | null>(null);
-  const [reviewTargetId, setReviewTargetId] = useState("");
 
   function handleSubmitReview(e: FormEvent) {
     e.preventDefault();
@@ -193,13 +192,11 @@ export default function TripDetail() {
       {
         rating,
         comment: comment.trim() || undefined,
-        toUserId: (reviewStatus.targetUserId ?? reviewTargetId) || undefined,
       },
       {
         onSuccess: () => {
           setRating(0);
           setComment("");
-          setReviewTargetId("");
         },
       }
     );
@@ -669,49 +666,21 @@ export default function TripDetail() {
 
         {actionError && <p className="mt-4 text-[13px] text-danger">{actionError}</p>}
 
-        {trip.status === "COMPLETED" && reviewStatus.participated && (
+        {/* Solo califican las empresas con carga en el viaje. El fletero no
+            califica: el backend lo rechaza con 403 igual que la UI lo oculta. */}
+        {(reviewStatus.reviewed || reviewStatus.canReview) && (
           <section className="mt-10 rounded-[10px] border border-line bg-white p-6">
             <h2 className="font-display text-[17px] font-medium">calificar el viaje</h2>
 
             {reviewStatus.reviewed ? (
               <p className="mt-2 text-[13px] text-ink-muted">
-                ya calificaste a{" "}
-                {reviewStatus.targetUserId === trip.carrierId
-                  ? trip.carrierName
-                  : (reviewStatus.companyOptions.find(
-                      (company) => company.id === reviewStatus.targetUserId
-                    )?.name ?? "tu contraparte")}
-                . gracias por sumar datos para los demás.
+                ya calificaste a {trip.carrierName}. gracias por sumar datos para los demás.
               </p>
             ) : (
               <form onSubmit={handleSubmitReview} className="mt-4">
                 <p className="text-[13px] text-ink-soft">
-                  {reviewStatus.targetUserId === trip.carrierId
-                    ? `¿cómo fue trabajar con ${trip.carrierName}?`
-                    : "¿cómo fue el viaje con tu contraparte?"}
+                  ¿cómo fue trabajar con {trip.carrierName}?
                 </p>
-
-                {reviewStatus.targetUserId === null &&
-                  reviewStatus.companyOptions.length > 1 && (
-                    <div className="mt-3">
-                      <label className="text-[13px] text-ink-soft" htmlFor="reviewTarget">
-                        ¿a cuál empresa querés calificar?
-                      </label>
-                      <select
-                        id="reviewTarget"
-                        value={reviewTargetId}
-                        onChange={(e) => setReviewTargetId(e.target.value)}
-                        className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm outline-none placeholder:text-ink-muted focus:border-brand"
-                      >
-                        <option value="">elegí una empresa</option>
-                        {reviewStatus.companyOptions.map((company) => (
-                          <option key={company.id} value={company.id}>
-                            {company.name}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
 
                 <div className="mt-4">
                   <RatingInput
