@@ -588,7 +588,21 @@ export async function refundPayment(
     if (err instanceof AppError) throw err;
     throw new AppError("no pudimos devolver el dinero con Mercado Pago", 502, "MP_ERROR");
   }
-  return refundedAmount(mpPaymentId, accessToken);
+  try {
+    return await refundedAmount(mpPaymentId, accessToken);
+  } catch (err) {
+    // el reembolso entró pero no pudimos leer el total: el error crudo del SDK
+    // trae los headers (y el token), así que solo sale el status. No se asienta
+    // nada; el reintento lo detecta con la consulta previa y no pide de nuevo.
+    console.warn("[mercadopago] refundedAmount falló tras reembolsar", {
+      status: mpErrorStatus(err),
+    });
+    throw new AppError(
+      "pedimos la devolución a Mercado Pago pero no pudimos confirmar el monto",
+      502,
+      "MP_ERROR"
+    );
+  }
 }
 
 /** tolerancia de un centavo: evita pedir reembolsos de ruido por redondeo */

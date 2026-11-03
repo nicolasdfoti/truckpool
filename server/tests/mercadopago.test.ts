@@ -152,6 +152,27 @@ describe("refundPayment", () => {
   });
 });
 
+describe("refundPayment: el total final falla", () => {
+  it("traduce el error del SDK a MP_ERROR sin loguear el token", async () => {
+    const token = "APP_USR-secreto-del-refund";
+    total.mockResolvedValueOnce(totalDevuelve(0)).mockRejectedValueOnce(
+      Object.assign(new Error("Internal Server Error"), {
+        status: 500,
+        config: { headers: { Authorization: `Bearer ${token}` } },
+      })
+    );
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const err = await refundPayment(MP_ID, 50, token).catch((e: unknown) => e);
+
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(err).toBeInstanceOf(AppError);
+    expect(err).toMatchObject({ statusCode: 502, code: "MP_ERROR" });
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(token);
+    warn.mockRestore();
+  });
+});
+
 describe("refundPayment con idempotencyKey", () => {
   it("manda la clave a Mercado Pago para que un pedido repetido no devuelva dos veces", async () => {
     total
