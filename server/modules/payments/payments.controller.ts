@@ -54,6 +54,13 @@ export async function postPaymentWebhook(req: Request, res: Response) {
     dataId: body.data?.id,
   });
 
+  // MP también notifica merchant_order (y otros tipos) al mismo endpoint: su
+  // data.id no es un pago. 200 para que no reintente, sin buscar ni consultar.
+  if (body.type !== "payment") {
+    res.json({ received: true, updated: false, status: null });
+    return;
+  }
+
   // data.status y ?preference_id no están firmados: no se leen. ?payment_id es
   // solo una pista para encontrar el pago (ver handlePaymentNotification).
   const result = await paymentsService.handlePaymentNotification({

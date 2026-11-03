@@ -1137,6 +1137,20 @@ describe("POST /api/payments/webhook", () => {
     expect(prisma.payment.update).not.toHaveBeenCalled();
   });
 
+  it("una notificación que no es de pago (merchant_order) responde 200 sin consultar a MP", async () => {
+    // MP firma también las merchant_order: su data.id es el de la orden, no un
+    // pago, así que buscarlo ni consultarlo tiene sentido
+    const res = await request(app)
+      .post("/api/payments/webhook?payment_id=pay1")
+      .set(signedWebhook("order-55", secret))
+      .send({ type: "merchant_order", action: "updated", data: { id: "order-55" } });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ received: true, updated: false, status: null });
+    expect(prisma.payment.findFirst).not.toHaveBeenCalled();
+    expect(mp.fetchPaymentState).not.toHaveBeenCalled();
+  });
+
   it("un error inesperado no lleva sus headers al log (solo name y code)", async () => {
     const token = "APP_USR-secreto-del-log";
     vi.mocked(prisma.payment.findFirst).mockRejectedValue(
