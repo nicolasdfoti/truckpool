@@ -226,9 +226,10 @@ export async function createCheckoutPreference(input: PreferenceInput): Promise<
         cargo_item_id: input.cargoItemId,
         payment_type: input.paymentType ?? "DEPOSIT",
       },
-      // source_news=webhooks: para pedir solo notificaciones Webhooks. Las IPN no
-      // traen una firma verificable, el webhook las rechaza con 401 y MP las
-      // reintentaría. SIN CONFIRMAR: falta probarlo en sandbox (04-launch, L1).
+      // source_news=webhooks: en sandbox llegaron solo Webhooks firmados, sin
+      // IPN, y respondieron 200. Las IPN no traen una firma verificable: el
+      // webhook las rechaza con 401 y MP las reintenta. Alcance de la prueba:
+      // test-preference, no el flujo real de una seña (04-launch, L1).
       notification_url: `${api}/api/payments/webhook?payment_id=${encodeURIComponent(input.paymentId)}&source_news=webhooks`,
       back_urls: {
         success: `${returnUrl}&status=approved`,

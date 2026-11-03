@@ -996,11 +996,17 @@ describe("POST /api/cargo-items/:id/payment-preference", () => {
 
 describe("POST /api/payments/webhook", () => {
   const secret = "whsec-de-prueba";
+  // con la forma del body real de MP (doc de Webhooks): id y user_id numéricos,
+  // live_mode booleano. Un payload inventado escondió un 400 en sandbox.
   const payload = {
+    id: 12345678901,
+    live_mode: false,
     type: "payment",
-    action: "updated",
-    live_mode: "false",
-    data: { id: "mp-77", status: "approved" },
+    date_created: "2026-11-03T20:09:14.000-03:00",
+    user_id: 44444,
+    api_version: "v1",
+    action: "payment.updated",
+    data: { id: "mp-77" },
   };
 
   beforeEach(() => {
@@ -1140,13 +1146,89 @@ describe("POST /api/payments/webhook", () => {
     expect(prisma.payment.update).not.toHaveBeenCalled();
   });
 
+  it("regresión: el ejemplo de la doc de MP, tal cual, responde 200 (antes: 400)", async () => {
+    // body copiado de la doc de Webhooks de MP. live_mode llega booleano: el
+    // schema lo pedía como texto y cortaba con 400 antes de leer la firma.
+    vi.mocked(prisma.payment.findFirst).mockResolvedValue(null);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const ejemploDeLaDoc = {
+      id: 12345,
+      live_mode: true,
+      type: "payment",
+      date_created: "2015-03-25T10:04:58.396-04:00",
+      user_id: 44444,
+      api_version: "v1",
+      action: "payment.created",
+      data: { id: "999999999" },
+    };
+
+    const res = await request(app)
+      .post("/api/payments/webhook?source=test-preference&source_news=webhooks")
+      .set(signedWebhook("999999999", secret))
+      .send(ejemploDeLaDoc);
+
+    expect(res.status).toBe(200);
+    // pago que no es nuestro (como el de test-preference): 200 sin tocar nada
+    expect(res.body).toEqual({ received: true, updated: false, status: null });
+    expect(prisma.payment.findFirst).toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      "[payments] webhook de un pago desconocido: se ignora"
+    );
+    warn.mockRestore();
+  });
+
+  it.each([
+    ["id", "texto"],
+    ["id", null],
+    ["live_mode", "true"],
+    ["live_mode", 1],
+    ["user_id", "44444"],
+    ["user_id", { anidado: true }],
+    ["date_created", 1762210154],
+    ["api_version", 1],
+    ["action", null],
+    ["action", ["payment.created"]],
+    ["campo_nuevo_de_mp", { cualquier: "cosa" }],
+  ])(
+    "un campo que no usamos (%s = %j) no rechaza la notificación",
+    async (campo, valor) => {
+      vi.mocked(prisma.payment.findFirst).mockResolvedValue(null);
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const res = await request(app)
+        .post("/api/payments/webhook?payment_id=pay1")
+        .set(signedWebhook("mp-77", secret))
+        .send({ ...payload, [campo]: valor });
+
+      expect(res.status).toBe(200);
+      warn.mockRestore();
+    }
+  );
+
+  it("acepta data.id numérico: se firma y se busca como texto", async () => {
+    // la doc lo muestra como texto; si llegara como número no debe dar 400
+    vi.mocked(prisma.payment.findFirst).mockResolvedValue(null);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const res = await request(app)
+      .post("/api/payments/webhook?source=test-preference")
+      .set(signedWebhook("187626021366", secret))
+      .send({ ...payload, data: { id: 187626021366 } });
+
+    expect(res.status).toBe(200);
+    expect(JSON.stringify(vi.mocked(prisma.payment.findFirst).mock.calls)).toContain(
+      '"187626021366"'
+    );
+    warn.mockRestore();
+  });
+
   it("una notificación que no es de pago (merchant_order) responde 200 sin consultar a MP", async () => {
     // MP firma también las merchant_order: su data.id es el de la orden, no un
     // pago, así que buscarlo ni consultarlo tiene sentido
     const res = await request(app)
       .post("/api/payments/webhook?payment_id=pay1")
       .set(signedWebhook("order-55", secret))
-      .send({ type: "merchant_order", action: "updated", data: { id: "order-55" } });
+      .send({ ...payload, type: "merchant_order", data: { id: "order-55" } });
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ received: true, updated: false, status: null });
