@@ -2,6 +2,7 @@ import { encryptSecret } from "../lib/crypto.js";
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { Prisma } from "@prisma/client";
 import * as tripsService from "../modules/trips/trips.service.js";
+import { processRefundRequest } from "../modules/payments/refunds.service.js";
 import { createCheckoutPreference } from "../lib/mercadopago.js";
 import { fetchRouteGeometry } from "../lib/routing.js";
 import {
@@ -75,6 +76,7 @@ vi.mock("../lib/prisma", () => ({
       findUnique: vi.fn(),
       create: vi.fn(),
       update: vi.fn(),
+      updateMany: vi.fn(),
     },
     review: { findUnique: vi.fn(), create: vi.fn() },
     message: { findMany: vi.fn(), create: vi.fn(), updateMany: vi.fn() },
@@ -3061,12 +3063,13 @@ describe("processRefundRequest (outbox processor)", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(prisma.refundRequest.updateMany).mockResolvedValue({ count: 1 } as never);
   });
 
   it("si no hay RefundRequest, no hace nada", async () => {
     vi.mocked(prisma.refundRequest.findUnique).mockResolvedValue(null);
 
-    await tripsService.processRefundRequest("i1");
+    await processRefundRequest("i1");
 
     expect(prisma.refundRequest.findUnique).toHaveBeenCalledWith({
       where: { cargoItemId: "i1" },
@@ -3082,7 +3085,7 @@ describe("processRefundRequest (outbox processor)", () => {
       status: "COMPLETED",
     });
 
-    await tripsService.processRefundRequest("i1");
+    await processRefundRequest("i1");
 
     expect(prisma.refundRequest.update).not.toHaveBeenCalled();
   });
@@ -3094,6 +3097,7 @@ describe("processRefundRequest (outbox processor)", () => {
       cargoItemId: "i1",
       targetAmount: new Prisma.Decimal("100.00"),
       status: "PENDING",
+      attempts: 0,
     });
     // @ts-expect-error mock incomplete Payment for test
     vi.mocked(prisma.payment.findUnique).mockResolvedValue({
@@ -3104,7 +3108,7 @@ describe("processRefundRequest (outbox processor)", () => {
       mpPaymentId: null,
     });
 
-    await tripsService.processRefundRequest("i1");
+    await processRefundRequest("i1");
 
     expect(refundPayment).not.toHaveBeenCalled();
     expect(prisma.refundRequest.update).toHaveBeenCalledWith({
@@ -3120,6 +3124,7 @@ describe("processRefundRequest (outbox processor)", () => {
       cargoItemId: "i1",
       targetAmount: new Prisma.Decimal("100.00"),
       status: "PENDING",
+      attempts: 0,
     });
     vi.mocked(prisma.payment.findUnique).mockResolvedValue({
       id: "pay1",
@@ -3132,13 +3137,16 @@ describe("processRefundRequest (outbox processor)", () => {
     } as never);
     vi.mocked(refundPayment).mockResolvedValue(100);
 
-    await tripsService.processRefundRequest("i1");
+    await processRefundRequest("i1");
 
-    expect(prisma.refundRequest.update).toHaveBeenCalledWith({
-      where: { id: "rr1" },
+    // el reclamo es un CAS: solo uno de dos processors concurrentes lo gana
+    expect(prisma.refundRequest.updateMany).toHaveBeenCalledWith({
+      where: { id: "rr1", status: "PENDING", attempts: 0 },
       data: { status: "PROCESSING" },
     });
-    expect(refundPayment).toHaveBeenCalledWith("mp-77", 100, OUTBOX_TOKEN_PLAIN);
+    expect(refundPayment).toHaveBeenCalledWith("mp-77", 100, OUTBOX_TOKEN_PLAIN, {
+      idempotencyKey: "refund-rr1-0",
+    });
     expect(prisma.payment.update).toHaveBeenCalledWith({
       where: { id: "pay1" },
       data: { status: "REFUNDED", refundedAmount: 100 },
@@ -3156,6 +3164,7 @@ describe("processRefundRequest (outbox processor)", () => {
       cargoItemId: "i1",
       targetAmount: new Prisma.Decimal("50.00"),
       status: "PENDING",
+      attempts: 0,
     });
     vi.mocked(prisma.payment.findUnique).mockResolvedValue({
       id: "pay1",
@@ -3168,9 +3177,11 @@ describe("processRefundRequest (outbox processor)", () => {
     } as never);
     vi.mocked(refundPayment).mockResolvedValue(50);
 
-    await tripsService.processRefundRequest("i1");
+    await processRefundRequest("i1");
 
-    expect(refundPayment).toHaveBeenCalledWith("mp-77", 50, OUTBOX_TOKEN_PLAIN);
+    expect(refundPayment).toHaveBeenCalledWith("mp-77", 50, OUTBOX_TOKEN_PLAIN, {
+      idempotencyKey: "refund-rr1-0",
+    });
     expect(prisma.payment.update).toHaveBeenCalledWith({
       where: { id: "pay1" },
       data: { refundedAmount: 50 },
@@ -3206,11 +3217,12 @@ describe("processRefundRequest (outbox processor)", () => {
       new Error("network timeout")
     );
 
-    await tripsService.processRefundRequest("i1");
+    await processRefundRequest("i1");
 
-    expect(refundPayment).toHaveBeenCalledWith("mp-77", 100, OUTBOX_TOKEN_PLAIN);
-    // El processor llama update dos veces: 1) PROCESSING, 2) PENDING con error
-    // Verificamos la ÚLTIMA llamada (estado final)
+    expect(refundPayment).toHaveBeenCalledWith("mp-77", 100, OUTBOX_TOKEN_PLAIN, {
+      idempotencyKey: "refund-rr1-0",
+    });
+    // el reclamo fue un CAS (updateMany); update solo devuelve la request a PENDING
     expect(prisma.refundRequest.update).toHaveBeenLastCalledWith({
       where: { id: "rr1" },
       data: expect.objectContaining({
@@ -3229,6 +3241,7 @@ describe("processRefundRequest (outbox processor)", () => {
       cargoItemId: "i1",
       targetAmount: new Prisma.Decimal("100.00"),
       status: "PENDING",
+      attempts: 0,
     });
     vi.mocked(prisma.payment.findUnique).mockResolvedValue({
       id: "pay1",
@@ -3243,10 +3256,9 @@ describe("processRefundRequest (outbox processor)", () => {
       new AppError("MP rechazó el reembolso", 502, "MP_ERROR")
     );
 
-    await tripsService.processRefundRequest("i1");
+    await processRefundRequest("i1");
 
-    // El processor llama update dos veces: 1) PROCESSING, 2) PENDING con error
-    // Verificamos la ÚLTIMA llamada (estado final)
+    // el reclamo fue un CAS (updateMany); update solo devuelve la request a PENDING
     expect(prisma.refundRequest.update).toHaveBeenLastCalledWith({
       where: { id: "rr1" },
       data: expect.objectContaining({
@@ -3264,6 +3276,7 @@ describe("processRefundRequest (outbox processor)", () => {
       cargoItemId: "i1",
       targetAmount: new Prisma.Decimal("100.00"),
       status: "PENDING",
+      attempts: 0,
     });
     vi.mocked(prisma.payment.findUnique).mockResolvedValue({
       id: "pay1",
@@ -3277,9 +3290,11 @@ describe("processRefundRequest (outbox processor)", () => {
     // refundPayment (ya idempotente por Fase 2.1) devuelve lo que MP ya procesó
     vi.mocked(refundPayment).mockResolvedValue(100);
 
-    await tripsService.processRefundRequest("i1");
+    await processRefundRequest("i1");
 
-    expect(refundPayment).toHaveBeenCalledWith("mp-77", 100, OUTBOX_TOKEN_PLAIN);
+    expect(refundPayment).toHaveBeenCalledWith("mp-77", 100, OUTBOX_TOKEN_PLAIN, {
+      idempotencyKey: "refund-rr1-0",
+    });
     expect(prisma.payment.update).toHaveBeenCalledWith({
       where: { id: "pay1" },
       data: { status: "REFUNDED", refundedAmount: 100 },
@@ -3289,5 +3304,88 @@ describe("processRefundRequest (outbox processor)", () => {
       data: { status: "COMPLETED" },
     });
   });
-});
 
+  /** RefundRequest PENDING + seña aprobada en la cuenta del transportista */
+  const outboxPendiente = (attempts: number) => {
+    vi.mocked(prisma.refundRequest.findUnique).mockResolvedValue({
+      id: "rr1",
+      cargoItemId: "i1",
+      targetAmount: new Prisma.Decimal("100.00"),
+      status: "PENDING",
+      attempts,
+    } as never);
+    vi.mocked(prisma.payment.findUnique).mockResolvedValue({
+      id: "pay1",
+      cargoItemId: "i1",
+      type: "DEPOSIT",
+      status: "APPROVED",
+      amount: new Prisma.Decimal("100.00"),
+      mpPaymentId: "mp-77",
+      cargoItem: { trip: { carrier: OUTBOX_CARRIER } },
+    } as never);
+  };
+
+  it("si otro processor ganó el reclamo, no llama a MP ni toca nada", async () => {
+    outboxPendiente(0);
+    vi.mocked(prisma.refundRequest.updateMany).mockResolvedValue({ count: 0 } as never);
+
+    const outcome = await processRefundRequest("i1");
+
+    expect(outcome).toEqual({ kind: "none" });
+    expect(refundPayment).not.toHaveBeenCalled();
+    expect(prisma.payment.update).not.toHaveBeenCalled();
+    expect(prisma.refundRequest.update).not.toHaveBeenCalled();
+  });
+
+  it("dos processors a la vez: refundPayment una sola vez", async () => {
+    outboxPendiente(0);
+    vi.mocked(prisma.refundRequest.updateMany)
+      .mockResolvedValueOnce({ count: 1 } as never)
+      .mockResolvedValueOnce({ count: 0 } as never);
+    vi.mocked(prisma.payment.update).mockResolvedValue({ status: "REFUNDED" } as never);
+    vi.mocked(refundPayment).mockResolvedValue(100);
+
+    await Promise.all([processRefundRequest("i1"), processRefundRequest("i1")]);
+
+    expect(refundPayment).toHaveBeenCalledTimes(1);
+  });
+
+  it("cada intento usa su propia clave: un error que MP guardó no traba el reintento", async () => {
+    // si MP cacheara la respuesta de error bajo la clave, repetir la misma
+    // clave devolvería ese error para siempre. El doble reembolso entre intentos
+    // lo evitan el reclamo por CAS y la consulta previa de refundPayment.
+    outboxPendiente(2);
+    vi.mocked(prisma.payment.update).mockResolvedValue({ status: "REFUNDED" } as never);
+    vi.mocked(refundPayment).mockResolvedValue(100);
+
+    await processRefundRequest("i1");
+
+    expect(prisma.refundRequest.updateMany).toHaveBeenCalledWith({
+      where: { id: "rr1", status: "PENDING", attempts: 2 },
+      data: { status: "PROCESSING" },
+    });
+    expect(refundPayment).toHaveBeenCalledWith("mp-77", 100, OUTBOX_TOKEN_PLAIN, {
+      idempotencyKey: "refund-rr1-2",
+    });
+  });
+
+  it("informa el estado del pago cuando completa", async () => {
+    outboxPendiente(0);
+    vi.mocked(prisma.payment.update).mockResolvedValue({ status: "REFUNDED" } as never);
+    vi.mocked(refundPayment).mockResolvedValue(100);
+
+    expect(await processRefundRequest("i1")).toEqual({
+      kind: "completed",
+      paymentStatus: "REFUNDED",
+    });
+  });
+
+  it("informa la falla cuando la request vuelve a PENDING", async () => {
+    outboxPendiente(0);
+    vi.mocked(refundPayment).mockRejectedValue(
+      new AppError("MP rechazó el reembolso", 502, "MP_ERROR")
+    );
+
+    expect(await processRefundRequest("i1")).toEqual({ kind: "failed" });
+  });
+});

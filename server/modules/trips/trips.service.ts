@@ -17,9 +17,9 @@ import {
   priceRangeFor,
   rateFor,
 } from "../../lib/pricing.js";
-import { refundPayment, resolveCarrierMpToken } from "../../lib/mercadopago.js";
 import { hoursUntilTrip, quoteCancellation } from "../../lib/cancellation.js";
 import { balanceOf } from "../payments/payments.service.js";
+import { processRefundRequest } from "../payments/refunds.service.js";
 import {
   manifestFileName,
   renderManifestPdf,
@@ -808,6 +808,7 @@ export async function cancelCargoItem(
           }
 
           const deposit = item.payments.find((p) => p.type === "DEPOSIT");
+
           const paidDeposit =
             deposit?.status === "APPROVED" && deposit.mpPaymentId !== null
               ? deposit
@@ -2002,85 +2003,3 @@ export async function getPublicTracking(
     cargoStatus: item.status,
   };
 }
-
-/**
- * Processor de reembolsos (patrón outbox).
- *
- * Toma la RefundRequest PENDING del cargo indicado, llama a refundPayment
- * (idempotente: si MP ya devolvió, no duplica), y actualiza:
- * - RefundRequest: status -> COMPLETED (o FAILED si error irrecuperable)
- * - Payment: refundedAmount, y status -> REFUNDED si cubrió todo.
- *
- * Si falla la red o MP devuelve error transitorio, incrementa attempts y
- * guarda lastError; la request queda en PENDING para reintento. No lanza:
- * el caller (cancelCargoItem) ya confirmó la cancelación; el reembolso se
- * recupera después.
- */
-export async function processRefundRequest(cargoItemId: string): Promise<void> {
-  const req = await prisma.refundRequest.findUnique({
-    where: { cargoItemId },
-  });
-  if (!req || req.status !== "PENDING") return; // nada que hacer
-
-  // Marcar PROCESSING para evitar carreras si se llama concurrente
-  await prisma.refundRequest.update({
-    where: { id: req.id },
-    data: { status: "PROCESSING" },
-  });
-
-  try {
-    const payment = await prisma.payment.findUnique({
-      where: { cargoItemId_type: { cargoItemId, type: "DEPOSIT" } },
-      include: {
-        cargoItem: {
-          select: {
-            trip: { select: { carrier: { select: { mpUserId: true, mpAccessToken: true } } } },
-          },
-        },
-      },
-    });
-    if (!payment || payment.status !== "APPROVED" || !payment.mpPaymentId) {
-      // no hay pago reembolsable: marcar completado (no hay nada que hacer)
-      await prisma.refundRequest.update({
-        where: { id: req.id },
-        data: { status: "COMPLETED" },
-      });
-      return;
-    }
-
-    const targetAmount = Number(req.targetAmount);
-    // el pago vive en la cuenta MP del transportista: se devuelve con su token
-    const { accessToken } = resolveCarrierMpToken(payment.cargoItem.trip.carrier);
-    const refundedAmount = await refundPayment(
-      payment.mpPaymentId,
-      targetAmount,
-      accessToken
-    );
-
-    // actualizar Payment con lo que MP confirmó
-    const fullyRefunded = refundedAmount >= Number(payment.amount);
-    await prisma.payment.update({
-      where: { id: payment.id },
-      data: fullyRefunded
-        ? { status: "REFUNDED", refundedAmount }
-        : { refundedAmount },
-    });
-
-    await prisma.refundRequest.update({
-      where: { id: req.id },
-      data: { status: "COMPLETED" },
-    });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    await prisma.refundRequest.update({
-      where: { id: req.id },
-      data: {
-        status: "PENDING",
-        attempts: { increment: 1 },
-        lastError: message.slice(0, 500),
-      },
-    });
-    // no re-lanzamos: el caller ya confirmó la cancelación
-  }
-}
-
