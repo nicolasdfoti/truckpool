@@ -1,4 +1,4 @@
-import type { Request, Response } from "express";
+import type { NextFunction, Request, Response } from "express";
 import * as paymentsService from "./payments.service.js";
 import { AppError } from "../../lib/errors.js";
 import { verifyWebhookSignature } from "../../lib/mercadopago.js";
@@ -45,14 +45,41 @@ export async function getMpTestConnection(_req: Request, res: Response) {
   res.json(await paymentsService.getMpConnectionStatus());
 }
 
-export async function postPaymentWebhook(req: Request, res: Response) {
-  const body = (req.body ?? {}) as PaymentWebhookBody;
+/**
+ * El `data.id` que firma MP: el de la query de la URL (`?data.id=…`), no el
+ * del body (doc «Validar origen de la notificación»). Es el único id en el que
+ * se puede confiar, así que es también el que se procesa. Repetido no se sabe
+ * cuál firmó MP: se rechaza. Vacío cuenta como ausente. No se hace trim: la
+ * firma tiene que cerrar con el valor exacto.
+ */
+function signedDataId(req: Request): string | undefined {
+  const value = req.query["data.id"];
+  if (Array.isArray(value)) {
+    throw new AppError("firma de Mercado Pago inválida", 401, "INVALID_SIGNATURE");
+  }
+  return typeof value === "string" && value !== "" ? value : undefined;
+}
 
+/**
+ * Va antes de validar el body: la firma no depende de él. Así un pedido sin
+ * firma válida recibe 401 sea cual sea su body, y ninguna diferencia de
+ * formato corta con 400 una notificación firmada.
+ */
+export function verifyPaymentWebhookSignature(
+  req: Request,
+  _res: Response,
+  next: NextFunction
+) {
   verifyWebhookSignature({
     signatureHeader: req.headers["x-signature"] as string | undefined,
     requestIdHeader: req.headers["x-request-id"] as string | undefined,
-    dataId: body.data?.id,
+    dataId: signedDataId(req),
   });
+  next();
+}
+
+export async function postPaymentWebhook(req: Request, res: Response) {
+  const body = (req.body ?? {}) as PaymentWebhookBody;
 
   // MP también notifica merchant_order (y otros tipos) al mismo endpoint: su
   // data.id no es un pago. 200 para que no reintente, sin buscar ni consultar.
@@ -61,10 +88,18 @@ export async function postPaymentWebhook(req: Request, res: Response) {
     return;
   }
 
+  // la firma cerró sin data.id: no hay ningún pago firmado que buscar
+  const mpPaymentId = signedDataId(req);
+  if (!mpPaymentId) {
+    console.warn("[payments] webhook firmado sin data.id en la query: se ignora");
+    res.json({ received: true, updated: false, status: null });
+    return;
+  }
+
   // data.status y ?preference_id no están firmados: no se leen. ?payment_id es
   // solo una pista para encontrar el pago (ver handlePaymentNotification).
   const result = await paymentsService.handlePaymentNotification({
-    mpPaymentId: body.data?.id,
+    mpPaymentId,
     hintPaymentId: getQuery(req, "payment_id"),
   });
 

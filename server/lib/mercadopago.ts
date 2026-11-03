@@ -658,7 +658,10 @@ export function verifyWebhookSignature(input: {
     throw new AppError("firma de Mercado Pago inválida", 401, "INVALID_SIGNATURE");
   }
 
-  const manifest = `id:${input.dataId ?? ""};request-id:${input.requestIdHeader};ts:${ts};`;
+  // como indica la doc de MP: el data.id va en minúsculas y, si no vino, su
+  // parte se saca del manifest (no queda `id:;`)
+  const idPart = input.dataId ? `id:${input.dataId.toLowerCase()};` : "";
+  const manifest = `${idPart}request-id:${input.requestIdHeader};ts:${ts};`;
   const expected = createHmac("sha256", secret).update(manifest).digest("hex");
 
   if (!safeEqual(expected, v1.toLowerCase())) {

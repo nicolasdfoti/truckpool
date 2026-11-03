@@ -1069,7 +1069,7 @@ describe("POST /api/payments/webhook", () => {
     } as never);
 
     const res = await request(app)
-      .post("/api/payments/webhook?payment_id=pay1")
+      .post("/api/payments/webhook?payment_id=pay1&data.id=mp-77&type=payment")
       .set(signedWebhook("mp-77", secret))
       .send({ ...payload, data: { id: "mp-77", status: "approved" } });
 
@@ -1116,7 +1116,7 @@ describe("POST /api/payments/webhook", () => {
     } as never);
 
     const res = await request(app)
-      .post("/api/payments/webhook?payment_id=pay1")
+      .post("/api/payments/webhook?payment_id=pay1&data.id=mp-77&type=payment")
       .set(signedWebhook("mp-77", secret))
       .send(payload);
 
@@ -1134,7 +1134,7 @@ describe("POST /api/payments/webhook", () => {
     vi.mocked(prisma.payment.findFirst).mockResolvedValue(null);
 
     const res = await request(app)
-      .post("/api/payments/webhook?preference_id=pref-123")
+      .post("/api/payments/webhook?preference_id=pref-123&data.id=mp-78&type=payment")
       .set(signedWebhook("mp-78", secret))
       .send({ ...payload, data: { id: "mp-78" } });
 
@@ -1163,7 +1163,9 @@ describe("POST /api/payments/webhook", () => {
     };
 
     const res = await request(app)
-      .post("/api/payments/webhook?source=test-preference&source_news=webhooks")
+      .post(
+        "/api/payments/webhook?source=test-preference&source_news=webhooks&data.id=999999999&type=payment"
+      )
       .set(signedWebhook("999999999", secret))
       .send(ejemploDeLaDoc);
 
@@ -1175,6 +1177,102 @@ describe("POST /api/payments/webhook", () => {
       "[payments] webhook de un pago desconocido: se ignora"
     );
     warn.mockRestore();
+  });
+
+  /** firma de MP cuando la notificación no trae data.id: el manifest no lo lleva */
+  function signedWebhookSinId(requestId = "req-1") {
+    const ts = String(Math.floor(Date.now() / 1000));
+    const manifest = `request-id:${requestId};ts:${ts};`;
+    const v1 = createHmac("sha256", secret).update(manifest).digest("hex");
+    return { "x-signature": `ts=${ts},v1=${v1}`, "x-request-id": requestId };
+  }
+
+  it("query y body con data.id distintos: se firma y se procesa el de la query", async () => {
+    // MP firma el data.id de la query; el del body no está firmado y no se usa
+    vi.mocked(prisma.payment.findFirst).mockResolvedValue(pagoLocal() as never);
+    vi.mocked(mp.fetchPaymentState).mockResolvedValue({
+      state: "PENDING",
+      externalReference: "pay1",
+      amount: 500,
+      currencyId: "ARS",
+    });
+    vi.mocked(prisma.payment.update).mockResolvedValue({
+      id: "pay1",
+      status: "PENDING",
+    } as never);
+
+    const res = await request(app)
+      .post("/api/payments/webhook?payment_id=pay1&data.id=mp-77&type=payment")
+      .set(signedWebhook("mp-77", secret))
+      .send({ ...payload, data: { id: "mp-99" } });
+
+    expect(res.status).toBe(200);
+    expect(mp.fetchPaymentState).toHaveBeenCalledWith("mp-77", "APP_USR-mp-token-plano");
+    const usados = JSON.stringify([
+      vi.mocked(prisma.payment.findFirst).mock.calls,
+      vi.mocked(mp.fetchPaymentState).mock.calls,
+    ]);
+    expect(usados).not.toContain("mp-99");
+  });
+
+  it("una firma hecha con el data.id del body no vale si la query trae otro (401)", async () => {
+    const res = await request(app)
+      .post("/api/payments/webhook?payment_id=pay1&data.id=mp-77&type=payment")
+      .set(signedWebhook("mp-99", secret))
+      .send({ ...payload, data: { id: "mp-99" } });
+
+    expect(res.status).toBe(401);
+    expect(res.body.code).toBe("INVALID_SIGNATURE");
+    expect(prisma.payment.findFirst).not.toHaveBeenCalled();
+  });
+
+  it("sin data.id en la query: firma sin id, 200 sin buscar ni consultar a MP", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const res = await request(app)
+      .post("/api/payments/webhook?payment_id=pay1&type=payment")
+      .set(signedWebhookSinId())
+      .send(payload);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ received: true, updated: false, status: null });
+    expect(prisma.payment.findFirst).not.toHaveBeenCalled();
+    expect(mp.fetchPaymentState).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      "[payments] webhook firmado sin data.id en la query: se ignora"
+    );
+    warn.mockRestore();
+  });
+
+  it("data.id repetido en la query: 401, no se sabe cuál firmó MP", async () => {
+    const res = await request(app)
+      .post(
+        "/api/payments/webhook?payment_id=pay1&data.id=mp-77&data.id=mp-78&type=payment"
+      )
+      .set(signedWebhook("mp-77", secret))
+      .send(payload);
+
+    expect(res.status).toBe(401);
+    expect(res.body.code).toBe("INVALID_SIGNATURE");
+    expect(prisma.payment.findFirst).not.toHaveBeenCalled();
+  });
+
+  it("la firma se verifica antes que el body: firma inválida + body inválido es 401, no 400", async () => {
+    const res = await request(app)
+      .post("/api/payments/webhook?payment_id=pay1&data.id=mp-77&type=payment")
+      .set("x-signature", "ts=1756200000,v1=deadbeef")
+      .set("x-request-id", "req-1")
+      .send({ type: 123 });
+
+    expect(res.status).toBe(401);
+    expect(res.body.code).toBe("INVALID_SIGNATURE");
+  });
+
+  it("una IPN sin body ni firma (?topic=&id=) responde 401, no 400", async () => {
+    const res = await request(app).post("/api/payments/webhook?topic=payment&id=123");
+
+    expect(res.status).toBe(401);
+    expect(res.body.code).toBe("INVALID_SIGNATURE");
   });
 
   it.each([
@@ -1196,7 +1294,7 @@ describe("POST /api/payments/webhook", () => {
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
       const res = await request(app)
-        .post("/api/payments/webhook?payment_id=pay1")
+        .post("/api/payments/webhook?payment_id=pay1&data.id=mp-77&type=payment")
         .set(signedWebhook("mp-77", secret))
         .send({ ...payload, [campo]: valor });
 
@@ -1205,13 +1303,15 @@ describe("POST /api/payments/webhook", () => {
     }
   );
 
-  it("acepta data.id numérico: se firma y se busca como texto", async () => {
-    // la doc lo muestra como texto; si llegara como número no debe dar 400
+  it("un data.id numérico en el body no rechaza la notificación", async () => {
+    // el body ya no se usa para la firma ni para buscar el pago: cuenta el de la query
     vi.mocked(prisma.payment.findFirst).mockResolvedValue(null);
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const res = await request(app)
-      .post("/api/payments/webhook?source=test-preference")
+      .post(
+        "/api/payments/webhook?source=test-preference&data.id=187626021366&type=payment"
+      )
       .set(signedWebhook("187626021366", secret))
       .send({ ...payload, data: { id: 187626021366 } });
 
@@ -1226,7 +1326,7 @@ describe("POST /api/payments/webhook", () => {
     // MP firma también las merchant_order: su data.id es el de la orden, no un
     // pago, así que buscarlo ni consultarlo tiene sentido
     const res = await request(app)
-      .post("/api/payments/webhook?payment_id=pay1")
+      .post("/api/payments/webhook?payment_id=pay1&data.id=order-55&type=merchant_order")
       .set(signedWebhook("order-55", secret))
       .send({ ...payload, type: "merchant_order", data: { id: "order-55" } });
 
@@ -1241,7 +1341,7 @@ describe("POST /api/payments/webhook", () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
 
     const res = await request(app)
-      .post("/api/payments/webhook?payment_id=pay1")
+      .post("/api/payments/webhook?payment_id=pay1&data.id=mp-77&type=payment")
       .set(signedWebhook("mp-77", secret))
       .send(payload);
 
@@ -1279,7 +1379,7 @@ describe("POST /api/payments/webhook", () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
 
     const res = await request(app)
-      .post("/api/payments/webhook?payment_id=pay1")
+      .post("/api/payments/webhook?payment_id=pay1&data.id=mp-77&type=payment")
       .set(signedWebhook("mp-77", secret))
       .send(payload);
 

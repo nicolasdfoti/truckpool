@@ -1,18 +1,13 @@
 import { z } from "zod";
 
-// Solo se validan los campos que usa el webhook: `type` y `data.id`. El resto
-// del body de MP (id, live_mode, user_id, date_created, api_version, action)
-// no se lee, y z.object lo descarta sin validarlo: un campo que no usamos no
-// puede rechazar una notificación. Antes live_mode se pedía como texto, MP lo
-// manda booleano y toda notificación real terminaba en 400 (04-launch, L1).
+// Del body del webhook solo se usa `type`. El resto (id, live_mode, user_id,
+// date_created, api_version, action, data) no se lee, y z.object lo descarta
+// sin validarlo: un campo que no usamos no puede rechazar una notificación.
+// El data.id que vale es el de la query, que es el que firma MP (ver
+// payments.controller.ts). Antes live_mode se pedía como texto, MP lo manda
+// booleano y toda notificación real terminaba en 400 (04-launch, L1).
 export const paymentWebhookSchema = z.object({
   type: z.string().optional(),
-  data: z
-    .object({
-      // la doc lo muestra como texto; un número se acepta y se pasa a texto
-      id: z.union([z.string(), z.number()]).transform(String).optional(),
-    })
-    .optional(),
 });
 
 export type PaymentWebhookBody = z.infer<typeof paymentWebhookSchema>;

@@ -504,6 +504,49 @@ describe("verifyWebhookSignature", () => {
       expect.objectContaining({ statusCode: 401, code: "INVALID_SIGNATURE" })
     );
   });
+
+  /** firma de MP sobre un manifest arbitrario, con un ts actual */
+  const firmarManifest = (manifest: (ts: string) => string) => {
+    const ts = segundos(ahora.getTime());
+    const v1 = createHmac("sha256", secret).update(manifest(ts)).digest("hex");
+    return `ts=${ts},v1=${v1}`;
+  };
+
+  it("sin data.id, el manifest no lleva la parte id (como indica la doc de MP)", () => {
+    const sinId = firmarManifest((ts) => `request-id:req-1;ts:${ts};`);
+    expect(() =>
+      verifyWebhookSignature({
+        signatureHeader: sinId,
+        requestIdHeader: "req-1",
+        dataId: undefined,
+      })
+    ).not.toThrow();
+  });
+
+  it("sin data.id, rechaza una firma hecha sobre `id:;` (el manifest anterior)", () => {
+    const idVacio = firmarManifest((ts) => `id:;request-id:req-1;ts:${ts};`);
+    expect(() =>
+      verifyWebhookSignature({
+        signatureHeader: idVacio,
+        requestIdHeader: "req-1",
+        dataId: undefined,
+      })
+    ).toThrow(expect.objectContaining({ statusCode: 401, code: "INVALID_SIGNATURE" }));
+  });
+
+  it("un data.id alfanumérico con mayúsculas se firma en minúsculas", () => {
+    // ejemplo de la doc: ORD01JQ4S4KY8HWQ6NA5PXB65B3D3 → ord01jq4s4ky8hwq6na5pxb65b3d3
+    const firma = firmarManifest(
+      (ts) => `id:ord01jq4s4ky8hwq6na5pxb65b3d3;request-id:req-1;ts:${ts};`
+    );
+    expect(() =>
+      verifyWebhookSignature({
+        signatureHeader: firma,
+        requestIdHeader: "req-1",
+        dataId: "ORD01JQ4S4KY8HWQ6NA5PXB65B3D3",
+      })
+    ).not.toThrow();
+  });
 });
 
 describe("fetchPaymentState", () => {

@@ -12,6 +12,7 @@ export const paymentsRouter = Router();
 
 paymentsRouter.post(
   "/payments/webhook",
+  paymentsController.verifyPaymentWebhookSignature,
   validateBody(paymentWebhookSchema),
   paymentsController.postPaymentWebhook
 );
