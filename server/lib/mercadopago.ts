@@ -226,7 +226,9 @@ export async function createCheckoutPreference(input: PreferenceInput): Promise<
         cargo_item_id: input.cargoItemId,
         payment_type: input.paymentType ?? "DEPOSIT",
       },
-      notification_url: `${api}/api/payments/webhook?payment_id=${encodeURIComponent(input.paymentId)}`,
+      // source_news=webhooks: solo notificaciones Webhooks. Las IPN no traen una
+      // firma verificable, el webhook las rechaza con 401 y MP las reintentaría
+      notification_url: `${api}/api/payments/webhook?payment_id=${encodeURIComponent(input.paymentId)}&source_news=webhooks`,
       back_urls: {
         success: `${returnUrl}&status=approved`,
         failure: `${returnUrl}&status=rejected`,
@@ -304,7 +306,7 @@ export async function createTestPreference(input: {
       // primero por el `data.id` firmado (ningún Payment lo tiene) y, sin la
       // pista, `findPaymentForNotification` devuelve null: responde 200 sin
       // tocar nada, y MP no reintenta.
-      notification_url: `${apiUrl()}/api/payments/webhook?source=test-preference`,
+      notification_url: `${apiUrl()}/api/payments/webhook?source=test-preference&source_news=webhooks`,
     };
 
     const created = await preferenceClient.create({ body });

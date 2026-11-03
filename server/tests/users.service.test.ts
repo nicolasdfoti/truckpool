@@ -651,6 +651,28 @@ describe("OAuth de Mercado Pago", () => {
 
     vi.unstubAllGlobals();
   });
+
+  it("si MP rechaza el código, el mensaje es nuestro: no repite texto de MP", async () => {
+    // el handler global loguea el mensaje de los 5xx propios: lo que diga MP en
+    // error_description no puede terminar en el log ni en la respuesta
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 400,
+        statusText: "Bad Request",
+        json: async () => ({ error: "invalid_grant", error_description: "texto-de-mp" }),
+      })
+    );
+
+    const err = await usersService.exchangeMpCode("u1", "code").catch((e: unknown) => e);
+
+    expect(err).toMatchObject({ statusCode: 502, code: "MP_OAUTH_TOKEN_ERROR" });
+    expect((err as Error).message).not.toContain("texto-de-mp");
+    expect(prisma.user.update).not.toHaveBeenCalled();
+
+    vi.unstubAllGlobals();
+  });
 });
 
 describe("state de OAuth", () => {

@@ -14,8 +14,12 @@
  */
 export const LEGACY_DEV_SECRET = "dev-secret-change-me";
 
-/** los únicos valores con los que el código sabe comportarse */
-const KNOWN_NODE_ENVS: readonly string[] = ["development", "test", "production"];
+/**
+ * Los valores con los que puede arrancar el server. "test" queda afuera a
+ * propósito: lo pone vitest, que no pasa por src/index.ts, y en un server de
+ * verdad apagaría los rate limits de login (`lib/rateLimit.ts`).
+ */
+const KNOWN_NODE_ENVS: readonly string[] = ["development", "production"];
 
 export class EnvError extends Error {
   constructor(readonly problems: string[]) {
@@ -60,6 +64,10 @@ export function assertServerEnv(): void {
   if (nodeEnv === undefined || nodeEnv.trim() === "") {
     problems.push(
       "NODE_ENV no está definido. Ponelo explícito: `production` en el despliegue, `development` en server/.env"
+    );
+  } else if (nodeEnv === "test") {
+    problems.push(
+      'NODE_ENV="test" es solo para correr los tests: apaga los rate limits de login. Usá `development` o `production`'
     );
   } else if (!KNOWN_NODE_ENVS.includes(nodeEnv)) {
     problems.push(

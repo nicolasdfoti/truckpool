@@ -311,6 +311,9 @@ enum NotificationType {
   BALANCE_DUE
   TRIP_REQUEST
   TRIP_REQUEST_RESPONSE
+  // para los admins: plata cobrada en MP que el sistema no pudo asentar
+  // (cobro duplicado, monto o moneda distintos)
+  PAYMENT_ALERT
 }
 
 // aviso in-app. el email es un canal opcional del mismo aviso (se manda solo si

@@ -227,15 +227,15 @@ export function canTransition(from: PaymentStatus, to: PaymentStatus): boolean {
   return from === to || ALLOWED_TRANSITIONS[from].includes(to);
 }
 
+/** la moneda en la que se crean todas las preferences (`lib/mercadopago.ts`) */
+const PAYMENT_CURRENCY = "ARS";
+
 /**
  * Lo que el webhook puede aportar. Solo `mpPaymentId` (el `data.id`) está
  * cubierto por la firma; `hintPaymentId` es el `?payment_id` que armamos en el
  * `notification_url` y sirve únicamente para encontrar el pago candidato (y con
  * él el token del transportista) la primera vez que llega su notificación.
  */
-/** la moneda en la que se crean todas las preferences (`lib/mercadopago.ts`) */
-const PAYMENT_CURRENCY = "ARS";
-
 export type PaymentNotificationInput = {
   mpPaymentId: string | undefined;
   hintPaymentId: string | undefined;
@@ -274,6 +274,14 @@ export async function handlePaymentNotification(input: PaymentNotificationInput)
     console.warn(
       `[payments] webhook ignorado: otro pago de MP sobre el pago ya aprobado ${payment.id}`
     );
+    // si ese otro pago está aprobado, la empresa pagó dos veces y la segunda
+    // quedó en la cuenta del transportista: nadie más lo va a ver
+    if (state === "APPROVED") {
+      await alertAdmins(payment.cargoItem.tripId, {
+        title: "cobro duplicado en Mercado Pago",
+        body: `el pago ${payment.id} ya estaba aprobado y MP aprobó otro (${mpPaymentId}) sobre la misma preference. revisalo y devolvé el duplicado desde la cuenta del transportista.`,
+      });
+    }
     return { updated: false, status: payment.status };
   }
 
@@ -300,6 +308,11 @@ export async function handlePaymentNotification(input: PaymentNotificationInput)
       console.warn(
         `[payments] aprobación ignorada: el monto o la moneda de MP no coinciden con el pago ${payment.id}`
       );
+      // MP cobró y el pago local sigue sin aprobar: hay que mirarlo a mano
+      await alertAdmins(payment.cargoItem.tripId, {
+        title: "cobro con monto o moneda distintos",
+        body: `MP aprobó el pago ${mpPaymentId} para el pago ${payment.id} con un monto o una moneda que no coinciden. quedó sin aprobar: revisalo en Mercado Pago.`,
+      });
       return { updated: false, status: payment.status };
     }
   }
@@ -362,6 +375,29 @@ export async function handlePaymentNotification(input: PaymentNotificationInput)
   }
 
   return { updated: true, status: state };
+}
+
+/**
+ * Aviso a los admins por plata cobrada que el sistema no pudo asentar. Es
+ * best-effort: un aviso que falla no puede tumbar el webhook (MP reintentaría
+ * algo que ya se decidió). Sin datos de la empresa: solo ids.
+ */
+async function alertAdmins(tripId: string, aviso: { title: string; body: string }) {
+  try {
+    const admins = await prisma.user.findMany({
+      where: { role: "ADMIN" },
+      select: { id: true },
+    });
+    if (admins.length === 0) return;
+    await notifyUsers(
+      admins.map((a) => a.id),
+      { type: "PAYMENT_ALERT", title: aviso.title, body: aviso.body, tripId }
+    );
+  } catch (err) {
+    console.error("[payments] falló el aviso a los admins", {
+      name: err instanceof Error ? err.name : typeof err,
+    });
+  }
 }
 
 /**

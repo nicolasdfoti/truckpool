@@ -14,6 +14,7 @@ import { notifyUsers } from "../lib/notifications.js";
 vi.mock("../lib/prisma", () => ({
   prisma: {
     cargoItem: { findUnique: vi.fn() },
+    user: { findMany: vi.fn() },
     refundRequest: {
       findUnique: vi.fn(),
       upsert: vi.fn(),
@@ -402,8 +403,16 @@ describe("handlePaymentNotification", () => {
     vi.mocked(prisma.refundRequest.findUnique).mockResolvedValue(null);
     vi.mocked(prisma.refundRequest.upsert).mockResolvedValue({} as never);
     vi.mocked(prisma.refundRequest.updateMany).mockResolvedValue({ count: 1 } as never);
+    vi.mocked(prisma.user.findMany).mockResolvedValue([{ id: "admin1" }] as never);
     mpDice("APPROVED");
   });
+
+  /** el aviso a los admins: plata cobrada que nadie más va a mirar */
+  const alertaAdmins = () =>
+    expect(notifyUsers).toHaveBeenCalledWith(
+      ["admin1"],
+      expect.objectContaining({ type: "PAYMENT_ALERT", tripId: "t1" })
+    );
 
   /** la RefundRequest que el processor encuentra (la que encoló el webhook o el retiro) */
   const outboxPendiente = (target = "100.00", attempts = 0) =>
@@ -698,10 +707,30 @@ describe("handlePaymentNotification", () => {
       const result = await handlePaymentNotification(notificacion);
 
       sinEscrituras();
-      expect(notifyUsers).not.toHaveBeenCalled();
+      // la empresa no recibe "acreditamos": el único aviso es a los admins,
+      // porque MP cobró y el pago local quedó PENDING
+      expect(notifyUsers).toHaveBeenCalledTimes(1);
+      alertaAdmins();
+      expect(prisma.user.findMany).toHaveBeenCalledWith({
+        where: { role: "ADMIN" },
+        select: { id: true },
+      });
       expect(result).toEqual({ updated: false, status: "PENDING" });
       expect(warn).toHaveBeenCalledTimes(1);
       warn.mockRestore();
+    });
+
+    it("si el aviso a los admins falla, el webhook responde igual", async () => {
+      mpDice("APPROVED", "pay1", { amount: 50, currencyId: "ARS" });
+      vi.mocked(prisma.user.findMany).mockRejectedValue(new Error("db caída"));
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      const result = await handlePaymentNotification(notificacion);
+
+      expect(result).toEqual({ updated: false, status: "PENDING" });
+      warn.mockRestore();
+      error.mockRestore();
     });
 
     it("no aprueba si MP cobró en otra moneda", async () => {
@@ -1032,6 +1061,33 @@ describe("handlePaymentNotification", () => {
       const logged = JSON.stringify(warn.mock.calls);
       expect(logged).not.toContain("empresa@");
       expect(logged).not.toContain("100");
+      // mp-B ya está reembolsado en MP: no quedó plata de más, no hay alerta
+      expect(notifyUsers).not.toHaveBeenCalled();
+      warn.mockRestore();
+    });
+
+    it("cobro duplicado aprobado (mp-B): no toca el pago y avisa a los admins", async () => {
+      vi.mocked(prisma.payment.findFirst)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(
+          basePayment({ status: "APPROVED", mpPaymentId: "mp-A" }) as never
+        );
+      mpDice("APPROVED");
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const result = await handlePaymentNotification({
+        mpPaymentId: "mp-B",
+        hintPaymentId: "pay1",
+      });
+
+      sinEscrituras();
+      expect(result).toEqual({ updated: false, status: "APPROVED" });
+      // la empresa pagó dos veces: la segunda vive en la cuenta del transportista
+      expect(notifyUsers).toHaveBeenCalledTimes(1);
+      alertaAdmins();
+      const [, aviso] = vi.mocked(notifyUsers).mock.calls[0]!;
+      expect(aviso.body).toContain("mp-B");
+      expect(aviso.body).not.toContain("empresa@");
       warn.mockRestore();
     });
 

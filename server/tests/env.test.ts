@@ -74,9 +74,16 @@ describe("assertServerEnv", () => {
     expect(() => assertServerEnv()).toThrow(/NODE_ENV/);
   });
 
-  it.each(["development", "test", "production"])("acepta NODE_ENV=%s", (value) => {
+  it.each(["development", "production"])("acepta NODE_ENV=%s", (value) => {
     process.env.NODE_ENV = value;
     expect(() => assertServerEnv()).not.toThrow();
+  });
+
+  it("aborta con NODE_ENV=test: es solo para vitest y apaga los rate limits", () => {
+    // vitest no pasa por src/index.ts: un server que arranca con "test" es un
+    // despliegue mal configurado (sin límite de login y con los diagnósticos de MP)
+    process.env.NODE_ENV = "test";
+    expect(() => assertServerEnv()).toThrow(/NODE_ENV="test"/);
   });
 
   it("reporta todos los problemas juntos, no sólo el primero", () => {

@@ -38,6 +38,7 @@ vi.mock("mercadopago", () => ({
 
 const {
   checkAccountConnection,
+  createCheckoutPreference,
   createTestPreference,
   fetchPaymentState,
   refundPayment,
@@ -307,6 +308,32 @@ describe("checkAccountConnection", () => {
   });
 });
 
+describe("createCheckoutPreference", () => {
+  it("pide solo notificaciones Webhooks (firmadas), no IPN", async () => {
+    // las IPN (?topic=…&id=…) no traen una firma verificable: el webhook las
+    // rechaza con 401 y MP las reintentaría para siempre
+    preferenceCreate.mockResolvedValue({ id: "pref-1", init_point: "https://mp/pref-1" });
+
+    await createCheckoutPreference({
+      paymentId: "pay1",
+      cargoItemId: "i1",
+      description: "Cajas",
+      amount: 100,
+      tripId: "t1",
+      carrierMpUserId: "mp-user-123",
+      carrierMpAccessToken: "APP_USR-carrier",
+      platformFeeAmount: 10,
+    });
+
+    const { body } = preferenceCreate.mock.calls[0]![0] as {
+      body: { notification_url: string };
+    };
+    expect(body.notification_url).toBe(
+      "http://localhost:4000/api/payments/webhook?payment_id=pay1&source_news=webhooks"
+    );
+  });
+});
+
 describe("createTestPreference", () => {
   it("crea la preference en la cuenta de la plataforma con un item ARS", async () => {
     preferenceCreate.mockResolvedValue({
@@ -344,7 +371,7 @@ describe("createTestPreference", () => {
       external_reference: body.external_reference,
     });
     expect(body.notification_url).toBe(
-      "http://localhost:4000/api/payments/webhook?source=test-preference"
+      "http://localhost:4000/api/payments/webhook?source=test-preference&source_news=webhooks"
     );
     // usa MP_ACCESS_TOKEN, el del carrier no aparece por ningún lado
     expect(mpConfigs).toEqual([{ accessToken: "token-de-prueba" }]);

@@ -701,9 +701,13 @@ export async function exchangeMpCode(userId: string, code: string): Promise<void
   });
 
   if (!res.ok) {
-    const err = (await res.json().catch(() => ({}))) as { error_description?: string };
+    // el texto de MP (error_description) no va en el mensaje: el handler global
+    // loguea los 5xx propios y la respuesta llega al cliente. Solo el status.
+    console.warn("[users] MP rechazó el intercambio del código OAuth", {
+      status: res.status,
+    });
     throw new AppError(
-      `Mercado Pago OAuth error: ${err.error_description ?? res.statusText}`,
+      "Mercado Pago no aceptó la conexión de la cuenta: probá conectarla de nuevo",
       502,
       "MP_OAUTH_TOKEN_ERROR"
     );
