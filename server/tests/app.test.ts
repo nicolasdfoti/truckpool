@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import request from "supertest";
 import { Prisma } from "@prisma/client";
 import type { Trip, User } from "@prisma/client";
@@ -30,6 +30,7 @@ vi.mock("../lib/mercadopago", async (importOriginal) => {
     ...actual,
     createCheckoutPreference: vi.fn(),
     createTestPreference: vi.fn(),
+    checkAccountConnection: vi.fn(),
     fetchPaymentState: vi.fn(),
     refundPayment: vi.fn(),
   };
@@ -786,6 +787,49 @@ describe("DELETE /api/trips/:tripId/cargo-items/:id", () => {
 
     expect(res.status).toBe(404);
     expect(res.body.code).toBe("CARGO_ITEM_NOT_FOUND");
+  });
+});
+
+describe("diagnósticos de Mercado Pago", () => {
+  it("fuera de prod, /payments/mp/test llega a la prueba de conexión (no a la traza de /mp/:id)", async () => {
+    vi.mocked(mp.checkAccountConnection).mockResolvedValue({
+      paymentMethodsCount: 3,
+      sample: [],
+    });
+
+    const res = await request(app)
+      .get("/api/payments/mp/test")
+      .set("Authorization", `Bearer ${adminToken}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ ok: true, paymentMethodsCount: 3 });
+    expect(mp.checkAccountConnection).toHaveBeenCalledTimes(1);
+  });
+
+  describe("con NODE_ENV=production no están montados", () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    });
+
+    it.each([
+      ["get", "/api/payments/mp/test"],
+      ["get", "/api/payments/mp/123"],
+      ["post", "/api/payments/mp/test-preference"],
+    ] as const)("%s %s → 404", async (method, path) => {
+      vi.resetModules();
+      vi.stubEnv("NODE_ENV", "production");
+      const { app: prodApp } = await import("../src/app.js");
+
+      // con sesión de ADMIN: si la ruta existiera respondería algo distinto
+      const agent = request(prodApp);
+      const res = await (method === "get" ? agent.get(path) : agent.post(path))
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ title: "x", quantity: 1, unitPrice: 1 });
+
+      expect(res.status).toBe(404);
+      expect(res.body.code).toBe("NOT_FOUND");
+    });
   });
 });
 

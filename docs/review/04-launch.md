@@ -66,7 +66,7 @@ Archivos: `modules/payments/payments.{controller,service,routes}.ts`, `lib/merca
 - [x] Rama CANCELLED: no reembolsar si ya hay `RefundRequest`/`refundedAmount`; monto según la política congelada — U4 — `payments.service.ts:248-249` — test: retiro a 30 h + `payment.updated` repetido ×3 → total reembolsado = 50 %.
 - [x] `fetchPaymentState`, `refundPayment`, `refundedAmount` con el token descifrado del carrier del pago (mismo resolver que `createCheckoutPreference`) — U5 — `lib/mercadopago.ts:25,314,510,533` — test: webhook **sin** `data.status` consulta con el token del carrier.
 - [x] Traducir errores de `fetchPaymentState` a `MP_ERROR`/`MP_INVALID_RESPONSE`; el handler genérico loguea solo `name`/`code` — U6 — `lib/mercadopago.ts:311`, `src/app.ts:84` — test: un error con `Authorization` no llega al log (spy de `console.error`).
-- [ ] Diagnósticos (`/payments/mp/:id`, `/mp/test`, `/mp/test-preference`) montados solo fuera de prod; si quedan, `/mp/test` antes de `/:id` — U20 — `payments.routes.ts:34-56` — test: con `NODE_ENV=production` → 404.
+- [x] Diagnósticos (`/payments/mp/:id`, `/mp/test`, `/mp/test-preference`) montados solo fuera de prod; si quedan, `/mp/test` antes de `/:id` — U20 — `payments.routes.ts:34-56` — test: con `NODE_ENV=production` → 404.
 
 ### L2 — Exposición de datos (server) · BLOQUEANTE · L
 Archivos: `lib/mappers.ts`, `modules/trips/trips.{service,routes}.ts`, `modules/users/users.service.ts`,
