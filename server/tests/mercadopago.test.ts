@@ -309,7 +309,7 @@ describe("checkAccountConnection", () => {
 });
 
 describe("createCheckoutPreference", () => {
-  it("pide solo notificaciones Webhooks (firmadas), no IPN", async () => {
+  it("agrega source_news=webhooks a la notification_url (efecto sin confirmar en sandbox)", async () => {
     // las IPN (?topic=…&id=…) no traen una firma verificable: el webhook las
     // rechaza con 401 y MP las reintentaría para siempre
     preferenceCreate.mockResolvedValue({ id: "pref-1", init_point: "https://mp/pref-1" });
