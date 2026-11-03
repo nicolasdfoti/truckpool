@@ -9,9 +9,10 @@ import { assertServerEnv, EnvError, LEGACY_DEV_SECRET } from "../lib/env.js";
 const ORIGINAL = {
   JWT_SECRET: process.env.JWT_SECRET,
   DATABASE_URL: process.env.DATABASE_URL,
+  NODE_ENV: process.env.NODE_ENV,
 };
 
-function restore(key: "JWT_SECRET" | "DATABASE_URL") {
+function restore(key: keyof typeof ORIGINAL) {
   if (ORIGINAL[key] === undefined) delete process.env[key];
   else process.env[key] = ORIGINAL[key];
 }
@@ -20,11 +21,13 @@ describe("assertServerEnv", () => {
   beforeEach(() => {
     process.env.JWT_SECRET = "un-secreto-cualquiera";
     process.env.DATABASE_URL = "postgresql://algo/algo";
+    process.env.NODE_ENV = "development";
   });
 
   afterEach(() => {
     restore("JWT_SECRET");
     restore("DATABASE_URL");
+    restore("NODE_ENV");
   });
 
   it("no se queja con una configuración completa", () => {
@@ -58,6 +61,22 @@ describe("assertServerEnv", () => {
   it("aborta si falta DATABASE_URL", () => {
     delete process.env.DATABASE_URL;
     expect(() => assertServerEnv()).toThrow(/DATABASE_URL no está definido/);
+  });
+
+  it("aborta si NODE_ENV no está definido (se montarían los diagnósticos de pagos)", () => {
+    delete process.env.NODE_ENV;
+    expect(() => assertServerEnv()).toThrow(EnvError);
+    expect(() => assertServerEnv()).toThrow(/NODE_ENV no está definido/);
+  });
+
+  it("aborta si NODE_ENV es un valor desconocido como 'prod'", () => {
+    process.env.NODE_ENV = "prod";
+    expect(() => assertServerEnv()).toThrow(/NODE_ENV/);
+  });
+
+  it.each(["development", "test", "production"])("acepta NODE_ENV=%s", (value) => {
+    process.env.NODE_ENV = value;
+    expect(() => assertServerEnv()).not.toThrow();
   });
 
   it("reporta todos los problemas juntos, no sólo el primero", () => {

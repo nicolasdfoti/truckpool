@@ -437,6 +437,7 @@ Para que el transportista pueda publicar, primero hay que aprobarlo desde
 | --- | --- |
 | `DATABASE_URL` | Conexión a PostgreSQL |
 | `JWT_SECRET` | Firma de los tokens (64 hex recomendado) |
+| `NODE_ENV` | Obligatoria: `development`, `test` o `production` (sin ella no arranca) |
 | `CORS_ORIGIN` | Orígenes permitidos, separados por comas |
 | `PORT` | Puerto de la API (4000) |
 | `TRUST_PROXY` | Saltos de proxy para tomar la IP real |

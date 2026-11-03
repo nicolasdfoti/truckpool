@@ -14,6 +14,9 @@
  */
 export const LEGACY_DEV_SECRET = "dev-secret-change-me";
 
+/** los únicos valores con los que el código sabe comportarse */
+const KNOWN_NODE_ENVS: readonly string[] = ["development", "test", "production"];
+
 export class EnvError extends Error {
   constructor(readonly problems: string[]) {
     super(
@@ -49,6 +52,19 @@ export function assertServerEnv(): void {
 
   if (process.env.DATABASE_URL === undefined || process.env.DATABASE_URL.trim() === "") {
     problems.push("DATABASE_URL no está definido. Sin él no hay base de datos.");
+  }
+
+  // Sin NODE_ENV (o con un typo como "prod") el server se cree fuera de
+  // producción: monta los diagnósticos de Mercado Pago y abre CORS a localhost.
+  const nodeEnv = process.env.NODE_ENV;
+  if (nodeEnv === undefined || nodeEnv.trim() === "") {
+    problems.push(
+      "NODE_ENV no está definido. Ponelo explícito: `production` en el despliegue, `development` en server/.env"
+    );
+  } else if (!KNOWN_NODE_ENVS.includes(nodeEnv)) {
+    problems.push(
+      `NODE_ENV="${nodeEnv}" no es un valor conocido (${KNOWN_NODE_ENVS.join(", ")})`
+    );
   }
 
   if (problems.length > 0) {
