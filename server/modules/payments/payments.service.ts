@@ -264,6 +264,16 @@ export async function handlePaymentNotification(input: PaymentNotificationInput)
   }
   const state = consulta.state;
 
+  // Un pago aprobado queda atado al pago de MP que lo aprobó. Otro pago de MP
+  // con el mismo external_reference (la empresa pagó dos veces la preference)
+  // no lo mueve: si no, el reembolso del duplicado lo pasaría a REFUNDED.
+  if (payment.status === "APPROVED" && payment.mpPaymentId !== mpPaymentId) {
+    console.warn(
+      `[payments] webhook ignorado: otro pago de MP sobre el pago ya aprobado ${payment.id}`
+    );
+    return { updated: false, status: payment.status };
+  }
+
   if (!state) return { updated: false, status: payment.status };
 
   if (!canTransition(payment.status, state)) {
@@ -330,7 +340,12 @@ export async function handlePaymentNotification(input: PaymentNotificationInput)
   // el estado. La comisión NO se toca: quedó asentada al crear la preference,
   // cuando se sabía el priceShare, la seña y si este pago era el saldo.
   const swapped = await prisma.payment.updateMany({
-    where: { id: payment.id, status: payment.status },
+    where: {
+      id: payment.id,
+      status: payment.status,
+      // desde APPROVED, el CAS también exige el pago de MP que lo aprobó
+      ...(payment.status === "APPROVED" ? { mpPaymentId } : {}),
+    },
     data: { status: state, mpPaymentId },
   });
   if (swapped.count === 0) return { updated: false, status: payment.status };

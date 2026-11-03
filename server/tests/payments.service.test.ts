@@ -743,7 +743,7 @@ describe("handlePaymentNotification", () => {
       const result = await handlePaymentNotification(notificacion);
 
       expect(prisma.payment.updateMany).toHaveBeenCalledWith({
-        where: { id: "pay1", status: "APPROVED" },
+        where: { id: "pay1", status: "APPROVED", mpPaymentId: "mp-77" },
         data: { status: "REFUNDED", mpPaymentId: "mp-77" },
       });
       expect(result).toEqual({ updated: true, status: "REFUNDED" });
@@ -779,6 +779,46 @@ describe("handlePaymentNotification", () => {
       await handlePaymentNotification(notificacion);
 
       sinEscrituras();
+    });
+
+    it("pago duplicado: el reembolso de mp-B no pasa a REFUNDED el pago aprobado con mp-A", async () => {
+      // la empresa pagó dos veces la misma preference; mp-B no está guardado y
+      // se llega por la pista, con el mismo external_reference
+      vi.mocked(prisma.payment.findFirst)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(
+          basePayment({ status: "APPROVED", mpPaymentId: "mp-A" }) as never
+        );
+      mpDice("REFUNDED");
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const result = await handlePaymentNotification({
+        mpPaymentId: "mp-B",
+        hintPaymentId: "pay1",
+      });
+
+      sinEscrituras();
+      expect(mp.refundPayment).not.toHaveBeenCalled();
+      expect(result).toEqual({ updated: false, status: "APPROVED" });
+      expect(warn).toHaveBeenCalledTimes(1);
+      const logged = JSON.stringify(warn.mock.calls);
+      expect(logged).not.toContain("empresa@");
+      expect(logged).not.toContain("100");
+      warn.mockRestore();
+    });
+
+    it("APPROVED → REFUNDED: el CAS exige el mismo mpPaymentId", async () => {
+      vi.mocked(prisma.payment.findFirst).mockResolvedValue(
+        basePayment({ status: "APPROVED", mpPaymentId: "mp-77" }) as never
+      );
+      mpDice("REFUNDED");
+
+      await handlePaymentNotification(notificacion);
+
+      expect(prisma.payment.updateMany).toHaveBeenCalledWith({
+        where: { id: "pay1", status: "APPROVED", mpPaymentId: "mp-77" },
+        data: { status: "REFUNDED", mpPaymentId: "mp-77" },
+      });
     });
 
     describe("reintento con otra tarjeta (MP crea un payment id nuevo)", () => {
