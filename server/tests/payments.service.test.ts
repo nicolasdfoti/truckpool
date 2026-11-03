@@ -361,8 +361,19 @@ describe("createPaymentPreference", () => {
 
 describe("handlePaymentNotification", () => {
   /** lo que responde MP al consultar el pago con el token del transportista */
-  const mpDice = (state: mp.MpPaymentState | null, externalReference = "pay1") =>
-    vi.mocked(mp.fetchPaymentState).mockResolvedValue({ state, externalReference });
+  const mpDice = (
+    state: mp.MpPaymentState | null,
+    externalReference = "pay1",
+    cobro: { amount: number | null; currencyId: string | null } = {
+      amount: 100,
+      currencyId: "ARS",
+    }
+  ) =>
+    vi.mocked(mp.fetchPaymentState).mockResolvedValue({
+      state,
+      externalReference,
+      ...cobro,
+    });
 
   /** la notificación tal como la arma el controller: data.id firmado + la pista */
   const notificacion = { mpPaymentId: "mp-77", hintPaymentId: "pay1" };
@@ -409,6 +420,7 @@ describe("handlePaymentNotification", () => {
     vi.mocked(prisma.payment.findFirst).mockResolvedValue(
       basePayment({ type: "BALANCE", amount: new Prisma.Decimal("400.00") }) as never
     );
+    mpDice("APPROVED", "pay1", { amount: 400, currencyId: "ARS" });
 
     await handlePaymentNotification(notificacion);
 
@@ -631,6 +643,43 @@ describe("handlePaymentNotification", () => {
     await handlePaymentNotification(notificacion);
 
     expect(mp.refundPayment).not.toHaveBeenCalled();
+  });
+
+  describe("monto y moneda", () => {
+    it("no aprueba si MP cobró menos que el pago local", async () => {
+      mpDice("APPROVED", "pay1", { amount: 50, currencyId: "ARS" });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const result = await handlePaymentNotification(notificacion);
+
+      sinEscrituras();
+      expect(notifyUsers).not.toHaveBeenCalled();
+      expect(result).toEqual({ updated: false, status: "PENDING" });
+      expect(warn).toHaveBeenCalledTimes(1);
+      warn.mockRestore();
+    });
+
+    it("no aprueba si MP cobró en otra moneda", async () => {
+      mpDice("APPROVED", "pay1", { amount: 100, currencyId: "USD" });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const result = await handlePaymentNotification(notificacion);
+
+      sinEscrituras();
+      expect(result).toEqual({ updated: false, status: "PENDING" });
+      warn.mockRestore();
+    });
+
+    it("un rechazo no depende del monto", async () => {
+      mpDice("REJECTED", "pay1", { amount: null, currencyId: null });
+
+      await handlePaymentNotification(notificacion);
+
+      expect(prisma.payment.updateMany).toHaveBeenCalledWith({
+        where: { id: "pay1", status: "PENDING" },
+        data: { status: "REJECTED", mpPaymentId: "mp-77" },
+      });
+    });
   });
 
   describe("carrera entre el retiro y el webhook", () => {

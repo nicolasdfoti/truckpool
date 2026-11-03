@@ -333,12 +333,20 @@ export async function createTestPreference(input: {
 /**
  * Estado de un pago según Mercado Pago, más su `external_reference` (el
  * `Payment.id` interno que mandamos al crear la preference): es lo que permite
- * comprobar que el pago de MP corresponde al pago local que se va a mover.
+ * comprobar que el pago de MP corresponde al pago local que se va a mover. El
+ * monto y la moneda cobrados sirven para no aprobar un pago por menos de lo que
+ * vale (o en otra moneda).
  */
 export async function fetchPaymentState(
   mpPaymentId: string,
   accessToken: string
-): Promise<{ state: MpPaymentState | null; externalReference: string | null }> {
+): Promise<{
+  state: MpPaymentState | null;
+  externalReference: string | null;
+  /** `transaction_amount`: lo que MP cobró, para compararlo con el pago local */
+  amount: number | null;
+  currencyId: string | null;
+}> {
   const paymentClient = new Payment(new MercadoPagoConfig({ accessToken }));
 
   let payment;
@@ -362,6 +370,9 @@ export async function fetchPaymentState(
   return {
     state: mapMpStatus(payment.status),
     externalReference: payment.external_reference ?? null,
+    amount:
+      typeof payment.transaction_amount === "number" ? payment.transaction_amount : null,
+    currencyId: payment.currency_id ?? null,
   };
 }
 

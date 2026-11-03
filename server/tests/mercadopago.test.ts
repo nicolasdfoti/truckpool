@@ -496,6 +496,23 @@ describe("fetchPaymentState", () => {
     error.mockRestore();
   });
 
+  it("devuelve el monto y la moneda que cobró MP", async () => {
+    paymentGet.mockResolvedValue({
+      id: 77,
+      status: "approved",
+      external_reference: "pay1",
+      transaction_amount: 100,
+      currency_id: "ARS",
+    });
+
+    await expect(fetchPaymentState("mp-77", "token-de-prueba")).resolves.toEqual({
+      state: "APPROVED",
+      externalReference: "pay1",
+      amount: 100,
+      currencyId: "ARS",
+    });
+  });
+
   it("una respuesta sin id es MP_INVALID_RESPONSE", async () => {
     paymentGet.mockResolvedValue({ status: "approved" });
 

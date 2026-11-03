@@ -1050,6 +1050,8 @@ describe("POST /api/payments/webhook", () => {
     vi.mocked(mp.fetchPaymentState).mockResolvedValue({
       state: "PENDING",
       externalReference: "pay1",
+      amount: 500,
+      currencyId: "ARS",
     });
     vi.mocked(prisma.payment.update).mockResolvedValue({
       id: "pay1",
@@ -1075,6 +1077,8 @@ describe("POST /api/payments/webhook", () => {
     vi.mocked(mp.fetchPaymentState).mockResolvedValue({
       state: "APPROVED",
       externalReference: "pay1",
+      amount: 500,
+      currencyId: "ARS",
     });
     vi.mocked(prisma.payment.updateMany).mockResolvedValue({ count: 1 } as never);
     vi.mocked(prisma.payment.findFirst).mockResolvedValue({

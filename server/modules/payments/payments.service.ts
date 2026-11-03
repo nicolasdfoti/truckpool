@@ -233,6 +233,9 @@ export function canTransition(from: PaymentStatus, to: PaymentStatus): boolean {
  * `notification_url` y sirve únicamente para encontrar el pago candidato (y con
  * él el token del transportista) la primera vez que llega su notificación.
  */
+/** la moneda en la que se crean todas las preferences (`lib/mercadopago.ts`) */
+const PAYMENT_CURRENCY = "ARS";
+
 export type PaymentNotificationInput = {
   mpPaymentId: string | undefined;
   hintPaymentId: string | undefined;
@@ -283,6 +286,22 @@ export async function handlePaymentNotification(input: PaymentNotificationInput)
       `[payments] transición ignorada ${payment.status}→${state} payment=${payment.id}`
     );
     return { updated: false, status: payment.status };
+  }
+
+  // Un pago no se aprueba por menos de lo que vale ni en otra moneda: la
+  // preference fija el monto en ARS, pero lo que vale es lo que MP cobró.
+  if (state === "APPROVED" && payment.status !== "APPROVED") {
+    const cobrado = consulta.amount;
+    const coincide =
+      cobrado !== null &&
+      consulta.currencyId === PAYMENT_CURRENCY &&
+      new Prisma.Decimal(cobrado).equals(payment.amount);
+    if (!coincide) {
+      console.warn(
+        `[payments] aprobación ignorada: el monto o la moneda de MP no coinciden con el pago ${payment.id}`
+      );
+      return { updated: false, status: payment.status };
+    }
   }
 
   if (state === payment.status) {
