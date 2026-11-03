@@ -7,7 +7,6 @@ import {
   checkAccountConnection,
   fetchPaymentState,
   getPaymentDetails,
-  refundPayment,
   resolveCarrierMpToken,
 } from "../../lib/mercadopago.js";
 import type { MpPaymentDetails } from "../../lib/mercadopago.js";
@@ -19,6 +18,7 @@ import {
   PaymentNotFoundError,
 } from "../../lib/errors.js";
 import { notifyUsers } from "../../lib/notifications.js";
+import { processRefundRequest } from "./refunds.service.js";
 
 export type PaymentPreferenceResult = {
   paymentId: string;
@@ -314,10 +314,11 @@ export async function handlePaymentNotification(input: PaymentNotificationInput)
       });
     }
     // un webhook anterior pudo ganar el CAS a APPROVED y caerse antes de
-    // devolver la seña de una carga retirada: el repetido termina el trabajo
+    // devolver la seña de una carga retirada (o MP pudo fallar y dejar la
+    // RefundRequest PENDING): el repetido termina el trabajo
     if (state === "APPROVED") {
-      const refunded = await refundIfCancelled(payment.id, mpPaymentId, accessToken);
-      if (refunded) return { updated: true, status: refunded };
+      const refunded = await refundIfCancelled(payment.id);
+      if (refunded) return { updated: refunded !== payment.status, status: refunded };
     }
     return { updated: false, status: payment.status };
   }
@@ -346,7 +347,7 @@ export async function handlePaymentNotification(input: PaymentNotificationInput)
     // carga retirada con el pago cobrado. Se decide después del CAS, que es el
     // reclamo: de dos webhooks simultáneos solo el que lo ganó llega acá. Y se
     // relee la carga, porque el retiro pudo commitear entre la lectura y el CAS.
-    const refunded = await refundIfCancelled(payment.id, mpPaymentId, accessToken);
+    const refunded = await refundIfCancelled(payment.id);
     if (refunded) return { updated: true, status: refunded };
 
     const esSeña = payment.type === "DEPOSIT";
@@ -370,18 +371,21 @@ export async function handlePaymentNotification(input: PaymentNotificationInput)
  * aprobó igual. Relee la base a propósito: lo que se leyó antes del CAS puede
  * estar viejo.
  *
- * Con RefundRequest (la seña estaba cobrada al retirar) el reembolso es cosa del
- * outbox; con `refundedAmount` ya asentado, alguien lo hizo antes. En los dos
- * casos no se toca nada. Devuelve el estado nuevo si reembolsó, o null.
+ * La devolución va por el outbox, igual que la del retiro: primero queda la
+ * RefundRequest (registro durable aunque MP falle y deje de reintentar), y el
+ * processor la reclama con su CAS, así que de dos webhooks a la vez solo uno le
+ * pide plata a MP. Si la del retiro ya existía, no se pisa su monto: se retoma.
+ *
+ * Devuelve null si la carga no está retirada (el pago sigue su curso normal) o
+ * el estado del pago si la devolución es cosa del outbox. Si MP falló, lanza
+ * 502 para que MP reintente el webhook; la request queda PENDING igual.
  */
-async function refundIfCancelled(
-  paymentId: string,
-  mpPaymentId: string,
-  accessToken: string
-): Promise<PaymentStatus | null> {
+async function refundIfCancelled(paymentId: string): Promise<PaymentStatus | null> {
   const current = await prisma.payment.findUnique({
     where: { id: paymentId },
     select: {
+      status: true,
+      type: true,
       amount: true,
       refundedAmount: true,
       cargoItemId: true,
@@ -389,33 +393,40 @@ async function refundIfCancelled(
     },
   });
   if (!current || current.cargoItem.status !== "CANCELLED") return null;
-  if (current.refundedAmount !== null) return null;
-
-  const outbox = await prisma.refundRequest.findUnique({
-    where: { cargoItemId: current.cargoItemId },
-  });
-  if (outbox) return null;
+  // con `refundedAmount` asentado, alguien ya devolvió lo que correspondía
+  if (current.refundedAmount !== null) return current.status;
+  if (current.type !== "DEPOSIT") {
+    // no debería pasar: el saldo se cobra con la carga confirmada, que ya no
+    // se puede retirar. El outbox devuelve la seña, así que no se encola.
+    console.warn(
+      `[payments] saldo cobrado sobre una carga retirada: payment=${paymentId}`
+    );
+    return current.status;
+  }
 
   // lo congelado al retirar manda: si la seña no estaba cobrada es 0 y vuelve
   // entera; si se retuvo entera (retiro a menos de 24 h) no hay nada que devolver
-  const target = new Prisma.Decimal(current.amount)
-    .minus(current.cargoItem.cancellationFeeAmount ?? 0)
-    .toNumber();
-  if (target < 0.01) return null;
+  const target = new Prisma.Decimal(current.amount).minus(
+    current.cargoItem.cancellationFeeAmount ?? 0
+  );
+  if (target.lessThan(0.01)) return current.status;
 
-  // clave fija por pago: si dos webhooks (el ganador del CAS y uno repetido)
-  // piden el mismo reembolso a la vez, MP lo ejecuta una sola vez
-  const refunded = await refundPayment(mpPaymentId, target, accessToken, {
-    idempotencyKey: `refund-${paymentId}`,
+  await prisma.refundRequest.upsert({
+    where: { cargoItemId: current.cargoItemId },
+    create: { cargoItemId: current.cargoItemId, targetAmount: target, status: "PENDING" },
+    update: {},
   });
-  const updated = await prisma.payment.update({
-    where: { id: paymentId },
-    data: {
-      status: refunded >= Number(current.amount) ? "REFUNDED" : "APPROVED",
-      refundedAmount: refunded,
-    },
-  });
-  return updated.status;
+
+  const outcome = await processRefundRequest(current.cargoItemId);
+  if (outcome.kind === "failed") {
+    throw new AppError(
+      "no pudimos devolver la seña de una carga retirada: queda pendiente de reintento",
+      502,
+      "MP_ERROR"
+    );
+  }
+  if (outcome.kind === "completed" && outcome.paymentStatus) return outcome.paymentStatus;
+  return current.status;
 }
 
 // companyId y el viaje se piden para poder avisarle a la empresa qué se acreditó.
