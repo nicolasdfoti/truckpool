@@ -530,12 +530,17 @@ export async function getPaymentDetails(mpPaymentId: string): Promise<MpPaymentD
  * consulta se puede hacer, no se emite ningún reembolso: no saber cuánto se
  * devolvió es exactamente la condición bajo la cual pedir de más es probable.
  *
+ * `idempotencyKey` cubre lo que la consulta previa no puede: dos llamadas
+ * concurrentes que leen el mismo total antes de que cualquiera de las dos pida
+ * nada. Con la misma clave, Mercado Pago ejecuta el reembolso una sola vez.
+ *
  * Devuelve cuánto lleva reembolsado ese pago en total, para dejarlo asentado.
  */
 export async function refundPayment(
   mpPaymentId: string,
   amount: number,
-  accessToken: string
+  accessToken: string,
+  opts: { idempotencyKey?: string } = {}
 ): Promise<number> {
   // cuánto le devolvimos HASTA AHORA, antes de pedir nada (ver el comentario de
   // arriba: el reintento de la transacción es lo que hace falta cubrir acá)
@@ -560,6 +565,10 @@ export async function refundPayment(
     await new PaymentRefund(new MercadoPagoConfig({ accessToken })).create({
       payment_id: mpPaymentId,
       body: { amount: pending },
+      // con la misma clave MP no repite el reembolso aunque llegue dos veces
+      ...(opts.idempotencyKey
+        ? { requestOptions: { idempotencyKey: opts.idempotencyKey } }
+        : {}),
     });
   } catch (err) {
     // puede haber funcionado igual y fallado el response: se vuelve a preguntar

@@ -554,26 +554,34 @@ describe("handlePaymentNotification", () => {
   });
 
   it("devuelve el pago si la empresa retiró la carga mientras estaba en vuelo", async () => {
-    vi.mocked(prisma.payment.findFirst).mockResolvedValue(
-      basePayment({
-        cargoItem: {
-          ...basePayment().cargoItem,
-          status: "CANCELLED",
-          cancellationFeeAmount: new Prisma.Decimal("0.00"),
-        },
-      }) as never
-    );
+    const retirada = basePayment({
+      cargoItem: {
+        ...basePayment().cargoItem,
+        status: "CANCELLED",
+        cancellationFeeAmount: new Prisma.Decimal("0.00"),
+      },
+    });
+    vi.mocked(prisma.payment.findFirst).mockResolvedValue(retirada as never);
+    vi.mocked(prisma.payment.findUnique).mockResolvedValue(retirada as never);
     vi.mocked(prisma.payment.update).mockResolvedValue(
       basePayment({ status: "REFUNDED", mpPaymentId: "mp-77" }) as never
     );
 
     const result = await handlePaymentNotification(notificacion);
 
-    expect(mp.refundPayment).toHaveBeenCalledWith("mp-77", 100, MP_TOKEN_PLAIN);
+    // primero se reclama el pago con el CAS a APPROVED, después se devuelve
+    expect(prisma.payment.updateMany).toHaveBeenCalledWith({
+      where: { id: "pay1", status: "PENDING" },
+      data: { status: "APPROVED", mpPaymentId: "mp-77" },
+    });
+    expect(mp.refundPayment).toHaveBeenCalledWith("mp-77", 100, MP_TOKEN_PLAIN, {
+      idempotencyKey: "refund-pay1",
+    });
     expect(prisma.payment.update).toHaveBeenCalledWith({
       where: { id: "pay1" },
-      data: { status: "REFUNDED", mpPaymentId: "mp-77", refundedAmount: 100 },
+      data: { status: "REFUNDED", refundedAmount: 100 },
     });
+    expect(notifyUsers).not.toHaveBeenCalled();
     expect(result).toEqual({ updated: true, status: "REFUNDED" });
   });
 
@@ -655,7 +663,9 @@ describe("handlePaymentNotification", () => {
         where: { id: "pay1", status: "PENDING" },
         data: { status: "APPROVED", mpPaymentId: "mp-77" },
       });
-      expect(mp.refundPayment).toHaveBeenCalledWith("mp-77", 100, MP_TOKEN_PLAIN);
+      expect(mp.refundPayment).toHaveBeenCalledWith("mp-77", 100, MP_TOKEN_PLAIN, {
+        idempotencyKey: "refund-pay1",
+      });
       expect(prisma.payment.update).toHaveBeenCalledWith({
         where: { id: "pay1" },
         data: { status: "REFUNDED", refundedAmount: 100 },
@@ -663,6 +673,35 @@ describe("handlePaymentNotification", () => {
       // no se avisa "acreditamos tu seña" de una plata que se está devolviendo
       expect(notifyUsers).not.toHaveBeenCalled();
       expect(result).toEqual({ updated: true, status: "REFUNDED" });
+    });
+
+    it("dos webhooks simultáneos sobre una carga ya retirada: refundPayment una sola vez", async () => {
+      // los dos leen el pago PENDING con la carga CANCELLED; el CAS a APPROVED es
+      // el reclamo: solo el que lo gana le pide el reembolso a MP
+      const enVuelo = basePayment({
+        cargoItem: {
+          ...basePayment().cargoItem,
+          status: "CANCELLED",
+          cancellationFeeAmount: new Prisma.Decimal("0.00"),
+        },
+      });
+      vi.mocked(prisma.payment.findFirst).mockResolvedValue(enVuelo as never);
+      vi.mocked(prisma.payment.updateMany)
+        .mockResolvedValueOnce({ count: 1 } as never)
+        .mockResolvedValueOnce({ count: 0 } as never);
+      vi.mocked(prisma.payment.findUnique).mockResolvedValue(
+        retiradaSinSeñaPaga() as never
+      );
+
+      await Promise.all([
+        handlePaymentNotification(notificacion),
+        handlePaymentNotification(notificacion),
+      ]);
+
+      expect(mp.refundPayment).toHaveBeenCalledTimes(1);
+      expect(mp.refundPayment).toHaveBeenCalledWith("mp-77", 100, MP_TOKEN_PLAIN, {
+        idempotencyKey: "refund-pay1",
+      });
     });
 
     it("el webhook repetido sobre un APPROVED con la carga retirada sin reembolso, reembolsa", async () => {
@@ -676,7 +715,9 @@ describe("handlePaymentNotification", () => {
 
       await handlePaymentNotification(notificacion);
 
-      expect(mp.refundPayment).toHaveBeenCalledWith("mp-77", 100, MP_TOKEN_PLAIN);
+      expect(mp.refundPayment).toHaveBeenCalledWith("mp-77", 100, MP_TOKEN_PLAIN, {
+        idempotencyKey: "refund-pay1",
+      });
     });
 
     it("si el reembolso ya quedó asentado, el webhook repetido no reembolsa de nuevo", async () => {
@@ -874,11 +915,22 @@ describe("handlePaymentNotification", () => {
               },
             }) as never
           );
+        vi.mocked(prisma.payment.findUnique).mockResolvedValue(
+          rechazadoConA({
+            cargoItem: {
+              ...basePayment().cargoItem,
+              status: "CANCELLED",
+              cancellationFeeAmount: new Prisma.Decimal("0.00"),
+            },
+          }) as never
+        );
 
         await handlePaymentNotification({ mpPaymentId: "mp-B", hintPaymentId: "pay1" });
 
         expect(mp.refundPayment).toHaveBeenCalledTimes(1);
-        expect(mp.refundPayment).toHaveBeenCalledWith("mp-B", 100, MP_TOKEN_PLAIN);
+        expect(mp.refundPayment).toHaveBeenCalledWith("mp-B", 100, MP_TOKEN_PLAIN, {
+          idempotencyKey: "refund-pay1",
+        });
       });
     });
   });

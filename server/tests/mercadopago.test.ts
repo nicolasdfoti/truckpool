@@ -152,6 +152,22 @@ describe("refundPayment", () => {
   });
 });
 
+describe("refundPayment con idempotencyKey", () => {
+  it("manda la clave a Mercado Pago para que un pedido repetido no devuelva dos veces", async () => {
+    total
+      .mockResolvedValueOnce(totalDevuelve(0))
+      .mockResolvedValueOnce(totalDevuelve(50));
+
+    await refundPayment(MP_ID, 50, "token-de-prueba", { idempotencyKey: "refund-pay1" });
+
+    expect(create).toHaveBeenCalledWith({
+      payment_id: MP_ID,
+      body: { amount: 50 },
+      requestOptions: { idempotencyKey: "refund-pay1" },
+    });
+  });
+});
+
 describe("refundPayment con el token del transportista", () => {
   it("consulta y reembolsa con el token recibido, sin MP_ACCESS_TOKEN", async () => {
     delete process.env.MP_ACCESS_TOKEN;

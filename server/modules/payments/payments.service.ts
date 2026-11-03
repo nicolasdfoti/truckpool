@@ -303,37 +303,6 @@ export async function handlePaymentNotification(input: PaymentNotificationInput)
     return { updated: false, status: payment.status };
   }
 
-  // La empresa puede retirar la carga mientras el pago está en vuelo (o antes de
-  // que le llegue la notificación). Si el pago se aprueba igual, se devuelve en
-  // el momento: no puede quedar una carga retirada con el pago cobrado.
-  //
-  // Llegar acá con APPROVED quiere decir que el pago ENTRA a APPROVED (desde
-  // PENDING o REJECTED): si ya estaba cobrado al retirar, la política de
-  // cancelación se aplicó y quedó congelada (RefundRequest del outbox y
-  // cancellationFeeAmount), y reembolsar acá devolvería la parte retenida.
-  if (state === "APPROVED" && payment.cargoItem.status === "CANCELLED") {
-    const outbox = await prisma.refundRequest.findUnique({
-      where: { cargoItemId: payment.cargoItemId },
-    });
-    if (!outbox && payment.refundedAmount === null) {
-      // la seña no estaba cobrada al retirar: la penalidad congelada es 0 y
-      // vuelve entera; igual se descuenta lo congelado para no depender de eso
-      const target = new Prisma.Decimal(payment.amount)
-        .minus(payment.cargoItem.cancellationFeeAmount ?? 0)
-        .toNumber();
-      const refunded = await refundPayment(mpPaymentId, target, accessToken);
-      const updated = await prisma.payment.update({
-        where: { id: payment.id },
-        data: {
-          status: refunded >= Number(payment.amount) ? "REFUNDED" : "APPROVED",
-          mpPaymentId,
-          refundedAmount: refunded,
-        },
-      });
-      return { updated: true, status: updated.status };
-    }
-  }
-
   // CAS contra el estado leído: dos webhooks del mismo pago pueden llegar a la
   // vez. El mpPaymentId se reemplaza: en MP cada reintento con otra tarjeta es
   // un pago nuevo, y el que vale (contra el que se reembolsa) es el que movió
@@ -353,8 +322,11 @@ export async function handlePaymentNotification(input: PaymentNotificationInput)
   // Solo avisa el webhook que ganó la transición a APPROVED: MP repite la
   // notificación y no puede ser motivo de tres campanas.
   if (state === "APPROVED") {
-    // la carga se leyó antes del CAS: si la empresa la retiró en el medio (con
-    // la seña todavía PENDING), recién ahora se ve, y la seña se devuelve
+    // La empresa puede retirar la carga mientras el pago está en vuelo. Si el
+    // pago se aprueba igual, se devuelve en el momento: no puede quedar una
+    // carga retirada con el pago cobrado. Se decide después del CAS, que es el
+    // reclamo: de dos webhooks simultáneos solo el que lo ganó llega acá. Y se
+    // relee la carga, porque el retiro pudo commitear entre la lectura y el CAS.
     const refunded = await refundIfCancelled(payment.id, mpPaymentId, accessToken);
     if (refunded) return { updated: true, status: refunded };
 
@@ -412,7 +384,11 @@ async function refundIfCancelled(
     .toNumber();
   if (target < 0.01) return null;
 
-  const refunded = await refundPayment(mpPaymentId, target, accessToken);
+  // clave fija por pago: si dos webhooks (el ganador del CAS y uno repetido)
+  // piden el mismo reembolso a la vez, MP lo ejecuta una sola vez
+  const refunded = await refundPayment(mpPaymentId, target, accessToken, {
+    idempotencyKey: `refund-${paymentId}`,
+  });
   const updated = await prisma.payment.update({
     where: { id: paymentId },
     data: {
@@ -423,16 +399,14 @@ async function refundIfCancelled(
   return updated.status;
 }
 
-// el estado de la carga importa: si estaba retirada hay que devolver el pago.
 // companyId y el viaje se piden para poder avisarle a la empresa qué se acreditó.
+// El estado de la carga no: se relee después del CAS (ver refundIfCancelled).
 const LOOKUP = {
   include: {
     cargoItem: {
       select: {
-        status: true,
         companyId: true,
         tripId: true,
-        cancellationFeeAmount: true,
         trip: {
           select: { carrier: { select: { mpUserId: true, mpAccessToken: true } } },
         },
