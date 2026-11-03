@@ -277,7 +277,8 @@ export async function handlePaymentNotification(input: PaymentNotificationInput)
     // si ese otro pago está aprobado, la empresa pagó dos veces y la segunda
     // quedó en la cuenta del transportista: nadie más lo va a ver
     if (state === "APPROVED") {
-      await alertAdmins(payment.cargoItem.tripId, {
+      await alertAdmins(`DUPLICATE_CHARGE:${payment.id}:${mpPaymentId}`, {
+        tripId: payment.cargoItem.tripId,
         title: "cobro duplicado en Mercado Pago",
         body: `el pago ${payment.id} ya estaba aprobado y MP aprobó otro (${mpPaymentId}) sobre la misma preference. revisalo y devolvé el duplicado desde la cuenta del transportista.`,
       });
@@ -309,7 +310,8 @@ export async function handlePaymentNotification(input: PaymentNotificationInput)
         `[payments] aprobación ignorada: el monto o la moneda de MP no coinciden con el pago ${payment.id}`
       );
       // MP cobró y el pago local sigue sin aprobar: hay que mirarlo a mano
-      await alertAdmins(payment.cargoItem.tripId, {
+      await alertAdmins(`AMOUNT_MISMATCH:${payment.id}:${mpPaymentId}`, {
+        tripId: payment.cargoItem.tripId,
         title: "cobro con monto o moneda distintos",
         body: `MP aprobó el pago ${mpPaymentId} para el pago ${payment.id} con un monto o una moneda que no coinciden. quedó sin aprobar: revisalo en Mercado Pago.`,
       });
@@ -378,11 +380,33 @@ export async function handlePaymentNotification(input: PaymentNotificationInput)
 }
 
 /**
- * Aviso a los admins por plata cobrada que el sistema no pudo asentar. Es
- * best-effort: un aviso que falla no puede tumbar el webhook (MP reintentaría
+ * Aviso a los admins por plata cobrada que el sistema no pudo asentar.
+ *
+ * Idempotente por evento: `key` es tipo:pago:pago de MP, y MP repite el mismo
+ * webhook varias veces. La clave se reserva antes de avisar (la PK de
+ * PaymentAlert la hace atómica aunque dos repeticiones lleguen a la vez); si
+ * ya estaba, el aviso ya salió. Si el aviso falla, la clave se libera para que
+ * el próximo reintento de MP lo mande.
+ *
+ * Best-effort: un aviso que falla no puede tumbar el webhook (MP reintentaría
  * algo que ya se decidió). Sin datos de la empresa: solo ids.
  */
-async function alertAdmins(tripId: string, aviso: { title: string; body: string }) {
+async function alertAdmins(
+  key: string,
+  aviso: { tripId: string; title: string; body: string }
+) {
+  try {
+    await prisma.paymentAlert.create({ data: { key } });
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      return; // este evento ya se avisó
+    }
+    console.error("[payments] no se pudo reservar el aviso a los admins", {
+      name: err instanceof Error ? err.name : typeof err,
+    });
+    return;
+  }
+
   try {
     const admins = await prisma.user.findMany({
       where: { role: "ADMIN" },
@@ -391,12 +415,13 @@ async function alertAdmins(tripId: string, aviso: { title: string; body: string 
     if (admins.length === 0) return;
     await notifyUsers(
       admins.map((a) => a.id),
-      { type: "PAYMENT_ALERT", title: aviso.title, body: aviso.body, tripId }
+      { type: "PAYMENT_ALERT", ...aviso }
     );
   } catch (err) {
     console.error("[payments] falló el aviso a los admins", {
       name: err instanceof Error ? err.name : typeof err,
     });
+    await prisma.paymentAlert.delete({ where: { key } }).catch(() => {});
   }
 }
 

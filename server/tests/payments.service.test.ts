@@ -15,6 +15,7 @@ vi.mock("../lib/prisma", () => ({
   prisma: {
     cargoItem: { findUnique: vi.fn() },
     user: { findMany: vi.fn() },
+    paymentAlert: { create: vi.fn(), delete: vi.fn() },
     refundRequest: {
       findUnique: vi.fn(),
       upsert: vi.fn(),
@@ -404,8 +405,17 @@ describe("handlePaymentNotification", () => {
     vi.mocked(prisma.refundRequest.upsert).mockResolvedValue({} as never);
     vi.mocked(prisma.refundRequest.updateMany).mockResolvedValue({ count: 1 } as never);
     vi.mocked(prisma.user.findMany).mockResolvedValue([{ id: "admin1" }] as never);
+    vi.mocked(prisma.paymentAlert.create).mockResolvedValue({} as never);
+    vi.mocked(prisma.paymentAlert.delete).mockResolvedValue({} as never);
     mpDice("APPROVED");
   });
+
+  /** lo que tira Prisma cuando la clave del aviso ya existe */
+  const claveRepetida = () =>
+    new Prisma.PrismaClientKnownRequestError("Unique constraint failed", {
+      code: "P2002",
+      clientVersion: "test",
+    });
 
   /** el aviso a los admins: plata cobrada que nadie más va a mirar */
   const alertaAdmins = () =>
@@ -1089,6 +1099,84 @@ describe("handlePaymentNotification", () => {
       expect(aviso.body).toContain("mp-B");
       expect(aviso.body).not.toContain("empresa@");
       warn.mockRestore();
+    });
+
+    describe("avisos a los admins idempotentes", () => {
+      /** el pago ya aprobado con mp-A; MP notifica mp-B (aprobado) */
+      const duplicado = () => {
+        vi.mocked(prisma.payment.findFirst).mockImplementation((async (args: {
+          where: { mpPaymentId?: string };
+        }) =>
+          args.where.mpPaymentId
+            ? null
+            : basePayment({ status: "APPROVED", mpPaymentId: "mp-A" })) as never);
+        mpDice("APPROVED");
+      };
+      const notificacionB = { mpPaymentId: "mp-B", hintPaymentId: "pay1" };
+
+      it("MP reintenta el mismo webhook del duplicado: un solo aviso", async () => {
+        duplicado();
+        vi.mocked(prisma.paymentAlert.create)
+          .mockResolvedValueOnce({} as never)
+          .mockRejectedValue(claveRepetida());
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        for (let i = 0; i < 3; i++) await handlePaymentNotification(notificacionB);
+
+        // la clave es el evento: este pago y este cobro de MP
+        expect(prisma.paymentAlert.create).toHaveBeenCalledWith({
+          data: { key: "DUPLICATE_CHARGE:pay1:mp-B" },
+        });
+        expect(notifyUsers).toHaveBeenCalledTimes(1);
+        warn.mockRestore();
+      });
+
+      it("otro cobro duplicado (mp-C) es otro evento y avisa de nuevo", async () => {
+        duplicado();
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        await handlePaymentNotification(notificacionB);
+        await handlePaymentNotification({ mpPaymentId: "mp-C", hintPaymentId: "pay1" });
+
+        expect(prisma.paymentAlert.create).toHaveBeenCalledWith({
+          data: { key: "DUPLICATE_CHARGE:pay1:mp-C" },
+        });
+        expect(notifyUsers).toHaveBeenCalledTimes(2);
+        warn.mockRestore();
+      });
+
+      it("el monto distinto repetido por MP: un solo aviso", async () => {
+        mpDice("APPROVED", "pay1", { amount: 50, currencyId: "ARS" });
+        vi.mocked(prisma.paymentAlert.create)
+          .mockResolvedValueOnce({} as never)
+          .mockRejectedValue(claveRepetida());
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        await handlePaymentNotification(notificacion);
+        await handlePaymentNotification(notificacion);
+
+        expect(prisma.paymentAlert.create).toHaveBeenCalledWith({
+          data: { key: "AMOUNT_MISMATCH:pay1:mp-77" },
+        });
+        expect(notifyUsers).toHaveBeenCalledTimes(1);
+        warn.mockRestore();
+      });
+
+      it("si el aviso no sale, libera la clave para que el reintento de MP avise", async () => {
+        duplicado();
+        vi.mocked(notifyUsers).mockRejectedValueOnce(new Error("db caída"));
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+        const result = await handlePaymentNotification(notificacionB);
+
+        expect(result).toEqual({ updated: false, status: "APPROVED" });
+        expect(prisma.paymentAlert.delete).toHaveBeenCalledWith({
+          where: { key: "DUPLICATE_CHARGE:pay1:mp-B" },
+        });
+        warn.mockRestore();
+        error.mockRestore();
+      });
     });
 
     it("APPROVED → REFUNDED: el CAS exige el mismo mpPaymentId", async () => {

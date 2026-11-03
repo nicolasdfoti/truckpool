@@ -365,6 +365,14 @@ enum RefundStatus {
   FAILED
 }
 
+// un aviso a los admins por evento de pago (cobro duplicado, monto distinto,
+// saldo sobre una carga retirada). La clave es tipo:pago:pago de MP: MP repite
+// el webhook y cada repetición tiene que dar el mismo aviso, no uno nuevo.
+model PaymentAlert {
+  key       String   @id
+  createdAt DateTime @default(now())
+}
+
 model RefundRequest {
   id              String       @id @default(cuid())
   cargoItemId     String       @unique
