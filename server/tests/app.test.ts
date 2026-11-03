@@ -795,7 +795,8 @@ describe("POST /api/payments/mp/test-preference", () => {
     vi.mocked(mp.createTestPreference).mockReset();
     vi.mocked(mp.createTestPreference).mockResolvedValue({
       preferenceId: "pref-1",
-      sandboxInitPoint: "https://sandbox.mercadopago.com.ar/checkout/v1/redirect?pref_id=pref-1",
+      sandboxInitPoint:
+        "https://sandbox.mercadopago.com.ar/checkout/v1/redirect?pref_id=pref-1",
       initPoint: "https://www.mercadopago.com.ar/checkout/v1/redirect?pref_id=pref-1",
     });
   });
@@ -1041,6 +1042,32 @@ describe("POST /api/payments/webhook", () => {
       expect.objectContaining({ where: { mpPreferenceId: "pref-123" } })
     );
     expect(res.body.status).toBe("REJECTED");
+  });
+
+  it("un error inesperado no lleva sus headers al log (solo name y code)", async () => {
+    const token = "APP_USR-secreto-del-log";
+    vi.mocked(prisma.payment.findFirst).mockRejectedValue(
+      Object.assign(new Error("fallo con la request adentro"), {
+        code: "ECONNRESET",
+        config: { headers: { Authorization: `Bearer ${token}` } },
+      })
+    );
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const res = await request(app)
+      .post("/api/payments/webhook?payment_id=pay1")
+      .set(signedWebhook("mp-77", secret))
+      .send(payload);
+
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: "error interno", code: "INTERNAL_ERROR" });
+    const logueado = JSON.stringify(error.mock.calls);
+    expect(logueado).not.toContain(token);
+    expect(error).toHaveBeenCalledWith(expect.any(String), {
+      name: "Error",
+      code: "ECONNRESET",
+    });
+    error.mockRestore();
   });
 });
 
@@ -2783,6 +2810,4 @@ describe("GET /api/trips/cancellation-quote", () => {
     const res = await ask(100_000, "no-es-fecha");
     expect(res.status).toBe(400);
   });
-
-  ;
 });

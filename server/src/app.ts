@@ -81,6 +81,11 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
   if (err instanceof AppError) {
     return res.status(err.statusCode).json({ error: err.message, code: err.code });
   }
-  console.error(err);
+  // nunca el error entero: los del SDK de MP o de Prisma pueden traer headers
+  // (Authorization) o parámetros con datos personales
+  console.error("[app] error no controlado", {
+    name: err instanceof Error ? err.name : typeof err,
+    code: (err as { code?: unknown } | null)?.code,
+  });
   res.status(500).json({ error: "error interno", code: "INTERNAL_ERROR" });
 });

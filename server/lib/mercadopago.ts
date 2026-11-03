@@ -312,7 +312,25 @@ export async function fetchPaymentState(
   mpPaymentId: string
 ): Promise<MpPaymentState | null> {
   const paymentClient = new Payment(mpConfig());
-  const payment = await paymentClient.get({ id: mpPaymentId });
+
+  let payment;
+  try {
+    payment = await paymentClient.get({ id: mpPaymentId });
+  } catch (err) {
+    if (err instanceof AppError) throw err;
+    // el error crudo del SDK puede traer los headers de la request (y con
+    // ellos el token): solo el status sale de acá
+    console.warn("[mercadopago] fetchPaymentState falló", { status: mpErrorStatus(err) });
+    throw new AppError("no pudimos consultar el pago en Mercado Pago", 502, "MP_ERROR");
+  }
+
+  if (!payment?.id) {
+    throw new AppError(
+      "Mercado Pago no devolvió un pago utilizable",
+      502,
+      "MP_INVALID_RESPONSE"
+    );
+  }
   return mapMpStatus(payment.status);
 }
 

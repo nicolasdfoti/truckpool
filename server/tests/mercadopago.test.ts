@@ -3,15 +3,17 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 // El SDK de Mercado Pago se reemplaza entero: acá se prueba la lógica de
 // idempotencia de refundPayment, no la integración con MP.
-const { create, total, paymentMethods, preferenceCreate, mpConfigs } = vi.hoisted(() => ({
-  create: vi.fn(),
-  total: vi.fn(),
-  paymentMethods: vi.fn(),
-  preferenceCreate: vi.fn(),
-  // guardamos los opts de cada MercadoPagoConfig para poder verificar de dónde
-  // sale el access token
-  mpConfigs: [] as Array<{ accessToken?: string }>,
-}));
+const { create, total, paymentGet, paymentMethods, preferenceCreate, mpConfigs } =
+  vi.hoisted(() => ({
+    create: vi.fn(),
+    paymentGet: vi.fn(),
+    total: vi.fn(),
+    paymentMethods: vi.fn(),
+    preferenceCreate: vi.fn(),
+    // guardamos los opts de cada MercadoPagoConfig para poder verificar de dónde
+    // sale el access token
+    mpConfigs: [] as Array<{ accessToken?: string }>,
+  }));
 
 vi.mock("mercadopago", () => ({
   MercadoPagoConfig: class {
@@ -24,7 +26,7 @@ vi.mock("mercadopago", () => ({
     total = total;
   },
   Payment: class {
-    get = vi.fn();
+    get = paymentGet;
   },
   PaymentMethod: class {
     get = paymentMethods;
@@ -34,8 +36,13 @@ vi.mock("mercadopago", () => ({
   },
 }));
 
-const { checkAccountConnection, createTestPreference, refundPayment, verifyWebhookSignature } =
-  await import("../lib/mercadopago.js");
+const {
+  checkAccountConnection,
+  createTestPreference,
+  fetchPaymentState,
+  refundPayment,
+  verifyWebhookSignature,
+} = await import("../lib/mercadopago.js");
 const { AppError } = await import("../lib/errors.js");
 
 const MP_ID = "mp-77";
@@ -45,6 +52,7 @@ const totalDevuelve = (amount: number) => ({ amount });
 
 beforeEach(() => {
   create.mockReset();
+  paymentGet.mockReset();
   paymentMethods.mockReset();
   preferenceCreate.mockReset();
   mpConfigs.length = 0;
@@ -245,7 +253,8 @@ describe("createTestPreference", () => {
     preferenceCreate.mockResolvedValue({
       id: "pref-123",
       init_point: "https://www.mercadopago.com.ar/checkout/v1/redirect?pref_id=pref-123",
-      sandbox_init_point: "https://sandbox.mercadopago.com.ar/checkout/v1/redirect?pref_id=pref-123",
+      sandbox_init_point:
+        "https://sandbox.mercadopago.com.ar/checkout/v1/redirect?pref_id=pref-123",
     });
 
     const result = await createTestPreference({
@@ -255,8 +264,9 @@ describe("createTestPreference", () => {
     });
 
     expect(preferenceCreate).toHaveBeenCalledTimes(1);
-    const body = (preferenceCreate.mock.calls[0]?.[0] as { body: Record<string, unknown> })
-      .body;
+    const body = (
+      preferenceCreate.mock.calls[0]?.[0] as { body: Record<string, unknown> }
+    ).body;
     // el id del item sigue siendo el slug derivado del título
     expect(body.items).toEqual([
       {
@@ -282,7 +292,8 @@ describe("createTestPreference", () => {
     expect(result).toEqual({
       preferenceId: "pref-123",
       initPoint: "https://www.mercadopago.com.ar/checkout/v1/redirect?pref_id=pref-123",
-      sandboxInitPoint: "https://sandbox.mercadopago.com.ar/checkout/v1/redirect?pref_id=pref-123",
+      sandboxInitPoint:
+        "https://sandbox.mercadopago.com.ar/checkout/v1/redirect?pref_id=pref-123",
     });
   });
 
@@ -307,7 +318,11 @@ describe("createTestPreference", () => {
   it("deja sandbox_init_point vacío si la cuenta no lo devuelve", async () => {
     preferenceCreate.mockResolvedValue({ id: "pref-2", init_point: "https://x.test" });
 
-    const result = await createTestPreference({ title: "Prueba", quantity: 1, unitPrice: 1 });
+    const result = await createTestPreference({
+      title: "Prueba",
+      quantity: 1,
+      unitPrice: 1,
+    });
 
     expect(result.sandboxInitPoint).toBe("");
     expect(result.initPoint).toBe("https://x.test");
@@ -402,5 +417,51 @@ describe("verifyWebhookSignature", () => {
     expect(() => verifyWebhookSignature(firmar(futuro))).toThrow(
       expect.objectContaining({ statusCode: 401, code: "INVALID_SIGNATURE" })
     );
+  });
+});
+
+describe("fetchPaymentState", () => {
+  const TOKEN = "APP_USR-secreto";
+
+  /** así llega un error del SDK: con la request original, headers incluidos */
+  const errorDelSdk = () =>
+    Object.assign(new Error("Internal Server Error"), {
+      status: 500,
+      config: { headers: { Authorization: `Bearer ${TOKEN}` } },
+    });
+
+  /** todo lo que se mandó a la consola, serializado */
+  const logueado = (...spies: Array<ReturnType<typeof vi.spyOn>>) =>
+    spies
+      .flatMap((spy) => spy.mock.calls)
+      .map((args) =>
+        JSON.stringify(args, (_k, v) =>
+          v instanceof Error ? { ...v, message: v.message } : v
+        )
+      )
+      .join("\n");
+
+  it("traduce un error del SDK a MP_ERROR sin loguear el token", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    paymentGet.mockRejectedValue(errorDelSdk());
+
+    const err = await fetchPaymentState("mp-77").catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(AppError);
+    expect(err).toMatchObject({ statusCode: 502, code: "MP_ERROR" });
+    expect(JSON.stringify(err)).not.toContain(TOKEN);
+    expect(logueado(warn, error)).not.toContain(TOKEN);
+    warn.mockRestore();
+    error.mockRestore();
+  });
+
+  it("una respuesta sin id es MP_INVALID_RESPONSE", async () => {
+    paymentGet.mockResolvedValue({ status: "approved" });
+
+    await expect(fetchPaymentState("mp-77")).rejects.toMatchObject({
+      statusCode: 502,
+      code: "MP_INVALID_RESPONSE",
+    });
   });
 });
