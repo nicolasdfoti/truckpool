@@ -984,7 +984,12 @@ describe("POST /api/payments/webhook", () => {
       cargoItemId: "i1",
       amount: new Prisma.Decimal("500.00"),
       status: "PENDING",
-      cargoItem: { status: "PENDING", companyId: "c1", tripId: "t1" },
+      cargoItem: {
+        status: "PENDING",
+        companyId: "c1",
+        tripId: "t1",
+        trip: { carrier: { mpUserId: "mp-user-123", mpAccessToken: MP_TOKEN_STORED } },
+      },
       mpPreferenceId: "pref-123",
       mpPaymentId: null,
       // el reparto ya está asentado desde la preference: el webhook lo conserva
@@ -1026,6 +1031,12 @@ describe("POST /api/payments/webhook", () => {
     vi.mocked(prisma.payment.findFirst).mockResolvedValue({
       id: "pay1",
       status: "PENDING",
+      cargoItem: {
+        status: "PENDING",
+        companyId: "c1",
+        tripId: "t1",
+        trip: { carrier: { mpUserId: "mp-user-123", mpAccessToken: MP_TOKEN_STORED } },
+      },
     } as never);
     vi.mocked(prisma.payment.update).mockResolvedValue({
       id: "pay1",

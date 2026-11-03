@@ -17,7 +17,7 @@ import {
   priceRangeFor,
   rateFor,
 } from "../../lib/pricing.js";
-import { refundPayment } from "../../lib/mercadopago.js";
+import { refundPayment, resolveCarrierMpToken } from "../../lib/mercadopago.js";
 import { hoursUntilTrip, quoteCancellation } from "../../lib/cancellation.js";
 import { balanceOf } from "../payments/payments.service.js";
 import {
@@ -2031,6 +2031,13 @@ export async function processRefundRequest(cargoItemId: string): Promise<void> {
   try {
     const payment = await prisma.payment.findUnique({
       where: { cargoItemId_type: { cargoItemId, type: "DEPOSIT" } },
+      include: {
+        cargoItem: {
+          select: {
+            trip: { select: { carrier: { select: { mpUserId: true, mpAccessToken: true } } } },
+          },
+        },
+      },
     });
     if (!payment || payment.status !== "APPROVED" || !payment.mpPaymentId) {
       // no hay pago reembolsable: marcar completado (no hay nada que hacer)
@@ -2042,7 +2049,13 @@ export async function processRefundRequest(cargoItemId: string): Promise<void> {
     }
 
     const targetAmount = Number(req.targetAmount);
-    const refundedAmount = await refundPayment(payment.mpPaymentId, targetAmount);
+    // el pago vive en la cuenta MP del transportista: se devuelve con su token
+    const { accessToken } = resolveCarrierMpToken(payment.cargoItem.trip.carrier);
+    const refundedAmount = await refundPayment(
+      payment.mpPaymentId,
+      targetAmount,
+      accessToken
+    );
 
     // actualizar Payment con lo que MP confirmó
     const fullyRefunded = refundedAmount >= Number(payment.amount);

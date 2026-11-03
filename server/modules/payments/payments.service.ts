@@ -1,7 +1,6 @@
 import { Prisma } from "@prisma/client";
 import type { PaymentType } from "@prisma/client";
 import { prisma } from "../../lib/prisma.js";
-import { decryptSecret } from "../../lib/crypto.js";
 import {
   createCheckoutPreference,
   createTestPreference,
@@ -9,6 +8,7 @@ import {
   fetchPaymentState,
   getPaymentDetails,
   refundPayment,
+  resolveCarrierMpToken,
   toPaymentState,
 } from "../../lib/mercadopago.js";
 import type { MpPaymentDetails } from "../../lib/mercadopago.js";
@@ -170,18 +170,8 @@ export async function createPaymentPreference(
     }
   }
 
-  // El token se descifra acá, en el último momento antes de pegarle a la API
-  // de Mercado Pago, y no antes: en cualquier log o error de la base queda
-  // siempre el sobre cifrado.
-  const carrierMpUserId = item.trip.carrier.mpUserId;
-  if (!carrierMpUserId || !item.trip.carrier.mpAccessToken) {
-    throw new AppError(
-      "el transportista de este viaje no tiene cuenta de Mercado Pago conectada",
-      409,
-      "MP_ACCOUNT_NOT_CONNECTED"
-    );
-  }
-  const carrierMpAccessToken = decryptSecret(item.trip.carrier.mpAccessToken);
+  const { mpUserId: carrierMpUserId, accessToken: carrierMpAccessToken } =
+    resolveCarrierMpToken(item.trip.carrier);
 
   const fee = splitPlatformFee(item, item.trip.platformFeePercent, type);
 
@@ -229,10 +219,14 @@ export async function handlePaymentNotification(input: PaymentNotificationInput)
   const payment = await findPaymentForNotification(input);
   if (!payment) return { updated: false, status: null };
 
+  // el pago vive en la cuenta MP del transportista: se consulta y se reembolsa
+  // con su token. Si desconectó la cuenta, el error sube y MP reintenta.
+  const { accessToken } = resolveCarrierMpToken(payment.cargoItem.trip.carrier);
+
   const state = input.status
     ? toPaymentState(input.status)
     : input.mpPaymentId
-      ? await fetchPaymentState(input.mpPaymentId)
+      ? await fetchPaymentState(input.mpPaymentId, accessToken)
       : null;
 
   if (!state) return { updated: false, status: payment.status };
@@ -246,7 +240,11 @@ export async function handlePaymentNotification(input: PaymentNotificationInput)
   // Acá va entero a propósito: el retiro ya pasó y la seña estaba sin cobrar, así
   // que la ventana de cancelación no aplica (no se cobró nada).
   if (state === "APPROVED" && payment.cargoItem.status === "CANCELLED" && mpPaymentId) {
-    const refunded = await refundPayment(mpPaymentId, Number(payment.amount));
+    const refunded = await refundPayment(
+      mpPaymentId,
+      Number(payment.amount),
+      accessToken
+    );
     const updated = await prisma.payment.update({
       where: { id: payment.id },
       data: { status: "REFUNDED", mpPaymentId, refundedAmount: refunded },
@@ -289,7 +287,16 @@ export async function handlePaymentNotification(input: PaymentNotificationInput)
 // companyId y el viaje se piden para poder avisarle a la empresa qué se acreditó.
 const LOOKUP = {
   include: {
-    cargoItem: { select: { status: true, companyId: true, tripId: true } },
+    cargoItem: {
+      select: {
+        status: true,
+        companyId: true,
+        tripId: true,
+        trip: {
+          select: { carrier: { select: { mpUserId: true, mpAccessToken: true } } },
+        },
+      },
+    },
   },
 } as const;
 
@@ -436,7 +443,8 @@ export async function tracePayment(mpPaymentId: string, viewer: PaymentViewer) {
           mpPreferenceId: local.mpPreferenceId,
           platformFeeAmount: local.platformFeeAmount,
           carrierAmount: local.carrierAmount,
-          refundedAmount: local.refundedAmount === null ? null : Number(local.refundedAmount),
+          refundedAmount:
+            local.refundedAmount === null ? null : Number(local.refundedAmount),
           cargoItemId: local.cargoItem.id,
           tripId: local.cargoItem.tripId,
         }

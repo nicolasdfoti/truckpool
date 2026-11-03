@@ -70,7 +70,7 @@ describe("refundPayment", () => {
     total
       .mockResolvedValueOnce(totalDevuelve(0))
       .mockResolvedValueOnce(totalDevuelve(50));
-    const refunded = await refundPayment(MP_ID, 50);
+    const refunded = await refundPayment(MP_ID, 50, "token-de-prueba");
     expect(pedidos()).toEqual([50]);
     expect(refunded).toBe(50);
   });
@@ -81,7 +81,7 @@ describe("refundPayment", () => {
     // con el mismo objetivo. Antes esto pedía 50 otra vez y devolvía el 100%
     // de una seña que sólo debía recibir la mitad.
     total.mockResolvedValue(totalDevuelve(50));
-    const refunded = await refundPayment(MP_ID, 50);
+    const refunded = await refundPayment(MP_ID, 50, "token-de-prueba");
     expect(create).not.toHaveBeenCalled();
     expect(refunded).toBe(50);
   });
@@ -90,21 +90,21 @@ describe("refundPayment", () => {
     total
       .mockResolvedValueOnce(totalDevuelve(30))
       .mockResolvedValueOnce(totalDevuelve(50));
-    const refunded = await refundPayment(MP_ID, 50);
+    const refunded = await refundPayment(MP_ID, 50, "token-de-prueba");
     expect(pedidos()).toEqual([20]);
     expect(refunded).toBe(50);
   });
 
   it("no pide nada si ya se devolvió de más que el objetivo", async () => {
     total.mockResolvedValue(totalDevuelve(80));
-    const refunded = await refundPayment(MP_ID, 50);
+    const refunded = await refundPayment(MP_ID, 50, "token-de-prueba");
     expect(create).not.toHaveBeenCalled();
     expect(refunded).toBe(80);
   });
 
   it("ignora diferencias de redondeo de un centavo", async () => {
     total.mockResolvedValue(totalDevuelve(49.999999));
-    const refunded = await refundPayment(MP_ID, 50);
+    const refunded = await refundPayment(MP_ID, 50, "token-de-prueba");
     expect(create).not.toHaveBeenCalled();
     expect(refunded).toBe(49.999999);
   });
@@ -114,20 +114,24 @@ describe("refundPayment", () => {
     total
       .mockResolvedValueOnce(totalDevuelve(0))
       .mockResolvedValueOnce(totalDevuelve(50));
-    const refunded = await refundPayment(MP_ID, 50);
+    const refunded = await refundPayment(MP_ID, 50, "token-de-prueba");
     expect(refunded).toBe(50);
   });
 
   it("propaga el error si el create falla y el total no cubrió", async () => {
     create.mockRejectedValue(new Error("timeout de red"));
     total.mockResolvedValue(totalDevuelve(0));
-    await expect(refundPayment(MP_ID, 50)).rejects.toBeInstanceOf(AppError);
+    await expect(refundPayment(MP_ID, 50, "token-de-prueba")).rejects.toBeInstanceOf(
+      AppError
+    );
   });
 
   it("no emite ningún reembolso si no puede leer cuánto se devolvió", async () => {
     // fail closed: a ciegas, pedir de más es el resultado probable
     total.mockRejectedValue(new Error("MP no responde"));
-    await expect(refundPayment(MP_ID, 50)).rejects.toBeInstanceOf(AppError);
+    await expect(refundPayment(MP_ID, 50, "token-de-prueba")).rejects.toBeInstanceOf(
+      AppError
+    );
     expect(create).not.toHaveBeenCalled();
   });
 
@@ -137,14 +141,32 @@ describe("refundPayment", () => {
     total
       .mockResolvedValueOnce(totalDevuelve(0))
       .mockResolvedValueOnce(totalDevuelve(50));
-    await refundPayment(MP_ID, 50);
+    await refundPayment(MP_ID, 50, "token-de-prueba");
     expect(pedidos()).toEqual([50]);
 
     // segundo intento, ahora MP ya reporta 50
     total.mockResolvedValue(totalDevuelve(50));
-    const refunded = await refundPayment(MP_ID, 50);
+    const refunded = await refundPayment(MP_ID, 50, "token-de-prueba");
     expect(pedidos()).toEqual([50]);
     expect(refunded).toBe(50);
+  });
+});
+
+describe("refundPayment con el token del transportista", () => {
+  it("consulta y reembolsa con el token recibido, sin MP_ACCESS_TOKEN", async () => {
+    delete process.env.MP_ACCESS_TOKEN;
+    total
+      .mockResolvedValueOnce(totalDevuelve(0))
+      .mockResolvedValueOnce(totalDevuelve(50));
+
+    const refunded = await refundPayment(MP_ID, 50, "APP_USR-token-del-carrier");
+
+    expect(refunded).toBe(50);
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(mpConfigs.length).toBeGreaterThan(0);
+    expect(mpConfigs.every((c) => c.accessToken === "APP_USR-token-del-carrier")).toBe(
+      true
+    );
   });
 });
 
@@ -446,7 +468,9 @@ describe("fetchPaymentState", () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     paymentGet.mockRejectedValue(errorDelSdk());
 
-    const err = await fetchPaymentState("mp-77").catch((e: unknown) => e);
+    const err = await fetchPaymentState("mp-77", "token-de-prueba").catch(
+      (e: unknown) => e
+    );
 
     expect(err).toBeInstanceOf(AppError);
     expect(err).toMatchObject({ statusCode: 502, code: "MP_ERROR" });
@@ -459,7 +483,7 @@ describe("fetchPaymentState", () => {
   it("una respuesta sin id es MP_INVALID_RESPONSE", async () => {
     paymentGet.mockResolvedValue({ status: "approved" });
 
-    await expect(fetchPaymentState("mp-77")).rejects.toMatchObject({
+    await expect(fetchPaymentState("mp-77", "token-de-prueba")).rejects.toMatchObject({
       statusCode: 502,
       code: "MP_INVALID_RESPONSE",
     });

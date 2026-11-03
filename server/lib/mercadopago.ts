@@ -7,6 +7,7 @@ import {
   Preference,
 } from "mercadopago";
 import { AppError } from "./errors.js";
+import { decryptSecret } from "./crypto.js";
 
 export type MpPaymentState = "PENDING" | "APPROVED" | "REJECTED" | "REFUNDED";
 
@@ -32,6 +33,31 @@ function mpConfig() {
     );
   }
   return new MercadoPagoConfig({ accessToken });
+}
+
+/**
+ * Credenciales MP del transportista dueño del viaje, con el token descifrado.
+ *
+ * Los pagos se crean en la cuenta del transportista (marketplace), así que
+ * consultarlos o reembolsarlos con el token de la plataforma da 404: todo lo que
+ * toca un pago concreto pasa por acá. El token se descifra en el último momento
+ * para que en cualquier log o error de la base quede siempre el sobre cifrado.
+ */
+export function resolveCarrierMpToken(carrier: {
+  mpUserId: string | null;
+  mpAccessToken: string | null;
+}): { mpUserId: string; accessToken: string } {
+  if (!carrier.mpUserId || !carrier.mpAccessToken) {
+    throw new AppError(
+      "el transportista de este viaje no tiene cuenta de Mercado Pago conectada",
+      409,
+      "MP_ACCOUNT_NOT_CONNECTED"
+    );
+  }
+  return {
+    mpUserId: carrier.mpUserId,
+    accessToken: decryptSecret(carrier.mpAccessToken),
+  };
 }
 
 /** La URL pública de la API, de donde salen los back_urls y el webhook. */
@@ -309,9 +335,10 @@ export async function createTestPreference(input: {
 }
 
 export async function fetchPaymentState(
-  mpPaymentId: string
+  mpPaymentId: string,
+  accessToken: string
 ): Promise<MpPaymentState | null> {
-  const paymentClient = new Payment(mpConfig());
+  const paymentClient = new Payment(new MercadoPagoConfig({ accessToken }));
 
   let payment;
   try {
@@ -503,13 +530,14 @@ export async function getPaymentDetails(mpPaymentId: string): Promise<MpPaymentD
  */
 export async function refundPayment(
   mpPaymentId: string,
-  amount: number
+  amount: number,
+  accessToken: string
 ): Promise<number> {
   // cuánto le devolvimos HASTA AHORA, antes de pedir nada (ver el comentario de
   // arriba: el reintento de la transacción es lo que hace falta cubrir acá)
   let already: number;
   try {
-    already = await refundedAmount(mpPaymentId);
+    already = await refundedAmount(mpPaymentId, accessToken);
   } catch {
     // a ciegas no se devuelve plata: si no se puede leer el estado, se corta y
     // la empresa reintenta, en vez de arriesgar un reembolso duplicado
@@ -525,18 +553,18 @@ export async function refundPayment(
   if (pending < CENT) return already;
 
   try {
-    await new PaymentRefund(mpConfig()).create({
+    await new PaymentRefund(new MercadoPagoConfig({ accessToken })).create({
       payment_id: mpPaymentId,
       body: { amount: pending },
     });
   } catch (err) {
     // puede haber funcionado igual y fallado el response: se vuelve a preguntar
-    const refunded = await refundedAmount(mpPaymentId).catch(() => 0);
+    const refunded = await refundedAmount(mpPaymentId, accessToken).catch(() => 0);
     if (refunded + CENT >= amount) return refunded;
     if (err instanceof AppError) throw err;
     throw new AppError("no pudimos devolver el dinero con Mercado Pago", 502, "MP_ERROR");
   }
-  return refundedAmount(mpPaymentId);
+  return refundedAmount(mpPaymentId, accessToken);
 }
 
 /** tolerancia de un centavo: evita pedir reembolsos de ruido por redondeo */
@@ -547,8 +575,13 @@ function round2(value: number): number {
 }
 
 /** cuánto le devolvimos a Mercado Pago hasta ahora por ese pago */
-export async function refundedAmount(mpPaymentId: string): Promise<number> {
-  const res = await new PaymentRefund(mpConfig()).total({ payment_id: mpPaymentId });
+export async function refundedAmount(
+  mpPaymentId: string,
+  accessToken: string
+): Promise<number> {
+  const res = await new PaymentRefund(new MercadoPagoConfig({ accessToken })).total({
+    payment_id: mpPaymentId,
+  });
   return Number(res.amount ?? 0);
 }
 

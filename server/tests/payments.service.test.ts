@@ -30,7 +30,10 @@ vi.mock("../lib/notifications.js", () => ({
   notifyUsers: vi.fn().mockResolvedValue(1),
 }));
 
-vi.mock("../lib/mercadopago", () => ({
+vi.mock("../lib/mercadopago", async (importOriginal) => ({
+  // el resolver del token es lógica pura (descifrar): va el real
+  resolveCarrierMpToken: (await importOriginal<typeof import("../lib/mercadopago.js")>())
+    .resolveCarrierMpToken,
   createCheckoutPreference: vi.fn(),
   fetchPaymentState: vi.fn(),
   refundPayment: vi.fn(),
@@ -475,7 +478,8 @@ describe("handlePaymentNotification", () => {
       mpPaymentId: "mp-79",
     });
 
-    expect(mp.fetchPaymentState).toHaveBeenCalledWith("mp-79");
+    // el pago vive en la cuenta del transportista: se consulta con su token
+    expect(mp.fetchPaymentState).toHaveBeenCalledWith("mp-79", MP_TOKEN_PLAIN);
     expect(prisma.payment.update).toHaveBeenCalledWith({
       where: { id: "pay1" },
       data: {
@@ -486,6 +490,26 @@ describe("handlePaymentNotification", () => {
       },
     });
     expect(result.status).toBe("APPROVED");
+  });
+
+  it("sin cuenta MP del transportista no consulta ni toca el pago (MP reintenta)", async () => {
+    vi.mocked(prisma.payment.findFirst).mockResolvedValue(
+      basePayment({
+        cargoItem: {
+          ...basePayment().cargoItem,
+          trip: {
+            platformFeePercent: 10,
+            carrier: { mpUserId: null, mpAccessToken: null },
+          },
+        },
+      }) as never
+    );
+
+    await expect(
+      handlePaymentNotification({ paymentId: "pay1", mpPaymentId: "mp-79" })
+    ).rejects.toMatchObject({ code: "MP_ACCOUNT_NOT_CONNECTED" });
+    expect(mp.fetchPaymentState).not.toHaveBeenCalled();
+    expect(prisma.payment.update).not.toHaveBeenCalled();
   });
 
   it("no actualiza nada si no hay estado determinable", async () => {
@@ -507,7 +531,9 @@ describe("handlePaymentNotification", () => {
 
   it("devuelve el pago si la empresa retiró la carga mientras estaba en vuelo", async () => {
     vi.mocked(prisma.payment.findFirst).mockResolvedValue(
-      basePayment({ cargoItem: { status: "CANCELLED" } }) as never
+      basePayment({
+        cargoItem: { ...basePayment().cargoItem, status: "CANCELLED" },
+      }) as never
     );
     vi.mocked(prisma.payment.update).mockResolvedValue(
       basePayment({ status: "REFUNDED", mpPaymentId: "mp-77" }) as never
@@ -519,7 +545,7 @@ describe("handlePaymentNotification", () => {
       status: "approved",
     });
 
-    expect(mp.refundPayment).toHaveBeenCalledWith("mp-77", 100);
+    expect(mp.refundPayment).toHaveBeenCalledWith("mp-77", 100, MP_TOKEN_PLAIN);
     expect(prisma.payment.update).toHaveBeenCalledWith({
       where: { id: "pay1" },
       data: { status: "REFUNDED", mpPaymentId: "mp-77", refundedAmount: 100 },
