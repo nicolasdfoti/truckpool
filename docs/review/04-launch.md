@@ -61,7 +61,7 @@ van a L1 (mismo router) · lotes nuevos L9 (OAuth MP, CUIT, recuperar contraseñ
 Archivos: `modules/payments/payments.{controller,service,routes}.ts`, `lib/mercadopago.ts`,
 `src/app.ts`. Tests: `tests/payments.service.test.ts`, `tests/app.test.ts`, nuevo `tests/mercadopago.test.ts`.
 - [ ] Ignorar `data.status` y `?payment_id`/`?preference_id`; buscar solo por el `data.id` firmado y pedir el estado a MP — U2 — `payments.controller.ts:51-61`, `payments.service.ts:228-318` — test: firma válida + `status=approved` falso no aprueba; query manipulada se ignora.
-- [ ] Rechazar `ts` fuera de ±5 min — U2 — `lib/mercadopago.ts:544-566` — test: `ts` viejo → 401; actual → 200.
+- [x] Rechazar `ts` fuera de ±5 min — U2 — `lib/mercadopago.ts:544-566` — test: `ts` viejo → 401; actual → 200.
 - [ ] Máquina de estados (`PENDING→APPROVED|REJECTED`, `APPROVED→REFUNDED`; conservar el CAS de reintento de la preferencia); el resto se ignora y se loguea — U3 — `payments.service.ts:257-260` — test: APPROVED→REJECTED y REFUNDED→APPROVED no cambian nada.
 - [ ] Rama CANCELLED: no reembolsar si ya hay `RefundRequest`/`refundedAmount`; monto según la política congelada — U4 — `payments.service.ts:248-249` — test: retiro a 30 h + `payment.updated` repetido ×3 → total reembolsado = 50 %.
 - [ ] `fetchPaymentState`, `refundPayment`, `refundedAmount` con el token descifrado del carrier del pago (mismo resolver que `createCheckoutPreference`) — U5 — `lib/mercadopago.ts:25,314,510,533` — test: webhook **sin** `data.status` consulta con el token del carrier.

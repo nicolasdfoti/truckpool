@@ -569,4 +569,14 @@ export function verifyWebhookSignature(input: {
   if (!safeEqual(expected, v1.toLowerCase())) {
     throw new AppError("firma de Mercado Pago inválida", 401, "INVALID_SIGNATURE");
   }
+
+  // una firma válida no alcanza: sin frescura, una notificación capturada se
+  // puede reenviar para siempre. MP manda el ts en segundos o en milisegundos.
+  const tsMs = ts.length >= 13 ? Number(ts) : Number(ts) * 1000;
+  if (!Number.isFinite(tsMs) || Math.abs(Date.now() - tsMs) > WEBHOOK_MAX_SKEW_MS) {
+    throw new AppError("firma de Mercado Pago inválida", 401, "INVALID_SIGNATURE");
+  }
 }
+
+/** cuánto puede diferir el `ts` firmado del reloj del server */
+const WEBHOOK_MAX_SKEW_MS = 5 * 60_000;

@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { createHmac } from "node:crypto";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 // El SDK de Mercado Pago se reemplaza entero: acá se prueba la lógica de
 // idempotencia de refundPayment, no la integración con MP.
@@ -33,9 +34,8 @@ vi.mock("mercadopago", () => ({
   },
 }));
 
-const { checkAccountConnection, createTestPreference, refundPayment } = await import(
-  "../lib/mercadopago.js"
-);
+const { checkAccountConnection, createTestPreference, refundPayment, verifyWebhookSignature } =
+  await import("../lib/mercadopago.js");
 const { AppError } = await import("../lib/errors.js");
 
 const MP_ID = "mp-77";
@@ -353,5 +353,54 @@ describe("createTestPreference", () => {
     expect(preferenceCreate).not.toHaveBeenCalled();
 
     if (previous !== undefined) process.env.MP_ACCESS_TOKEN = previous;
+  });
+});
+
+describe("verifyWebhookSignature", () => {
+  const secret = "whsec-de-prueba";
+  const ahora = new Date("2026-11-03T12:00:00.000Z");
+
+  /** firma HMAC válida para ese ts: lo único que puede fallar es la frescura */
+  const firmar = (ts: string) => {
+    const manifest = `id:mp-77;request-id:req-1;ts:${ts};`;
+    const v1 = createHmac("sha256", secret).update(manifest).digest("hex");
+    return {
+      signatureHeader: `ts=${ts},v1=${v1}`,
+      requestIdHeader: "req-1",
+      dataId: "mp-77",
+    };
+  };
+  const segundos = (ms: number) => String(Math.floor(ms / 1000));
+
+  beforeEach(() => {
+    process.env.MP_WEBHOOK_SECRET = secret;
+    vi.useFakeTimers();
+    vi.setSystemTime(ahora);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("acepta un ts actual", () => {
+    expect(() => verifyWebhookSignature(firmar(segundos(ahora.getTime())))).not.toThrow();
+  });
+
+  it("acepta un ts actual en milisegundos", () => {
+    expect(() => verifyWebhookSignature(firmar(String(ahora.getTime())))).not.toThrow();
+  });
+
+  it("rechaza un ts de hace más de 5 minutos (reenvío de una notificación vieja)", () => {
+    const viejo = segundos(ahora.getTime() - 6 * 60_000);
+    expect(() => verifyWebhookSignature(firmar(viejo))).toThrow(
+      expect.objectContaining({ statusCode: 401, code: "INVALID_SIGNATURE" })
+    );
+  });
+
+  it("rechaza un ts de más de 5 minutos en el futuro", () => {
+    const futuro = segundos(ahora.getTime() + 6 * 60_000);
+    expect(() => verifyWebhookSignature(firmar(futuro))).toThrow(
+      expect.objectContaining({ statusCode: 401, code: "INVALID_SIGNATURE" })
+    );
   });
 });

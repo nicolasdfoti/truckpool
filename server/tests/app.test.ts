@@ -539,7 +539,7 @@ describe("POST /api/trips/:id/cargo-items y la fecha del viaje", () => {
 });
 
 function signedWebhook(dataId: string, secret: string, requestId = "req-1") {
-  const ts = "1756200000";
+  const ts = String(Math.floor(Date.now() / 1000));
   const manifest = `id:${dataId};request-id:${requestId};ts:${ts};`;
   const v1 = createHmac("sha256", secret).update(manifest).digest("hex");
   return { "x-signature": `ts=${ts},v1=${v1}`, "x-request-id": requestId };
