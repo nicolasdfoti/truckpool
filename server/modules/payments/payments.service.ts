@@ -247,22 +247,36 @@ export async function handlePaymentNotification(input: PaymentNotificationInput)
   if (!state) return { updated: false, status: payment.status };
 
   // La empresa puede retirar la carga mientras el pago está en vuelo (o antes de
-  // que le llegue la notificación). Si el pago se aprueba igual, se devuelve el
-  // dinero en el momento: no puede quedar una carga retirada con el pago cobrado.
-  // Es la excepción a la ventana de cancelación: acá el retiro ya pasó y el
-  // Acá va entero a propósito: el retiro ya pasó y la seña estaba sin cobrar, así
-  // que la ventana de cancelación no aplica (no se cobró nada).
+  // que le llegue la notificación). Si el pago se aprueba igual, se devuelve en
+  // el momento: no puede quedar una carga retirada con el pago cobrado.
+  //
+  // Solo cuando el pago ENTRA a APPROVED acá: si ya estaba cobrado al retirar,
+  // la política de cancelación se aplicó y quedó congelada (RefundRequest del
+  // outbox y cancellationFeeAmount). Reembolsar de nuevo acá devolvería la
+  // parte retenida, y MP repite el webhook varias veces por el mismo pago.
   if (state === "APPROVED" && payment.cargoItem.status === "CANCELLED") {
-    const refunded = await refundPayment(
-      mpPaymentId,
-      Number(payment.amount),
-      accessToken
-    );
-    const updated = await prisma.payment.update({
-      where: { id: payment.id },
-      data: { status: "REFUNDED", mpPaymentId, refundedAmount: refunded },
+    const yaCobradoAlRetirar =
+      payment.status === "APPROVED" || payment.status === "REFUNDED";
+    const outbox = await prisma.refundRequest.findUnique({
+      where: { cargoItemId: payment.cargoItemId },
     });
-    return { updated: true, status: updated.status };
+    if (!yaCobradoAlRetirar && !outbox && payment.refundedAmount === null) {
+      // la seña no estaba cobrada al retirar: la penalidad congelada es 0 y
+      // vuelve entera; igual se descuenta lo congelado para no depender de eso
+      const target = new Prisma.Decimal(payment.amount)
+        .minus(payment.cargoItem.cancellationFeeAmount ?? 0)
+        .toNumber();
+      const refunded = await refundPayment(mpPaymentId, target, accessToken);
+      const updated = await prisma.payment.update({
+        where: { id: payment.id },
+        data: {
+          status: refunded >= Number(payment.amount) ? "REFUNDED" : "APPROVED",
+          mpPaymentId,
+          refundedAmount: refunded,
+        },
+      });
+      return { updated: true, status: updated.status };
+    }
   }
 
   const updated = await prisma.payment.update({
@@ -305,6 +319,7 @@ const LOOKUP = {
         status: true,
         companyId: true,
         tripId: true,
+        cancellationFeeAmount: true,
         trip: {
           select: { carrier: { select: { mpUserId: true, mpAccessToken: true } } },
         },

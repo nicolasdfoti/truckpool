@@ -14,6 +14,7 @@ import { notifyUsers } from "../lib/notifications.js";
 vi.mock("../lib/prisma", () => ({
   prisma: {
     cargoItem: { findUnique: vi.fn() },
+    refundRequest: { findUnique: vi.fn() },
     payment: {
       findUnique: vi.fn(),
       findFirst: vi.fn(),
@@ -373,6 +374,7 @@ describe("handlePaymentNotification", () => {
       basePayment({ status: "APPROVED", mpPaymentId: "mp-77" }) as never
     );
     vi.mocked(mp.refundPayment).mockResolvedValue(100);
+    vi.mocked(prisma.refundRequest.findUnique).mockResolvedValue(null);
     mpDice("APPROVED");
   });
 
@@ -558,7 +560,11 @@ describe("handlePaymentNotification", () => {
   it("devuelve el pago si la empresa retiró la carga mientras estaba en vuelo", async () => {
     vi.mocked(prisma.payment.findFirst).mockResolvedValue(
       basePayment({
-        cargoItem: { ...basePayment().cargoItem, status: "CANCELLED" },
+        cargoItem: {
+          ...basePayment().cargoItem,
+          status: "CANCELLED",
+          cancellationFeeAmount: new Prisma.Decimal("0.00"),
+        },
       }) as never
     );
     vi.mocked(prisma.payment.update).mockResolvedValue(
@@ -573,6 +579,48 @@ describe("handlePaymentNotification", () => {
       data: { status: "REFUNDED", mpPaymentId: "mp-77", refundedAmount: 100 },
     });
     expect(result).toEqual({ updated: true, status: "REFUNDED" });
+  });
+
+  /** carga retirada con la seña ya cobrada: la política quedó congelada al retirar */
+  const retiradaConSeñaPaga = (fee: string, refundedAmount: string | null) =>
+    basePayment({
+      status: "APPROVED",
+      mpPaymentId: "mp-77",
+      refundedAmount: refundedAmount === null ? null : new Prisma.Decimal(refundedAmount),
+      cargoItem: {
+        ...basePayment().cargoItem,
+        status: "CANCELLED",
+        cancellationFeeAmount: new Prisma.Decimal(fee),
+      },
+    });
+
+  it("retiro a 30 h + payment.updated ×3: no reembolsa más que el 50 % de la política", async () => {
+    // el retiro dejó una RefundRequest por 50 y el outbox ya devolvió 50; MP
+    // sigue informando el pago como approved (parcialmente reembolsado)
+    vi.mocked(prisma.payment.findFirst).mockResolvedValue(
+      retiradaConSeñaPaga("50.00", "50.00") as never
+    );
+    vi.mocked(prisma.refundRequest.findUnique).mockResolvedValue({
+      id: "rr1",
+      cargoItemId: "i1",
+      targetAmount: new Prisma.Decimal("50.00"),
+      status: "COMPLETED",
+    } as never);
+
+    for (let i = 0; i < 3; i++) await handlePaymentNotification(notificacion);
+
+    expect(mp.refundPayment).not.toHaveBeenCalled();
+  });
+
+  it("retiro a menos de 24 h: la seña se retiene entera aunque MP repita el webhook", async () => {
+    // reembolso 0 → no hubo RefundRequest ni refundedAmount
+    vi.mocked(prisma.payment.findFirst).mockResolvedValue(
+      retiradaConSeñaPaga("100.00", null) as never
+    );
+
+    await handlePaymentNotification(notificacion);
+
+    expect(mp.refundPayment).not.toHaveBeenCalled();
   });
 
   it("no devuelve nada si la carga sigue pendiente de confirmar", async () => {
