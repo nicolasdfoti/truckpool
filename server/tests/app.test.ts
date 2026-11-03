@@ -2921,11 +2921,22 @@ describe("GET /api/trips/cancellation-quote", () => {
    * el front arma el texto de confirmación con esto y no con una copia propia.
    */
   it("devuelve lo mismo que la función que usa el retiro real", async () => {
-    for (const hours of [72, 36, 2, 48, 24]) {
-      const tripDate = inHours(hours);
-      const res = await ask(87_000, tripDate);
-      const real = quoteCancellation(87_000, hoursUntilTrip(tripDate));
-      expect(res.body).toEqual(real);
+    // Date congelado: 48 y 24 caen justo en el borde de la ventana. Con el reloj
+    // real, el server y la expectativa leían la hora en momentos distintos; si el
+    // request entraba en el mismo milisegundo que inHours(24), el server veía 24 h
+    // exactas (PARTIAL_REFUND) y la expectativa, un instante después, menos de
+    // 24 h (NO_REFUND). Solo se congela Date: supertest sigue con timers reales.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-03T12:00:00.000Z"));
+    try {
+      for (const hours of [72, 36, 2, 48, 24]) {
+        const tripDate = inHours(hours);
+        const res = await ask(87_000, tripDate);
+        const real = quoteCancellation(87_000, hoursUntilTrip(tripDate));
+        expect(res.body).toEqual(real);
+      }
+    } finally {
+      vi.useRealTimers();
     }
   });
 
