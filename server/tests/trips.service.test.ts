@@ -365,9 +365,17 @@ describe("listOpenTrips", () => {
     });
 
     it("el viaje disponible llega con acceptsCargo", async () => {
-      const result = await tripsService.listOpenTrips({}, AHORA);
+      // acceptsCargo lo calcula el mapper con el reloj del sistema, no con el
+      // `ahora` que recibe listOpenTrips: se congela en AHORA para que el
+      // fixture no dependa del día en que corre el test.
+      freezeClockAt(AHORA.toISOString());
+      try {
+        const result = await tripsService.listOpenTrips({}, AHORA);
 
-      expect(result.map((trip) => trip.acceptsCargo)).toEqual([true]);
+        expect(result.map((trip) => trip.acceptsCargo)).toEqual([true]);
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 });
@@ -734,7 +742,7 @@ describe("cancelCargoItem con seña pagada", () => {
         carrier: baseCarrier(),
         origin: "Córdoba",
         destination: "Rosario",
-        date: new Date("2026-10-03T00:00:00.000Z"),
+        date: tripDateIn(72),
         capacityTotal: 30,
         cargoItems: [
           { id: "i1", volume: 10, status: "PENDING" },
