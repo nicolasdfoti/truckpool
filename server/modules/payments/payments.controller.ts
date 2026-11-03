@@ -54,11 +54,11 @@ export async function postPaymentWebhook(req: Request, res: Response) {
     dataId: body.data?.id,
   });
 
+  // data.status y ?preference_id no están firmados: no se leen. ?payment_id es
+  // solo una pista para encontrar el pago (ver handlePaymentNotification).
   const result = await paymentsService.handlePaymentNotification({
-    preferenceId: getQuery(req, "preference_id") ?? getQuery(req, "pref_id"),
-    paymentId: getQuery(req, "payment_id"),
     mpPaymentId: body.data?.id,
-    status: body.data?.status,
+    hintPaymentId: getQuery(req, "payment_id"),
   });
 
   res.json({ received: true, ...result });

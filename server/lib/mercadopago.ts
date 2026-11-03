@@ -146,10 +146,6 @@ export async function checkAccountConnection(): Promise<MpConnectionCheck> {
   };
 }
 
-export function toPaymentState(status: string | undefined): MpPaymentState {
-  return mapMpStatus(status) ?? "PENDING";
-}
-
 export type PreferenceInput = {
   paymentId: string;
   cargoItemId: string;
@@ -334,10 +330,15 @@ export async function createTestPreference(input: {
   }
 }
 
+/**
+ * Estado de un pago según Mercado Pago, más su `external_reference` (el
+ * `Payment.id` interno que mandamos al crear la preference): es lo que permite
+ * comprobar que el pago de MP corresponde al pago local que se va a mover.
+ */
 export async function fetchPaymentState(
   mpPaymentId: string,
   accessToken: string
-): Promise<MpPaymentState | null> {
+): Promise<{ state: MpPaymentState | null; externalReference: string | null }> {
   const paymentClient = new Payment(new MercadoPagoConfig({ accessToken }));
 
   let payment;
@@ -358,7 +359,10 @@ export async function fetchPaymentState(
       "MP_INVALID_RESPONSE"
     );
   }
-  return mapMpStatus(payment.status);
+  return {
+    state: mapMpStatus(payment.status),
+    externalReference: payment.external_reference ?? null,
+  };
 }
 
 /**

@@ -9,7 +9,6 @@ import {
   getPaymentDetails,
   refundPayment,
   resolveCarrierMpToken,
-  toPaymentState,
 } from "../../lib/mercadopago.js";
 import type { MpPaymentDetails } from "../../lib/mercadopago.js";
 import {
@@ -208,30 +207,44 @@ export async function createPaymentPreference(
   };
 }
 
+/**
+ * Lo que el webhook puede aportar. Solo `mpPaymentId` (el `data.id`) está
+ * cubierto por la firma; `hintPaymentId` es el `?payment_id` que armamos en el
+ * `notification_url` y sirve únicamente para encontrar el pago candidato (y con
+ * él el token del transportista) la primera vez que llega su notificación.
+ */
 export type PaymentNotificationInput = {
-  preferenceId?: string | undefined;
-  paymentId?: string | undefined;
-  mpPaymentId?: string | undefined;
-  status?: string | undefined;
+  mpPaymentId: string | undefined;
+  hintPaymentId: string | undefined;
 };
 
 export async function handlePaymentNotification(input: PaymentNotificationInput) {
-  const payment = await findPaymentForNotification(input);
-  if (!payment) return { updated: false, status: null };
+  const { mpPaymentId } = input;
+  if (!mpPaymentId) return { updated: false, status: null };
+
+  const payment = await findPaymentForNotification(mpPaymentId, input.hintPaymentId);
+  if (!payment) {
+    // 200 y no 404: un pago que no es nuestro (p. ej. una preference de prueba)
+    // no va a aparecer nunca, y MP reintentaría para siempre
+    console.warn("[payments] webhook de un pago desconocido: se ignora");
+    return { updated: false, status: null };
+  }
 
   // el pago vive en la cuenta MP del transportista: se consulta y se reembolsa
   // con su token. Si desconectó la cuenta, el error sube y MP reintenta.
   const { accessToken } = resolveCarrierMpToken(payment.cargoItem.trip.carrier);
 
-  const state = input.status
-    ? toPaymentState(input.status)
-    : input.mpPaymentId
-      ? await fetchPaymentState(input.mpPaymentId, accessToken)
-      : null;
+  // el estado lo dice MP, consultado con el data.id firmado; nunca el body
+  const consulta = await fetchPaymentState(mpPaymentId, accessToken);
+  if (consulta.externalReference !== payment.id) {
+    console.warn(
+      `[payments] webhook ignorado: el pago de MP no corresponde al pago ${payment.id}`
+    );
+    return { updated: false, status: payment.status };
+  }
+  const state = consulta.state;
 
   if (!state) return { updated: false, status: payment.status };
-
-  const mpPaymentId = input.mpPaymentId ?? payment.mpPaymentId;
 
   // La empresa puede retirar la carga mientras el pago está en vuelo (o antes de
   // que le llegue la notificación). Si el pago se aprueba igual, se devuelve el
@@ -239,7 +252,7 @@ export async function handlePaymentNotification(input: PaymentNotificationInput)
   // Es la excepción a la ventana de cancelación: acá el retiro ya pasó y el
   // Acá va entero a propósito: el retiro ya pasó y la seña estaba sin cobrar, así
   // que la ventana de cancelación no aplica (no se cobró nada).
-  if (state === "APPROVED" && payment.cargoItem.status === "CANCELLED" && mpPaymentId) {
+  if (state === "APPROVED" && payment.cargoItem.status === "CANCELLED") {
     const refunded = await refundPayment(
       mpPaymentId,
       Number(payment.amount),
@@ -256,7 +269,7 @@ export async function handlePaymentNotification(input: PaymentNotificationInput)
     where: { id: payment.id },
     data: {
       status: state,
-      mpPaymentId: input.mpPaymentId ?? payment.mpPaymentId,
+      mpPaymentId,
       // La comisión NO se recalcula acá: se calculó al crear la preference,
       // cuando se sabía el priceShare, la seña y si este pago era el saldo.
       // Recalcularla desde payment.amount por separado haría que el webhook
@@ -300,40 +313,18 @@ const LOOKUP = {
   },
 } as const;
 
-async function findPaymentForNotification(input: PaymentNotificationInput) {
-  if (input.preferenceId) {
-    const byPreference = await prisma.payment.findFirst({
-      where: { mpPreferenceId: input.preferenceId },
-      ...LOOKUP,
-    });
-    if (byPreference) return byPreference;
-  }
+async function findPaymentForNotification(mpPaymentId: string, hintPaymentId?: string) {
+  // ya lo conocemos por un webhook anterior: el id firmado alcanza
+  const byMpPaymentId = await prisma.payment.findFirst({
+    where: { mpPaymentId },
+    ...LOOKUP,
+  });
+  if (byMpPaymentId) return byMpPaymentId;
 
-  if (input.paymentId) {
-    const byReference = await prisma.payment.findFirst({
-      // una carga tiene dos pagos: si nos pasan solo el id de la carga asumimos
-      // que hablan de la seña, que es la que se paga antes de confirmar.
-      where: {
-        OR: [{ id: input.paymentId }, { cargoItemId: input.paymentId, type: "DEPOSIT" }],
-      },
-      ...LOOKUP,
-    });
-    if (byReference) return byReference;
-  }
-
-  if (input.mpPaymentId) {
-    const byMpPaymentId = await prisma.payment.findFirst({
-      where: { mpPaymentId: input.mpPaymentId },
-      ...LOOKUP,
-    });
-    if (byMpPaymentId) return byMpPaymentId;
-  }
-
-  if (input.preferenceId || input.paymentId) {
-    throw new PaymentNotFoundError();
-  }
-
-  return null;
+  // primera notificación de este pago: la pista solo elige el candidato, lo
+  // que vale es el external_reference que confirma MP después
+  if (!hintPaymentId) return null;
+  return prisma.payment.findFirst({ where: { id: hintPaymentId }, ...LOOKUP });
 }
 
 /**

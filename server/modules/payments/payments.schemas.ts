@@ -7,7 +7,6 @@ export const paymentWebhookSchema = z.object({
   data: z
     .object({
       id: z.string().optional(),
-      status: z.string().optional(),
     })
     .optional(),
 });

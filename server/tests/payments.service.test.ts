@@ -5,7 +5,7 @@ import {
   handlePaymentNotification,
   splitPlatformFee,
 } from "../modules/payments/payments.service.js";
-import { AppError, CargoItemNotFoundError, PaymentNotFoundError } from "../lib/errors.js";
+import { AppError, CargoItemNotFoundError } from "../lib/errors.js";
 import { prisma } from "../lib/prisma.js";
 import { encryptSecret } from "../lib/crypto.js";
 import * as mp from "../lib/mercadopago.js";
@@ -37,7 +37,6 @@ vi.mock("../lib/mercadopago", async (importOriginal) => ({
   createCheckoutPreference: vi.fn(),
   fetchPaymentState: vi.fn(),
   refundPayment: vi.fn(),
-  toPaymentState: vi.fn(),
 }));
 
 const companyUserId = "c1";
@@ -360,31 +359,26 @@ describe("createPaymentPreference", () => {
 });
 
 describe("handlePaymentNotification", () => {
+  /** lo que responde MP al consultar el pago con el token del transportista */
+  const mpDice = (state: mp.MpPaymentState | null, externalReference = "pay1") =>
+    vi.mocked(mp.fetchPaymentState).mockResolvedValue({ state, externalReference });
+
+  /** la notificación tal como la arma el controller: data.id firmado + la pista */
+  const notificacion = { mpPaymentId: "mp-77", hintPaymentId: "pay1" };
+
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(mp.toPaymentState).mockImplementation((status) => {
-      if (status === "approved") return "APPROVED";
-      if (status === "rejected") return "REJECTED";
-      if (status === "refunded") return "REFUNDED";
-      return "PENDING";
-    });
     vi.mocked(prisma.payment.findFirst).mockResolvedValue(basePayment() as never);
     vi.mocked(prisma.payment.update).mockResolvedValue(
       basePayment({ status: "APPROVED", mpPaymentId: "mp-77" }) as never
     );
     vi.mocked(mp.refundPayment).mockResolvedValue(100);
+    mpDice("APPROVED");
   });
 
-  it("marca APPROVED y guarda el mpPaymentId con un payload de ejemplo", async () => {
-    const result = await handlePaymentNotification({
-      preferenceId: "pref-123",
-      mpPaymentId: "mp-77",
-      status: "approved",
-    });
+  it("marca APPROVED con el estado que informa MP y guarda el mpPaymentId", async () => {
+    const result = await handlePaymentNotification(notificacion);
 
-    expect(prisma.payment.findFirst).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { mpPreferenceId: "pref-123" } })
-    );
     // conserva el reparto que ya estaba asentado: el webhook no recalcula la
     // comisión, se creó con el priceShare y la seña de la carga
     expect(prisma.payment.update).toHaveBeenCalledWith({
@@ -412,7 +406,7 @@ describe("handlePaymentNotification", () => {
       basePayment({ type: "BALANCE", amount: new Prisma.Decimal("400.00") }) as never
     );
 
-    await handlePaymentNotification({ paymentId: "pay1", status: "approved" });
+    await handlePaymentNotification(notificacion);
 
     expect(notifyUsers).toHaveBeenCalledWith(
       [companyUserId],
@@ -427,34 +421,31 @@ describe("handlePaymentNotification", () => {
   it("no vuelve a avisar si el pago ya estaba aprobado", async () => {
     // el webhook de Mercado Pago se repite: tres campanas por un pago son ruido
     vi.mocked(prisma.payment.findFirst).mockResolvedValue(
-      basePayment({ status: "APPROVED" }) as never
+      basePayment({ status: "APPROVED", mpPaymentId: "mp-77" }) as never
     );
 
-    await handlePaymentNotification({ paymentId: "pay1", status: "approved" });
+    await handlePaymentNotification(notificacion);
 
-    expect(prisma.payment.update).toHaveBeenCalled();
     expect(notifyUsers).not.toHaveBeenCalled();
   });
 
   it("no avisa si el pago no se aprobó", async () => {
-    vi.mocked(prisma.payment.findFirst).mockResolvedValue(
-      basePayment({ status: "REJECTED" }) as never
-    );
+    mpDice("REJECTED");
 
-    await handlePaymentNotification({ paymentId: "pay1", status: "rejected" });
+    await handlePaymentNotification(notificacion);
 
     expect(notifyUsers).not.toHaveBeenCalled();
   });
 
-  it("marca REJECTED cuando el pago fue rechazado", async () => {
+  it("marca REJECTED cuando MP informa el pago rechazado", async () => {
+    mpDice("REJECTED");
     vi.mocked(prisma.payment.update).mockResolvedValue(
       basePayment({ status: "REJECTED", mpPaymentId: "mp-78" }) as never
     );
 
     const result = await handlePaymentNotification({
-      paymentId: "pay1",
       mpPaymentId: "mp-78",
-      status: "rejected",
+      hintPaymentId: "pay1",
     });
 
     expect(prisma.payment.update).toHaveBeenCalledWith({
@@ -470,26 +461,11 @@ describe("handlePaymentNotification", () => {
     expect(result.status).toBe("REJECTED");
   });
 
-  it("consulta el estado en Mercado Pago si la notificación no lo trae", async () => {
-    vi.mocked(mp.fetchPaymentState).mockResolvedValue("APPROVED");
-
-    const result = await handlePaymentNotification({
-      paymentId: "pay1",
-      mpPaymentId: "mp-79",
-    });
+  it("consulta el estado en Mercado Pago con el token del transportista", async () => {
+    await handlePaymentNotification({ mpPaymentId: "mp-79", hintPaymentId: "pay1" });
 
     // el pago vive en la cuenta del transportista: se consulta con su token
     expect(mp.fetchPaymentState).toHaveBeenCalledWith("mp-79", MP_TOKEN_PLAIN);
-    expect(prisma.payment.update).toHaveBeenCalledWith({
-      where: { id: "pay1" },
-      data: {
-        status: "APPROVED",
-        mpPaymentId: "mp-79",
-        platformFeeAmount: 10,
-        carrierAmount: 90,
-      },
-    });
-    expect(result.status).toBe("APPROVED");
   });
 
   it("sin cuenta MP del transportista no consulta ni toca el pago (MP reintenta)", async () => {
@@ -505,28 +481,78 @@ describe("handlePaymentNotification", () => {
       }) as never
     );
 
-    await expect(
-      handlePaymentNotification({ paymentId: "pay1", mpPaymentId: "mp-79" })
-    ).rejects.toMatchObject({ code: "MP_ACCOUNT_NOT_CONNECTED" });
+    await expect(handlePaymentNotification(notificacion)).rejects.toMatchObject({
+      code: "MP_ACCOUNT_NOT_CONNECTED",
+    });
     expect(mp.fetchPaymentState).not.toHaveBeenCalled();
     expect(prisma.payment.update).not.toHaveBeenCalled();
   });
 
-  it("no actualiza nada si no hay estado determinable", async () => {
-    vi.mocked(mp.fetchPaymentState).mockResolvedValue(null);
+  it("no actualiza nada si MP no informa un estado conocido", async () => {
+    mpDice(null);
 
-    const result = await handlePaymentNotification({ paymentId: "pay1" });
+    const result = await handlePaymentNotification(notificacion);
 
     expect(prisma.payment.update).not.toHaveBeenCalled();
     expect(result).toEqual({ updated: false, status: "PENDING" });
   });
 
-  it("lanza PaymentNotFoundError si no encuentra el pago", async () => {
+  it("busca primero por el data.id firmado y no usa la pista si lo encuentra", async () => {
+    vi.mocked(prisma.payment.findFirst).mockResolvedValueOnce(
+      basePayment({ mpPaymentId: "mp-77" }) as never
+    );
+
+    await handlePaymentNotification(notificacion);
+
+    expect(prisma.payment.findFirst).toHaveBeenCalledTimes(1);
+    expect(prisma.payment.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { mpPaymentId: "mp-77" } })
+    );
+  });
+
+  it("una pista manipulada se ignora: MP dice que el pago es de otro", async () => {
+    // la query apunta a pay-ajeno, pero el external_reference que devuelve MP
+    // (consultado con el data.id firmado) es pay1
+    vi.mocked(prisma.payment.findFirst)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(basePayment({ id: "pay-ajeno" }) as never);
+
+    const result = await handlePaymentNotification({
+      mpPaymentId: "mp-77",
+      hintPaymentId: "pay-ajeno",
+    });
+
+    expect(prisma.payment.findFirst).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ where: { id: "pay-ajeno" } })
+    );
+    expect(prisma.payment.update).not.toHaveBeenCalled();
+    expect(mp.refundPayment).not.toHaveBeenCalled();
+    expect(notifyUsers).not.toHaveBeenCalled();
+    expect(result).toEqual({ updated: false, status: "PENDING" });
+  });
+
+  it("un pago desconocido se ignora con 200 (que MP no reintente para siempre)", async () => {
     vi.mocked(prisma.payment.findFirst).mockResolvedValue(null);
 
-    await expect(
-      handlePaymentNotification({ preferenceId: "pref-desconocida", status: "approved" })
-    ).rejects.toBeInstanceOf(PaymentNotFoundError);
+    const result = await handlePaymentNotification({
+      mpPaymentId: "mp-de-una-preference-de-prueba",
+      hintPaymentId: undefined,
+    });
+
+    expect(result).toEqual({ updated: false, status: null });
+    expect(mp.fetchPaymentState).not.toHaveBeenCalled();
+  });
+
+  it("sin data.id no hay nada firmado que consultar", async () => {
+    const result = await handlePaymentNotification({
+      mpPaymentId: undefined,
+      hintPaymentId: "pay1",
+    });
+
+    expect(result).toEqual({ updated: false, status: null });
+    expect(prisma.payment.findFirst).not.toHaveBeenCalled();
+    expect(mp.fetchPaymentState).not.toHaveBeenCalled();
   });
 
   it("devuelve el pago si la empresa retiró la carga mientras estaba en vuelo", async () => {
@@ -539,11 +565,7 @@ describe("handlePaymentNotification", () => {
       basePayment({ status: "REFUNDED", mpPaymentId: "mp-77" }) as never
     );
 
-    const result = await handlePaymentNotification({
-      preferenceId: "pref-123",
-      mpPaymentId: "mp-77",
-      status: "approved",
-    });
+    const result = await handlePaymentNotification(notificacion);
 
     expect(mp.refundPayment).toHaveBeenCalledWith("mp-77", 100, MP_TOKEN_PLAIN);
     expect(prisma.payment.update).toHaveBeenCalledWith({
@@ -554,11 +576,7 @@ describe("handlePaymentNotification", () => {
   });
 
   it("no devuelve nada si la carga sigue pendiente de confirmar", async () => {
-    await handlePaymentNotification({
-      preferenceId: "pref-123",
-      mpPaymentId: "mp-77",
-      status: "approved",
-    });
+    await handlePaymentNotification(notificacion);
 
     expect(mp.refundPayment).not.toHaveBeenCalled();
     expect(prisma.payment.update).toHaveBeenCalledWith({
@@ -570,29 +588,6 @@ describe("handlePaymentNotification", () => {
         carrierAmount: 90,
       },
     });
-  });
-
-  it("si le pasan solo el id de la carga asume que hablan de la seña", async () => {
-    await handlePaymentNotification({ paymentId: "i1", status: "approved" });
-
-    expect(prisma.payment.findFirst).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { OR: [{ id: "i1" }, { cargoItemId: "i1", type: "DEPOSIT" }] },
-      })
-    );
-  });
-
-  it("busca por mpPaymentId como último recurso", async () => {
-    vi.mocked(prisma.payment.findFirst)
-      .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce(basePayment() as never);
-
-    await handlePaymentNotification({ mpPaymentId: "mp-80", status: "approved" });
-
-    expect(prisma.payment.findFirst).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ where: { mpPaymentId: "mp-80" } })
-    );
   });
 });
 

@@ -978,7 +978,57 @@ describe("POST /api/payments/webhook", () => {
     expect(res.status).toBe(401);
   });
 
+  /** el Payment local, con el carrier del viaje (el token va cifrado) */
+  const pagoLocal = () => ({
+    id: "pay1",
+    cargoItemId: "i1",
+    amount: new Prisma.Decimal("500.00"),
+    status: "PENDING",
+    type: "DEPOSIT",
+    refundedAmount: null,
+    cargoItem: {
+      status: "PENDING",
+      companyId: "c1",
+      tripId: "t1",
+      trip: { carrier: { mpUserId: "mp-user-123", mpAccessToken: MP_TOKEN_STORED } },
+    },
+    mpPreferenceId: "pref-123",
+    mpPaymentId: null,
+    platformFeeAmount: 50,
+    carrierAmount: 450,
+  });
+
+  it("el estado sale de MP, no del body: un data.status falso no aprueba", async () => {
+    // la firma cubre data.id, no data.status: alguien con un webhook válido
+    // capturado podría cambiarle el status. MP dice que sigue pendiente.
+    vi.mocked(prisma.payment.findFirst).mockResolvedValue(pagoLocal() as never);
+    vi.mocked(mp.fetchPaymentState).mockResolvedValue({
+      state: "PENDING",
+      externalReference: "pay1",
+    });
+    vi.mocked(prisma.payment.update).mockResolvedValue({
+      id: "pay1",
+      status: "PENDING",
+    } as never);
+
+    const res = await request(app)
+      .post("/api/payments/webhook?payment_id=pay1")
+      .set(signedWebhook("mp-77", secret))
+      .send({ ...payload, data: { id: "mp-77", status: "approved" } });
+
+    expect(res.status).toBe(200);
+    expect(mp.fetchPaymentState).toHaveBeenCalledWith("mp-77", "APP_USR-mp-token-plano");
+    expect(prisma.payment.update).not.toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: "APPROVED" }) })
+    );
+    expect(res.body.status).not.toBe("APPROVED");
+  });
+
   it("actualiza el status a APPROVED con la firma válida (200)", async () => {
+    vi.mocked(mp.fetchPaymentState).mockResolvedValue({
+      state: "APPROVED",
+      externalReference: "pay1",
+    });
     vi.mocked(prisma.payment.findFirst).mockResolvedValue({
       id: "pay1",
       cargoItemId: "i1",
@@ -1027,32 +1077,21 @@ describe("POST /api/payments/webhook", () => {
     });
   });
 
-  it("busca por mpPreferenceId cuando viene en la query", async () => {
-    vi.mocked(prisma.payment.findFirst).mockResolvedValue({
-      id: "pay1",
-      status: "PENDING",
-      cargoItem: {
-        status: "PENDING",
-        companyId: "c1",
-        tripId: "t1",
-        trip: { carrier: { mpUserId: "mp-user-123", mpAccessToken: MP_TOKEN_STORED } },
-      },
-    } as never);
-    vi.mocked(prisma.payment.update).mockResolvedValue({
-      id: "pay1",
-      status: "REJECTED",
-    } as never);
+  it("ignora ?preference_id: no es un dato firmado", async () => {
+    // nada guardado con ese data.id y sin payment_id: no hay pago que tocar
+    vi.mocked(prisma.payment.findFirst).mockResolvedValue(null);
 
     const res = await request(app)
       .post("/api/payments/webhook?preference_id=pref-123")
       .set(signedWebhook("mp-78", secret))
-      .send({ ...payload, data: { id: "mp-78", status: "rejected" } });
+      .send({ ...payload, data: { id: "mp-78" } });
 
     expect(res.status).toBe(200);
-    expect(prisma.payment.findFirst).toHaveBeenCalledWith(
+    expect(res.body).toMatchObject({ received: true, updated: false });
+    expect(prisma.payment.findFirst).not.toHaveBeenCalledWith(
       expect.objectContaining({ where: { mpPreferenceId: "pref-123" } })
     );
-    expect(res.body.status).toBe("REJECTED");
+    expect(prisma.payment.update).not.toHaveBeenCalled();
   });
 
   it("un error inesperado no lleva sus headers al log (solo name y code)", async () => {
