@@ -106,6 +106,7 @@ nuevo `lib/jobs.ts` + arranque en `src/index.ts`. Tests: `tests/trips.service.te
 - [ ] No listar ni reservar viajes de fleteros sin MP (`MP_ACCOUNT_NOT_CONNECTED` al reservar) — 03/Pagar seña#1 — `listOpenTrips`, `addCargoItem` — test: 409 con código estable.
 - [ ] Tope de reservas PENDING sin seña por empresa (sugerido 3 en total, 1 por viaje) dentro de la TX — U15 — test: la 4.ª → 409 `TOO_MANY_PENDING`.
 - [ ] `priceShare` desde `lib/pricing.ts` — 01§2, 02#13 — `trips.service.ts:1062` — test: mismo valor que `pricing`.
+- [ ] Carrera residual retiro↔webhook (tras L1-fix M1): si `cancelCargoItem` lee la seña PENDING antes del CAS del webhook pero commitea después de que el webhook relee la carga, queda CANCELLED con el pago APPROVED sin reembolso. Cerrarla bloqueando o re-chequeando el `Payment` dentro de la TX de retiro — U4 — `trips.service.ts` (`cancelCargoItem`), `payments.service.ts` (`refundIfCancelled`) — test: el retiro con la seña aprobada en el medio encola la `RefundRequest`.
 - [ ] Contracargos (`charged_back`): estado propio del pago (`CHARGED_BACK`, migración) + alerta al admin; hoy mapea a REJECTED y, tras L1, APPROVED→REJECTED queda bloqueado y solo se loguea — U3 (fuera de L1) — `lib/mercadopago.ts` `STATUS_BY_MP_STATE`, `payments.service.ts` (`ALLOWED_TRANSITIONS`) — test: APPROVED + `charged_back` → `CHARGED_BACK` y alerta.
 
 ### L5 — Hardening · BLOQUEANTE · M
@@ -119,6 +120,7 @@ Archivos: `prisma/seed.ts`, nuevo `prisma/create-admin.ts`, `users.service.ts`, 
 - [ ] Escapar todo lo interpolado en `renderEmail` — 02§2.4, 02T10 — `lib/email.ts:93-98` — test: nombre `<a href=…>` sale escapado.
 - [ ] Logs sin PII (destinatarios y body de Resend, parámetros de Prisma) — U6 — `lib/email.ts:33,49,55`, `trips.service.ts:85` — test: spy del logger.
 - [ ] `validateBody` Zod en `PATCH /stops/reorder` — 02§2.1 — test: `order` inválido → 400.
+- [ ] `lib/notifications.ts:110` loguea `user.email` junto con el error crudo cuando falla el email de un aviso: loguear solo `data.type`, el id del usuario y `name`/`code` del error — U6 — test: spy de `console.error` sin el email ni el error crudo.
 
 ### L6 — Geocoding y precio · BLOQUEANTE · M
 Archivos: cliente de Nominatim en `lib/`, `trips.service.ts` (`createTrip`, `addCargoItem`), `client/src/pages/PublishTrip.tsx`.
@@ -183,6 +185,10 @@ Secuencia: **L1 → L4 → L2 → L3 → L5 (+R4) → L6 → L7** → gate → L
 L11 al final porque mueve archivos que tocan L1–L4. **Gate**: todos los BLOQUEANTE tildados;
 server `npm test`/`typecheck`/`lint`; client `lint`/`build`; e2e verdes; homologación MP; pago
 real con montos chicos (seña, saldo, retiro a 30 h → 50 %, salida con una PENDING).
+En esa prueba, revisar también en el historial de notificaciones del sandbox si los
+reintentos de MP llegan con el `ts` original firmado (B3): si es así, ampliar la ventana
+de ±5 min de `verifyWebhookSignature` (`lib/mercadopago.ts`) para no rechazar con 401 los
+reintentos legítimos.
 
 ## 4. Infra para producción
 - **Frontend**: SPA estática en Cloudflare Pages / Vercel / Netlify, fallback a `index.html`. Ahí van los headers y la **CSP** que hoy no existe (02§2.4): `connect-src` a la API, `img-src` a los tiles, `frame-ancestors 'none'`.
