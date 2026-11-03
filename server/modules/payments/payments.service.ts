@@ -1,5 +1,5 @@
 import { Prisma } from "@prisma/client";
-import type { PaymentType } from "@prisma/client";
+import type { PaymentStatus, PaymentType } from "@prisma/client";
 import { prisma } from "../../lib/prisma.js";
 import {
   createCheckoutPreference,
@@ -208,6 +208,26 @@ export async function createPaymentPreference(
 }
 
 /**
+ * Transiciones válidas de un pago por webhook. REJECTED→APPROVED existe porque
+ * dentro del mismo checkout la empresa puede reintentar con otra tarjeta; el
+ * reintento desde nuestra app pasa en cambio por el CAS de
+ * `createPaymentPreference`, que vuelve el pago a PENDING. `charged_back` mapea
+ * a REJECTED, así que un contracargo sobre un pago aprobado queda bloqueado y
+ * logueado (ver L4 en docs/review/04-launch.md).
+ */
+const ALLOWED_TRANSITIONS: Record<PaymentStatus, readonly PaymentStatus[]> = {
+  PENDING: ["APPROVED", "REJECTED"],
+  REJECTED: ["APPROVED"],
+  APPROVED: ["REFUNDED"],
+  REFUNDED: [],
+};
+
+/** el mismo estado cuenta como válido: el webhook se repite y es un no-op */
+export function canTransition(from: PaymentStatus, to: PaymentStatus): boolean {
+  return from === to || ALLOWED_TRANSITIONS[from].includes(to);
+}
+
+/**
  * Lo que el webhook puede aportar. Solo `mpPaymentId` (el `data.id`) está
  * cubierto por la firma; `hintPaymentId` es el `?payment_id` que armamos en el
  * `notification_url` y sirve únicamente para encontrar el pago candidato (y con
@@ -246,21 +266,40 @@ export async function handlePaymentNotification(input: PaymentNotificationInput)
 
   if (!state) return { updated: false, status: payment.status };
 
+  if (!canTransition(payment.status, state)) {
+    // p. ej. el rechazo tardío de un intento anterior sobre un pago ya
+    // aprobado, o un "approved" sobre uno ya reembolsado
+    console.warn(
+      `[payments] transición ignorada ${payment.status}→${state} payment=${payment.id}`
+    );
+    return { updated: false, status: payment.status };
+  }
+
+  if (state === payment.status) {
+    // nada que mover (MP repite el webhook): a lo sumo completar el id de MP
+    // si todavía no lo teníamos
+    if (!payment.mpPaymentId) {
+      await prisma.payment.updateMany({
+        where: { id: payment.id, status: payment.status },
+        data: { mpPaymentId },
+      });
+    }
+    return { updated: false, status: payment.status };
+  }
+
   // La empresa puede retirar la carga mientras el pago está en vuelo (o antes de
   // que le llegue la notificación). Si el pago se aprueba igual, se devuelve en
   // el momento: no puede quedar una carga retirada con el pago cobrado.
   //
-  // Solo cuando el pago ENTRA a APPROVED acá: si ya estaba cobrado al retirar,
-  // la política de cancelación se aplicó y quedó congelada (RefundRequest del
-  // outbox y cancellationFeeAmount). Reembolsar de nuevo acá devolvería la
-  // parte retenida, y MP repite el webhook varias veces por el mismo pago.
+  // Llegar acá con APPROVED quiere decir que el pago ENTRA a APPROVED (desde
+  // PENDING o REJECTED): si ya estaba cobrado al retirar, la política de
+  // cancelación se aplicó y quedó congelada (RefundRequest del outbox y
+  // cancellationFeeAmount), y reembolsar acá devolvería la parte retenida.
   if (state === "APPROVED" && payment.cargoItem.status === "CANCELLED") {
-    const yaCobradoAlRetirar =
-      payment.status === "APPROVED" || payment.status === "REFUNDED";
     const outbox = await prisma.refundRequest.findUnique({
       where: { cargoItemId: payment.cargoItemId },
     });
-    if (!yaCobradoAlRetirar && !outbox && payment.refundedAmount === null) {
+    if (!outbox && payment.refundedAmount === null) {
       // la seña no estaba cobrada al retirar: la penalidad congelada es 0 y
       // vuelve entera; igual se descuenta lo congelado para no depender de eso
       const target = new Prisma.Decimal(payment.amount)
@@ -279,23 +318,20 @@ export async function handlePaymentNotification(input: PaymentNotificationInput)
     }
   }
 
-  const updated = await prisma.payment.update({
-    where: { id: payment.id },
-    data: {
-      status: state,
-      mpPaymentId,
-      // La comisión NO se recalcula acá: se calculó al crear la preference,
-      // cuando se sabía el priceShare, la seña y si este pago era el saldo.
-      // Recalcularla desde payment.amount por separado haría que el webhook
-      // y el checkout puedan discrepar. Se conserva lo que ya está asentado.
-      platformFeeAmount: payment.platformFeeAmount,
-      carrierAmount: payment.carrierAmount,
-    },
+  // CAS contra el estado leído: dos webhooks del mismo pago pueden llegar a la
+  // vez. El mpPaymentId se reemplaza: en MP cada reintento con otra tarjeta es
+  // un pago nuevo, y el que vale (contra el que se reembolsa) es el que movió
+  // el estado. La comisión NO se toca: quedó asentada al crear la preference,
+  // cuando se sabía el priceShare, la seña y si este pago era el saldo.
+  const swapped = await prisma.payment.updateMany({
+    where: { id: payment.id, status: payment.status },
+    data: { status: state, mpPaymentId },
   });
+  if (swapped.count === 0) return { updated: false, status: payment.status };
 
-  // Solo se avisa al pasar a APPROVED: el webhook de Mercado Pago llega varias
-  // veces por el mismo pago y no puede ser motivo de tres campanas.
-  if (state === "APPROVED" && payment.status !== "APPROVED") {
+  // Solo avisa el webhook que ganó la transición a APPROVED: MP repite la
+  // notificación y no puede ser motivo de tres campanas.
+  if (state === "APPROVED") {
     const esSeña = payment.type === "DEPOSIT";
     await notifyUsers([payment.cargoItem.companyId], {
       type: "PAYMENT_APPROVED",
@@ -307,7 +343,7 @@ export async function handlePaymentNotification(input: PaymentNotificationInput)
     });
   }
 
-  return { updated: true, status: updated.status };
+  return { updated: true, status: state };
 }
 
 // el estado de la carga importa: si estaba retirada hay que devolver el pago.

@@ -374,23 +374,25 @@ describe("handlePaymentNotification", () => {
       basePayment({ status: "APPROVED", mpPaymentId: "mp-77" }) as never
     );
     vi.mocked(mp.refundPayment).mockResolvedValue(100);
+    vi.mocked(prisma.payment.updateMany).mockResolvedValue({ count: 1 } as never);
     vi.mocked(prisma.refundRequest.findUnique).mockResolvedValue(null);
     mpDice("APPROVED");
   });
 
+  /** ninguna escritura sobre el pago, ni por CAS ni directa */
+  const sinEscrituras = () => {
+    expect(prisma.payment.update).not.toHaveBeenCalled();
+    expect(prisma.payment.updateMany).not.toHaveBeenCalled();
+  };
+
   it("marca APPROVED con el estado que informa MP y guarda el mpPaymentId", async () => {
     const result = await handlePaymentNotification(notificacion);
 
-    // conserva el reparto que ya estaba asentado: el webhook no recalcula la
-    // comisión, se creó con el priceShare y la seña de la carga
-    expect(prisma.payment.update).toHaveBeenCalledWith({
-      where: { id: "pay1" },
-      data: {
-        status: "APPROVED",
-        mpPaymentId: "mp-77",
-        platformFeeAmount: 10,
-        carrierAmount: 90,
-      },
+    // CAS contra el estado leído. El reparto ya asentado no se escribe: el
+    // webhook no recalcula la comisión (se creó con el priceShare y la seña)
+    expect(prisma.payment.updateMany).toHaveBeenCalledWith({
+      where: { id: "pay1", status: "PENDING" },
+      data: { status: "APPROVED", mpPaymentId: "mp-77" },
     });
     expect(result).toEqual({ updated: true, status: "APPROVED" });
     expect(notifyUsers).toHaveBeenCalledWith(
@@ -450,15 +452,9 @@ describe("handlePaymentNotification", () => {
       hintPaymentId: "pay1",
     });
 
-    expect(prisma.payment.update).toHaveBeenCalledWith({
-      where: { id: "pay1" },
-      data: {
-        status: "REJECTED",
-        mpPaymentId: "mp-78",
-        // el reparto previsto no cambia por el estado: ya estaba asentado
-        platformFeeAmount: 10,
-        carrierAmount: 90,
-      },
+    expect(prisma.payment.updateMany).toHaveBeenCalledWith({
+      where: { id: "pay1", status: "PENDING" },
+      data: { status: "REJECTED", mpPaymentId: "mp-78" },
     });
     expect(result.status).toBe("REJECTED");
   });
@@ -487,7 +483,7 @@ describe("handlePaymentNotification", () => {
       code: "MP_ACCOUNT_NOT_CONNECTED",
     });
     expect(mp.fetchPaymentState).not.toHaveBeenCalled();
-    expect(prisma.payment.update).not.toHaveBeenCalled();
+    sinEscrituras();
   });
 
   it("no actualiza nada si MP no informa un estado conocido", async () => {
@@ -495,7 +491,7 @@ describe("handlePaymentNotification", () => {
 
     const result = await handlePaymentNotification(notificacion);
 
-    expect(prisma.payment.update).not.toHaveBeenCalled();
+    sinEscrituras();
     expect(result).toEqual({ updated: false, status: "PENDING" });
   });
 
@@ -528,7 +524,7 @@ describe("handlePaymentNotification", () => {
       2,
       expect.objectContaining({ where: { id: "pay-ajeno" } })
     );
-    expect(prisma.payment.update).not.toHaveBeenCalled();
+    sinEscrituras();
     expect(mp.refundPayment).not.toHaveBeenCalled();
     expect(notifyUsers).not.toHaveBeenCalled();
     expect(result).toEqual({ updated: false, status: "PENDING" });
@@ -627,14 +623,149 @@ describe("handlePaymentNotification", () => {
     await handlePaymentNotification(notificacion);
 
     expect(mp.refundPayment).not.toHaveBeenCalled();
-    expect(prisma.payment.update).toHaveBeenCalledWith({
-      where: { id: "pay1" },
-      data: {
-        status: "APPROVED",
-        mpPaymentId: "mp-77",
-        platformFeeAmount: 10,
-        carrierAmount: 90,
-      },
+    expect(prisma.payment.updateMany).toHaveBeenCalledWith({
+      where: { id: "pay1", status: "PENDING" },
+      data: { status: "APPROVED", mpPaymentId: "mp-77" },
+    });
+  });
+
+  describe("máquina de estados", () => {
+    it("APPROVED → REJECTED no cambia nada (notificación tardía de otro intento)", async () => {
+      vi.mocked(prisma.payment.findFirst).mockResolvedValue(
+        basePayment({ status: "APPROVED", mpPaymentId: "mp-77" }) as never
+      );
+      mpDice("REJECTED");
+
+      const result = await handlePaymentNotification(notificacion);
+
+      sinEscrituras();
+      expect(result).toEqual({ updated: false, status: "APPROVED" });
+    });
+
+    it("REFUNDED → APPROVED no cambia nada ni reembolsa", async () => {
+      vi.mocked(prisma.payment.findFirst).mockResolvedValue(
+        basePayment({
+          status: "REFUNDED",
+          mpPaymentId: "mp-77",
+          refundedAmount: new Prisma.Decimal("100.00"),
+          cargoItem: { ...basePayment().cargoItem, status: "CANCELLED" },
+        }) as never
+      );
+
+      const result = await handlePaymentNotification(notificacion);
+
+      sinEscrituras();
+      expect(mp.refundPayment).not.toHaveBeenCalled();
+      expect(notifyUsers).not.toHaveBeenCalled();
+      expect(result).toEqual({ updated: false, status: "REFUNDED" });
+    });
+
+    it("APPROVED → REFUNDED se acepta", async () => {
+      vi.mocked(prisma.payment.findFirst).mockResolvedValue(
+        basePayment({ status: "APPROVED", mpPaymentId: "mp-77" }) as never
+      );
+      mpDice("REFUNDED");
+
+      const result = await handlePaymentNotification(notificacion);
+
+      expect(prisma.payment.updateMany).toHaveBeenCalledWith({
+        where: { id: "pay1", status: "APPROVED" },
+        data: { status: "REFUNDED", mpPaymentId: "mp-77" },
+      });
+      expect(result).toEqual({ updated: true, status: "REFUNDED" });
+    });
+
+    it("si otro webhook ganó el CAS, no avisa ni informa cambio", async () => {
+      vi.mocked(prisma.payment.updateMany).mockResolvedValue({ count: 0 } as never);
+
+      const result = await handlePaymentNotification(notificacion);
+
+      expect(notifyUsers).not.toHaveBeenCalled();
+      expect(result.updated).toBe(false);
+    });
+
+    it("mismo estado: solo completa el mpPaymentId que faltaba, sin avisar", async () => {
+      mpDice("PENDING");
+
+      const result = await handlePaymentNotification(notificacion);
+
+      expect(prisma.payment.updateMany).toHaveBeenCalledWith({
+        where: { id: "pay1", status: "PENDING" },
+        data: { mpPaymentId: "mp-77" },
+      });
+      expect(notifyUsers).not.toHaveBeenCalled();
+      expect(result).toEqual({ updated: false, status: "PENDING" });
+    });
+
+    it("mismo estado y mismo mpPaymentId: no escribe nada", async () => {
+      vi.mocked(prisma.payment.findFirst).mockResolvedValue(
+        basePayment({ status: "APPROVED", mpPaymentId: "mp-77" }) as never
+      );
+
+      await handlePaymentNotification(notificacion);
+
+      sinEscrituras();
+    });
+
+    describe("reintento con otra tarjeta (MP crea un payment id nuevo)", () => {
+      /** primer intento rechazado: el pago local quedó apuntando a mp-A */
+      const rechazadoConA = (overrides: Record<string, unknown> = {}) =>
+        basePayment({ status: "REJECTED", mpPaymentId: "mp-A", ...overrides });
+
+      it("REJECTED → APPROVED reemplaza el mpPaymentId por el del pago aprobado", async () => {
+        // mp-B todavía no está guardado: se llega por la pista
+        vi.mocked(prisma.payment.findFirst)
+          .mockResolvedValueOnce(null)
+          .mockResolvedValueOnce(rechazadoConA() as never);
+
+        const result = await handlePaymentNotification({
+          mpPaymentId: "mp-B",
+          hintPaymentId: "pay1",
+        });
+
+        expect(mp.fetchPaymentState).toHaveBeenCalledWith("mp-B", MP_TOKEN_PLAIN);
+        expect(prisma.payment.updateMany).toHaveBeenCalledWith({
+          where: { id: "pay1", status: "REJECTED" },
+          data: { status: "APPROVED", mpPaymentId: "mp-B" },
+        });
+        expect(notifyUsers).toHaveBeenCalledWith(
+          [companyUserId],
+          expect.objectContaining({ type: "PAYMENT_APPROVED" })
+        );
+        expect(result).toEqual({ updated: true, status: "APPROVED" });
+      });
+
+      it("el rechazo tardío de mp-A no pisa el mpPaymentId del aprobado (mp-B)", async () => {
+        vi.mocked(prisma.payment.findFirst)
+          .mockResolvedValueOnce(null)
+          .mockResolvedValueOnce(
+            basePayment({ status: "APPROVED", mpPaymentId: "mp-B" }) as never
+          );
+        mpDice("REJECTED");
+
+        await handlePaymentNotification({ mpPaymentId: "mp-A", hintPaymentId: "pay1" });
+
+        sinEscrituras();
+      });
+
+      it("con la carga retirada, reembolsa mp-B y nunca el rechazado mp-A", async () => {
+        vi.mocked(prisma.payment.findFirst)
+          .mockResolvedValueOnce(null)
+          .mockResolvedValueOnce(
+            rechazadoConA({
+              cargoItem: {
+                ...basePayment().cargoItem,
+                status: "CANCELLED",
+                cancellationFeeAmount: new Prisma.Decimal("0.00"),
+              },
+            }) as never
+          );
+
+        await handlePaymentNotification({ mpPaymentId: "mp-B", hintPaymentId: "pay1" });
+
+        expect(mp.refundPayment).toHaveBeenCalledTimes(1);
+        expect(mp.refundPayment).toHaveBeenCalledWith("mp-B", 100, MP_TOKEN_PLAIN);
+      });
     });
   });
 });

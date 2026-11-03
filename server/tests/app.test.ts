@@ -75,6 +75,7 @@ vi.mock("../lib/prisma", () => ({
       findFirst: vi.fn(),
       create: vi.fn(),
       update: vi.fn(),
+      updateMany: vi.fn(),
       upsert: vi.fn(),
       aggregate: vi.fn(),
     },
@@ -1018,9 +1019,11 @@ describe("POST /api/payments/webhook", () => {
 
     expect(res.status).toBe(200);
     expect(mp.fetchPaymentState).toHaveBeenCalledWith("mp-77", "APP_USR-mp-token-plano");
-    expect(prisma.payment.update).not.toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ status: "APPROVED" }) })
-    );
+    for (const escritura of [prisma.payment.update, prisma.payment.updateMany]) {
+      expect(escritura).not.toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ status: "APPROVED" }) })
+      );
+    }
     expect(res.body.status).not.toBe("APPROVED");
   });
 
@@ -1029,6 +1032,7 @@ describe("POST /api/payments/webhook", () => {
       state: "APPROVED",
       externalReference: "pay1",
     });
+    vi.mocked(prisma.payment.updateMany).mockResolvedValue({ count: 1 } as never);
     vi.mocked(prisma.payment.findFirst).mockResolvedValue({
       id: "pay1",
       cargoItemId: "i1",
@@ -1066,14 +1070,9 @@ describe("POST /api/payments/webhook", () => {
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ received: true, updated: true, status: "APPROVED" });
     // 10% de los 500 del pago
-    expect(prisma.payment.update).toHaveBeenCalledWith({
-      where: { id: "pay1" },
-      data: {
-        status: "APPROVED",
-        mpPaymentId: "mp-77",
-        platformFeeAmount: 50,
-        carrierAmount: 450,
-      },
+    expect(prisma.payment.updateMany).toHaveBeenCalledWith({
+      where: { id: "pay1", status: "PENDING" },
+      data: { status: "APPROVED", mpPaymentId: "mp-77" },
     });
   });
 

@@ -62,7 +62,7 @@ Archivos: `modules/payments/payments.{controller,service,routes}.ts`, `lib/merca
 `src/app.ts`. Tests: `tests/payments.service.test.ts`, `tests/app.test.ts`, nuevo `tests/mercadopago.test.ts`.
 - [x] Ignorar `data.status` y `?payment_id`/`?preference_id`; buscar solo por el `data.id` firmado y pedir el estado a MP — U2 — `payments.controller.ts:51-61`, `payments.service.ts:228-318` — test: firma válida + `status=approved` falso no aprueba; query manipulada se ignora.
 - [x] Rechazar `ts` fuera de ±5 min — U2 — `lib/mercadopago.ts:544-566` — test: `ts` viejo → 401; actual → 200.
-- [ ] Máquina de estados (`PENDING→APPROVED|REJECTED`, `APPROVED→REFUNDED`; conservar el CAS de reintento de la preferencia); el resto se ignora y se loguea — U3 — `payments.service.ts:257-260` — test: APPROVED→REJECTED y REFUNDED→APPROVED no cambian nada.
+- [x] Máquina de estados (`PENDING→APPROVED|REJECTED`, `APPROVED→REFUNDED`; conservar el CAS de reintento de la preferencia); el resto se ignora y se loguea — U3 — `payments.service.ts:257-260` — test: APPROVED→REJECTED y REFUNDED→APPROVED no cambian nada.
 - [x] Rama CANCELLED: no reembolsar si ya hay `RefundRequest`/`refundedAmount`; monto según la política congelada — U4 — `payments.service.ts:248-249` — test: retiro a 30 h + `payment.updated` repetido ×3 → total reembolsado = 50 %.
 - [x] `fetchPaymentState`, `refundPayment`, `refundedAmount` con el token descifrado del carrier del pago (mismo resolver que `createCheckoutPreference`) — U5 — `lib/mercadopago.ts:25,314,510,533` — test: webhook **sin** `data.status` consulta con el token del carrier.
 - [x] Traducir errores de `fetchPaymentState` a `MP_ERROR`/`MP_INVALID_RESPONSE`; el handler genérico loguea solo `name`/`code` — U6 — `lib/mercadopago.ts:311`, `src/app.ts:84` — test: un error con `Authorization` no llega al log (spy de `console.error`).
@@ -106,6 +106,7 @@ nuevo `lib/jobs.ts` + arranque en `src/index.ts`. Tests: `tests/trips.service.te
 - [ ] No listar ni reservar viajes de fleteros sin MP (`MP_ACCOUNT_NOT_CONNECTED` al reservar) — 03/Pagar seña#1 — `listOpenTrips`, `addCargoItem` — test: 409 con código estable.
 - [ ] Tope de reservas PENDING sin seña por empresa (sugerido 3 en total, 1 por viaje) dentro de la TX — U15 — test: la 4.ª → 409 `TOO_MANY_PENDING`.
 - [ ] `priceShare` desde `lib/pricing.ts` — 01§2, 02#13 — `trips.service.ts:1062` — test: mismo valor que `pricing`.
+- [ ] Contracargos (`charged_back`): estado propio del pago (`CHARGED_BACK`, migración) + alerta al admin; hoy mapea a REJECTED y, tras L1, APPROVED→REJECTED queda bloqueado y solo se loguea — U3 (fuera de L1) — `lib/mercadopago.ts` `STATUS_BY_MP_STATE`, `payments.service.ts` (`ALLOWED_TRANSITIONS`) — test: APPROVED + `charged_back` → `CHARGED_BACK` y alerta.
 
 ### L5 — Hardening · BLOQUEANTE · M
 Archivos: `prisma/seed.ts`, nuevo `prisma/create-admin.ts`, `users.service.ts`, `lib/{rateLimit,env,security,email}.ts`,
