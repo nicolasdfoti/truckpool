@@ -1179,6 +1179,43 @@ describe("handlePaymentNotification", () => {
       });
     });
 
+    it("saldo aprobado sobre una carga retirada: no devuelve nada y avisa a los admins", async () => {
+      // no debería pasar (el saldo se cobra con la carga confirmada), pero si
+      // pasa hay plata cobrada que nadie devuelve: la decisión es de un admin
+      vi.mocked(prisma.payment.findFirst).mockResolvedValue(
+        basePayment({ type: "BALANCE", amount: new Prisma.Decimal("400.00") }) as never
+      );
+      mpDice("APPROVED", "pay1", { amount: 400, currencyId: "ARS" });
+      vi.mocked(prisma.payment.findUnique).mockResolvedValue(
+        basePayment({
+          type: "BALANCE",
+          status: "APPROVED",
+          mpPaymentId: "mp-77",
+          amount: new Prisma.Decimal("400.00"),
+          cargoItem: {
+            ...basePayment().cargoItem,
+            status: "CANCELLED",
+            cancellationFeeAmount: new Prisma.Decimal("0.00"),
+          },
+        }) as never
+      );
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const result = await handlePaymentNotification(notificacion);
+
+      expect(prisma.refundRequest.upsert).not.toHaveBeenCalled();
+      expect(mp.refundPayment).not.toHaveBeenCalled();
+      // ni "acreditamos tu saldo" a la empresa: el único aviso es a los admins
+      expect(notifyUsers).toHaveBeenCalledTimes(1);
+      alertaAdmins();
+      expect(prisma.paymentAlert.create).toHaveBeenCalledWith({
+        data: { key: "BALANCE_ON_CANCELLED_CARGO:pay1:mp-77" },
+      });
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({ updated: true, status: "APPROVED" });
+      warn.mockRestore();
+    });
+
     it("APPROVED → REFUNDED: el CAS exige el mismo mpPaymentId", async () => {
       vi.mocked(prisma.payment.findFirst).mockResolvedValue(
         basePayment({ status: "APPROVED", mpPaymentId: "mp-77" }) as never

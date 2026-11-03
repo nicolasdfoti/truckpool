@@ -332,7 +332,11 @@ export async function handlePaymentNotification(input: PaymentNotificationInput)
     // devolver la seña de una carga retirada (o MP pudo fallar y dejar la
     // RefundRequest PENDING): el repetido termina el trabajo
     if (state === "APPROVED") {
-      const refunded = await refundIfCancelled(payment.id);
+      const refunded = await refundIfCancelled(
+        payment.id,
+        mpPaymentId,
+        payment.cargoItem.tripId
+      );
       if (refunded) return { updated: refunded !== payment.status, status: refunded };
     }
     return { updated: false, status: payment.status };
@@ -362,7 +366,11 @@ export async function handlePaymentNotification(input: PaymentNotificationInput)
     // carga retirada con el pago cobrado. Se decide después del CAS, que es el
     // reclamo: de dos webhooks simultáneos solo el que lo ganó llega acá. Y se
     // relee la carga, porque el retiro pudo commitear entre la lectura y el CAS.
-    const refunded = await refundIfCancelled(payment.id);
+    const refunded = await refundIfCancelled(
+      payment.id,
+      mpPaymentId,
+      payment.cargoItem.tripId
+    );
     if (refunded) return { updated: true, status: refunded };
 
     const esSeña = payment.type === "DEPOSIT";
@@ -441,7 +449,11 @@ async function alertAdmins(
  * el estado del pago si la devolución es cosa del outbox. Si MP falló, lanza
  * 502 para que MP reintente el webhook; la request queda PENDING igual.
  */
-async function refundIfCancelled(paymentId: string): Promise<PaymentStatus | null> {
+async function refundIfCancelled(
+  paymentId: string,
+  mpPaymentId: string,
+  tripId: string
+): Promise<PaymentStatus | null> {
   const current = await prisma.payment.findUnique({
     where: { id: paymentId },
     select: {
@@ -458,10 +470,16 @@ async function refundIfCancelled(paymentId: string): Promise<PaymentStatus | nul
   if (current.refundedAmount !== null) return current.status;
   if (current.type !== "DEPOSIT") {
     // no debería pasar: el saldo se cobra con la carga confirmada, que ya no
-    // se puede retirar. El outbox devuelve la seña, así que no se encola.
+    // se puede retirar. Si pasa, hay plata cobrada que nadie devuelve. El
+    // outbox devuelve solo la seña, así que no se encola: lo decide un admin.
     console.warn(
       `[payments] saldo cobrado sobre una carga retirada: payment=${paymentId}`
     );
+    await alertAdmins(`BALANCE_ON_CANCELLED_CARGO:${paymentId}:${mpPaymentId}`, {
+      tripId,
+      title: "saldo cobrado sobre una carga retirada",
+      body: `MP aprobó el pago ${mpPaymentId} del saldo ${paymentId} y la carga está retirada. no se devuelve solo: revisalo y devolvelo desde la cuenta del transportista si corresponde.`,
+    });
     return current.status;
   }
 
