@@ -381,6 +381,14 @@ describe("handlePaymentNotification", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(prisma.payment.findFirst).mockResolvedValue(basePayment() as never);
+    // la relectura después del CAS: por defecto la carga sigue PENDING. Sin este
+    // default cada test heredaba lo que dejó el anterior (clearAllMocks no borra
+    // los valores) y un guard roto en la relectura pasaba inadvertido.
+    vi.mocked(prisma.payment.findUnique)
+      .mockReset()
+      .mockResolvedValue(
+        basePayment({ status: "APPROVED", mpPaymentId: "mp-77" }) as never
+      );
     vi.mocked(prisma.payment.update).mockResolvedValue(
       basePayment({ status: "APPROVED", mpPaymentId: "mp-77" }) as never
     );
@@ -791,6 +799,30 @@ describe("handlePaymentNotification", () => {
       where: { id: "pay1", status: "PENDING" },
       data: { status: "APPROVED", mpPaymentId: "mp-77" },
     });
+  });
+
+  it("la relectura ve la carga PENDING: no reembolsa ni encola y avisa la seña", async () => {
+    // lo que importa es la relectura, no la lectura previa al CAS
+    vi.mocked(prisma.payment.findUnique).mockResolvedValue(
+      basePayment({
+        status: "APPROVED",
+        mpPaymentId: "mp-77",
+        refundedAmount: null,
+      }) as never
+    );
+
+    const result = await handlePaymentNotification(notificacion);
+
+    expect(prisma.payment.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: "pay1" } })
+    );
+    expect(mp.refundPayment).not.toHaveBeenCalled();
+    expect(prisma.payment.update).not.toHaveBeenCalled();
+    expect(notifyUsers).toHaveBeenCalledWith(
+      [companyUserId],
+      expect.objectContaining({ title: "acreditamos tu seña" })
+    );
+    expect(result).toEqual({ updated: true, status: "APPROVED" });
   });
 
   describe("máquina de estados", () => {
