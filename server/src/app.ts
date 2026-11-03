@@ -79,6 +79,17 @@ app.use((_req: Request, res: Response) => {
 
 app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
   if (err instanceof AppError) {
+    // un 5xx propio es un problema de la operación (MP caído, mal configurado):
+    // sin el mensaje no se sabe qué pasó. El mensaje es nuestro, nunca el del
+    // SDK ni el de Prisma (esos se traducen antes de llegar acá). Los 4xx son
+    // errores del cliente y solo harían ruido.
+    if (err.statusCode >= 500) {
+      console.error("[app] error de la operación", {
+        name: err.name,
+        code: err.code,
+        message: err.message,
+      });
+    }
     return res.status(err.statusCode).json({ error: err.message, code: err.code });
   }
   // nunca el error entero: los del SDK de MP o de Prisma pueden traer headers

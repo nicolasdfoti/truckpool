@@ -1155,6 +1155,38 @@ describe("POST /api/payments/webhook", () => {
     expect(mp.fetchPaymentState).not.toHaveBeenCalled();
   });
 
+  it("un AppError 5xx propio se loguea con su mensaje (no quedar ciego operando)", async () => {
+    delete process.env.MP_WEBHOOK_SECRET;
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const res = await request(app)
+      .post("/api/payments/webhook?payment_id=pay1")
+      .set(signedWebhook("mp-77", secret))
+      .send(payload);
+
+    expect(res.status).toBe(503);
+    expect(error).toHaveBeenCalledWith(expect.any(String), {
+      name: "AppError",
+      code: "MP_NOT_CONFIGURED",
+      message: "Mercado Pago no está configurado: falta MP_WEBHOOK_SECRET",
+    });
+    error.mockRestore();
+  });
+
+  it("un AppError 4xx no se loguea: es un error del cliente, no de la operación", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const res = await request(app)
+      .post("/api/payments/webhook?payment_id=pay1")
+      .set("x-signature", "ts=1756200000,v1=deadbeef")
+      .set("x-request-id", "req-1")
+      .send(payload);
+
+    expect(res.status).toBe(401);
+    expect(error).not.toHaveBeenCalled();
+    error.mockRestore();
+  });
+
   it("un error inesperado no lleva sus headers al log (solo name y code)", async () => {
     const token = "APP_USR-secreto-del-log";
     vi.mocked(prisma.payment.findFirst).mockRejectedValue(
