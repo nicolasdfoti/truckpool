@@ -300,10 +300,10 @@ export async function createTestPreference(input: {
       external_reference: testReference,
       metadata: { source: "truckpool-test", external_reference: testReference },
       // El webhook de la plataforma. Sin `payment_id` a propósito: una preference
-      // de prueba no corresponde a un `Payment` de la base, y mandarle un id
-      // inexistente haría que el handler respondiera 404 y Mercado Pago lo
-      // reintentara. Sin esos query params `findPaymentForNotification`
-      // devuelve null y el webhook responde 200 sin tocar nada.
+      // de prueba no corresponde a un `Payment` de la base. El webhook busca
+      // primero por el `data.id` firmado (ningún Payment lo tiene) y, sin la
+      // pista, `findPaymentForNotification` devuelve null: responde 200 sin
+      // tocar nada, y MP no reintenta.
       notification_url: `${apiUrl()}/api/payments/webhook?source=test-preference`,
     };
 
@@ -411,7 +411,8 @@ export type MpPaymentDetails = {
    *
    * OJO: se pide con el token de la PLATAFORMA (ver `getPaymentDetails`), así
    * que para pagos creados en la cuenta de un transportista puede no existir y
-   * la respuesta es un 404. Es un riesgo conocido, no resuelto todavía.
+   * la respuesta es un 404. Solo afecta al diagnóstico: el webhook y los
+   * reembolsos usan el token del transportista.
    */
   liveMode: boolean;
   /** lo que mandamos como `external_reference`: el `Payment.id` interno */
@@ -448,13 +449,14 @@ function looksLikeNotFound(err: unknown): boolean {
  * que el 404 crudo suba al handler global y termine en un 500 genérico: un
  * pago que no existe en MP y un error de red tienen que poder distinguirse.
  *
- * RIESGO CONOCIDO, no resuelto en esta pasada: siempre consulta con el token
- * de la plataforma (`MP_ACCESS_TOKEN`). Los pagos de una preference creada con
- * `carrierMpAccessToken` viven en la cuenta del transportista y la plataforma no
- * los ve, así que este `get` puede devolver 404 para un pago que sí existe. El
- * mensaje de error lo dice explícitamente para que un 404 no se lea como "el
- * pago no se hizo". Cuando se resuelva, va a ser acá: elegir el token según de
- * quién es la preference que originó el pago.
+ * Es solo para el diagnóstico `GET /payments/mp/:id`, que se monta fuera de
+ * producción. Lo que mueve plata (webhook, `fetchPaymentState`, `refundPayment`)
+ * ya consulta con el token del transportista vía `resolveCarrierMpToken`. Esta
+ * función, en cambio, sigue usando el de la plataforma (`MP_ACCESS_TOKEN`): los
+ * pagos de una preference creada con `carrierMpAccessToken` viven en la cuenta
+ * del transportista y la plataforma no los ve, así que este `get` puede devolver
+ * 404 para un pago que sí existe. El mensaje de error lo dice explícitamente
+ * para que un 404 no se lea como "el pago no se hizo".
  *
  * @throws 404 MP_PAYMENT_NOT_FOUND si MP no lo tiene (o si es de un transportista)
  * @throws 502 MP_ERROR si MP falló por otra razón

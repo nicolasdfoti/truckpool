@@ -267,6 +267,8 @@ model Payment {
 
   @@unique([cargoItemId, type])
   @@index([mpPreferenceId])
+  // el webhook busca el pago por el data.id de MP en cada notificación
+  @@index([mpPaymentId])
   @@index([status])
 }
 

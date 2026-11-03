@@ -1104,11 +1104,6 @@ describe("POST /api/payments/webhook", () => {
       id: "pay1",
       status: "APPROVED",
     } as never);
-    // el webhook relee la carga para repartir la comisión
-    vi.mocked(prisma.cargoItem.findUnique).mockResolvedValue({
-      id: "i1",
-      trip: { platformFeePercent: 10, carrier: { mpUserId: "mp-user-123" } },
-    } as never);
 
     const res = await request(app)
       .post("/api/payments/webhook?payment_id=pay1")
@@ -1117,7 +1112,7 @@ describe("POST /api/payments/webhook", () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ received: true, updated: true, status: "APPROVED" });
-    // 10% de los 500 del pago
+    // CAS contra el estado leído; la comisión no se toca (quedó en la preference)
     expect(prisma.payment.updateMany).toHaveBeenCalledWith({
       where: { id: "pay1", status: "PENDING" },
       data: { status: "APPROVED", mpPaymentId: "mp-77" },
