@@ -284,6 +284,12 @@ export async function handlePaymentNotification(input: PaymentNotificationInput)
         data: { mpPaymentId },
       });
     }
+    // un webhook anterior pudo ganar el CAS a APPROVED y caerse antes de
+    // devolver la seña de una carga retirada: el repetido termina el trabajo
+    if (state === "APPROVED") {
+      const refunded = await refundIfCancelled(payment.id, mpPaymentId, accessToken);
+      if (refunded) return { updated: true, status: refunded };
+    }
     return { updated: false, status: payment.status };
   }
 
@@ -332,6 +338,11 @@ export async function handlePaymentNotification(input: PaymentNotificationInput)
   // Solo avisa el webhook que ganó la transición a APPROVED: MP repite la
   // notificación y no puede ser motivo de tres campanas.
   if (state === "APPROVED") {
+    // la carga se leyó antes del CAS: si la empresa la retiró en el medio (con
+    // la seña todavía PENDING), recién ahora se ve, y la seña se devuelve
+    const refunded = await refundIfCancelled(payment.id, mpPaymentId, accessToken);
+    if (refunded) return { updated: true, status: refunded };
+
     const esSeña = payment.type === "DEPOSIT";
     await notifyUsers([payment.cargoItem.companyId], {
       type: "PAYMENT_APPROVED",
@@ -344,6 +355,57 @@ export async function handlePaymentNotification(input: PaymentNotificationInput)
   }
 
   return { updated: true, status: state };
+}
+
+/**
+ * Devuelve la seña de un pago APPROVED cuya carga está retirada sin que la
+ * política de cancelación haya previsto un reembolso: pasa cuando la empresa
+ * retiró con la seña todavía PENDING (penalidad congelada en 0) y el pago se
+ * aprobó igual. Relee la base a propósito: lo que se leyó antes del CAS puede
+ * estar viejo.
+ *
+ * Con RefundRequest (la seña estaba cobrada al retirar) el reembolso es cosa del
+ * outbox; con `refundedAmount` ya asentado, alguien lo hizo antes. En los dos
+ * casos no se toca nada. Devuelve el estado nuevo si reembolsó, o null.
+ */
+async function refundIfCancelled(
+  paymentId: string,
+  mpPaymentId: string,
+  accessToken: string
+): Promise<PaymentStatus | null> {
+  const current = await prisma.payment.findUnique({
+    where: { id: paymentId },
+    select: {
+      amount: true,
+      refundedAmount: true,
+      cargoItemId: true,
+      cargoItem: { select: { status: true, cancellationFeeAmount: true } },
+    },
+  });
+  if (!current || current.cargoItem.status !== "CANCELLED") return null;
+  if (current.refundedAmount !== null) return null;
+
+  const outbox = await prisma.refundRequest.findUnique({
+    where: { cargoItemId: current.cargoItemId },
+  });
+  if (outbox) return null;
+
+  // lo congelado al retirar manda: si la seña no estaba cobrada es 0 y vuelve
+  // entera; si se retuvo entera (retiro a menos de 24 h) no hay nada que devolver
+  const target = new Prisma.Decimal(current.amount)
+    .minus(current.cargoItem.cancellationFeeAmount ?? 0)
+    .toNumber();
+  if (target < 0.01) return null;
+
+  const refunded = await refundPayment(mpPaymentId, target, accessToken);
+  const updated = await prisma.payment.update({
+    where: { id: paymentId },
+    data: {
+      status: refunded >= Number(current.amount) ? "REFUNDED" : "APPROVED",
+      refundedAmount: refunded,
+    },
+  });
+  return updated.status;
 }
 
 // el estado de la carga importa: si estaba retirada hay que devolver el pago.

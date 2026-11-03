@@ -596,6 +596,9 @@ describe("handlePaymentNotification", () => {
     vi.mocked(prisma.payment.findFirst).mockResolvedValue(
       retiradaConSeñaPaga("50.00", "50.00") as never
     );
+    vi.mocked(prisma.payment.findUnique).mockResolvedValue(
+      retiradaConSeñaPaga("50.00", "50.00") as never
+    );
     vi.mocked(prisma.refundRequest.findUnique).mockResolvedValue({
       id: "rr1",
       cargoItemId: "i1",
@@ -613,10 +616,81 @@ describe("handlePaymentNotification", () => {
     vi.mocked(prisma.payment.findFirst).mockResolvedValue(
       retiradaConSeñaPaga("100.00", null) as never
     );
+    vi.mocked(prisma.payment.findUnique).mockResolvedValue(
+      retiradaConSeñaPaga("100.00", null) as never
+    );
 
     await handlePaymentNotification(notificacion);
 
     expect(mp.refundPayment).not.toHaveBeenCalled();
+  });
+
+  describe("carrera entre el retiro y el webhook", () => {
+    /** la relectura después del CAS: la empresa retiró con la seña todavía PENDING */
+    const retiradaSinSeñaPaga = (overrides: Record<string, unknown> = {}) =>
+      basePayment({
+        status: "APPROVED",
+        mpPaymentId: "mp-77",
+        ...overrides,
+        cargoItem: {
+          ...basePayment().cargoItem,
+          status: "CANCELLED",
+          cancellationFeeAmount: new Prisma.Decimal("0.00"),
+        },
+      });
+
+    it("retiro con seña PENDING mientras el webhook aprueba: la seña se reembolsa", async () => {
+      // el webhook leyó la carga PENDING; el retiro commiteó antes de que el CAS
+      // a APPROVED ganara, así que la relectura ya la ve CANCELLED
+      vi.mocked(prisma.payment.findUnique).mockResolvedValue(
+        retiradaSinSeñaPaga() as never
+      );
+      vi.mocked(prisma.payment.update).mockResolvedValue(
+        basePayment({ status: "REFUNDED", mpPaymentId: "mp-77" }) as never
+      );
+
+      const result = await handlePaymentNotification(notificacion);
+
+      expect(prisma.payment.updateMany).toHaveBeenCalledWith({
+        where: { id: "pay1", status: "PENDING" },
+        data: { status: "APPROVED", mpPaymentId: "mp-77" },
+      });
+      expect(mp.refundPayment).toHaveBeenCalledWith("mp-77", 100, MP_TOKEN_PLAIN);
+      expect(prisma.payment.update).toHaveBeenCalledWith({
+        where: { id: "pay1" },
+        data: { status: "REFUNDED", refundedAmount: 100 },
+      });
+      // no se avisa "acreditamos tu seña" de una plata que se está devolviendo
+      expect(notifyUsers).not.toHaveBeenCalled();
+      expect(result).toEqual({ updated: true, status: "REFUNDED" });
+    });
+
+    it("el webhook repetido sobre un APPROVED con la carga retirada sin reembolso, reembolsa", async () => {
+      // el primer webhook ganó el CAS y se cayó antes de releer la carga
+      vi.mocked(prisma.payment.findFirst).mockResolvedValue(
+        basePayment({ status: "APPROVED", mpPaymentId: "mp-77" }) as never
+      );
+      vi.mocked(prisma.payment.findUnique).mockResolvedValue(
+        retiradaSinSeñaPaga() as never
+      );
+
+      await handlePaymentNotification(notificacion);
+
+      expect(mp.refundPayment).toHaveBeenCalledWith("mp-77", 100, MP_TOKEN_PLAIN);
+    });
+
+    it("si el reembolso ya quedó asentado, el webhook repetido no reembolsa de nuevo", async () => {
+      vi.mocked(prisma.payment.findFirst).mockResolvedValue(
+        basePayment({ status: "APPROVED", mpPaymentId: "mp-77" }) as never
+      );
+      vi.mocked(prisma.payment.findUnique).mockResolvedValue(
+        retiradaSinSeñaPaga({ refundedAmount: new Prisma.Decimal("50.00") }) as never
+      );
+
+      await handlePaymentNotification(notificacion);
+
+      expect(mp.refundPayment).not.toHaveBeenCalled();
+    });
   });
 
   it("no devuelve nada si la carga sigue pendiente de confirmar", async () => {
