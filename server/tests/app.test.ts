@@ -585,7 +585,11 @@ describe("DELETE /api/trips/:tripId/cargo-items/:id", () => {
           ...(data as Record<string, unknown>),
         })),
       },
-      payment: { update: vi.fn().mockResolvedValue(undefined) },
+      payment: {
+        update: vi.fn().mockResolvedValue(undefined),
+        // el retiro toma la fila de la seña para ordenarse con el webhook
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
       refundRequest: { create: vi.fn().mockResolvedValue({}) },
       trip: {
         findUnique: vi.fn().mockResolvedValue(trip),

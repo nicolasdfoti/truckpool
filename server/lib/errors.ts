@@ -163,6 +163,21 @@ export class PaymentRequiredError extends AppError {
   }
 }
 
+/**
+ * La seña cambió de estado mientras se retiraba la carga (el webhook la estaba
+ * aprobando). El retiro se reintenta solo; si no se estabiliza, la empresa
+ * vuelve a intentar en unos segundos.
+ */
+export class PaymentInFlightError extends AppError {
+  constructor() {
+    super(
+      "la seña se está acreditando en este momento: probá retirar la carga de nuevo en unos segundos",
+      409,
+      "PAYMENT_IN_FLIGHT"
+    );
+  }
+}
+
 export class PaymentNotFoundError extends AppError {
   constructor() {
     super("pago no encontrado", 404, "PAYMENT_NOT_FOUND");

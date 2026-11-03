@@ -98,6 +98,7 @@ const tx = {
   },
   payment: {
     update: vi.fn(),
+    updateMany: vi.fn().mockResolvedValue({ count: 1 }),
     create: vi.fn(),
     upsert: vi.fn(),
   },
@@ -447,6 +448,7 @@ describe("cancelCargoItem", () => {
     );
     tx.cargoItem.update.mockImplementation(({ data }: { data: unknown }) => data);
     tx.payment.update.mockResolvedValue({});
+    tx.payment.updateMany.mockResolvedValue({ count: 1 });
     tx.trip.findUnique.mockResolvedValue(
       baseTrip({ carrier: baseCarrier(), date: tripDateIn(72) })
     );
@@ -617,6 +619,7 @@ describe("cancelCargoItem con seña pagada", () => {
     );
     tx.cargoItem.update.mockImplementation(({ data }: { data: unknown }) => data);
     tx.payment.update.mockResolvedValue({});
+    tx.payment.updateMany.mockResolvedValue({ count: 1 });
     tx.refundRequest = { create: vi.fn().mockResolvedValue({}) };
     tx.trip.findUnique.mockResolvedValue(
       baseTrip({
@@ -834,6 +837,73 @@ describe("cancelCargoItem con seña pagada", () => {
     // sin seña cobrada no hay devolución, aunque haya un saldo aprobado (que en
     // la práctica no puede existir con la carga PENDING).
     expect(refundPayment).not.toHaveBeenCalled();
+  });
+});
+
+describe("cancelCargoItem: carrera con el webhook que aprueba la seña", () => {
+  const conSeña = (overrides: Record<string, unknown>) =>
+    basePaidCargoItem({ payments: [paidDeposit(overrides)], company: { name: "Acero SA" } });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (prisma.$transaction as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      (fn: unknown) => (fn as (t: unknown) => unknown)(tx)
+    );
+    tx.cargoItem.update.mockImplementation(({ data }: { data: unknown }) => data);
+    tx.payment.updateMany.mockResolvedValue({ count: 1 });
+    tx.refundRequest = { create: vi.fn().mockResolvedValue({}) };
+    tx.trip.findUnique.mockResolvedValue(
+      baseTrip({ carrier: baseCarrier(), date: tripDateIn(72) })
+    );
+  });
+
+  it("toma la fila de la seña PENDING dentro de la TX: el CAS del webhook espera al retiro", async () => {
+    tx.cargoItem.findUnique.mockResolvedValue(
+      conSeña({ status: "PENDING", mpPaymentId: null })
+    );
+
+    await tripsService.cancelCargoItem("t1", "i1", "c1");
+
+    // un write sobre la fila: si el webhook la cambió después de nuestra
+    // lectura, Serializable aborta (P2034) y se reintenta con lo nuevo
+    expect(tx.payment.updateMany).toHaveBeenCalledWith({
+      where: { id: "pay1", status: "PENDING" },
+      data: { updatedAt: expect.any(Date) },
+    });
+    expect(tx.refundRequest.create).not.toHaveBeenCalled();
+  });
+
+  it("la seña se aprobó entre la lectura y la toma: reintenta y encola la RefundRequest", async () => {
+    tx.cargoItem.findUnique
+      .mockResolvedValueOnce(conSeña({ status: "PENDING", mpPaymentId: null }))
+      .mockResolvedValueOnce(conSeña({ status: "APPROVED", mpPaymentId: "mp-77" }));
+    tx.payment.updateMany
+      .mockResolvedValueOnce({ count: 0 })
+      .mockResolvedValueOnce({ count: 1 });
+
+    await tripsService.cancelCargoItem("t1", "i1", "c1");
+
+    expect(prisma.$transaction).toHaveBeenCalledTimes(2);
+    expect(tx.refundRequest.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        cargoItemId: "i1",
+        targetAmount: new Prisma.Decimal("100.00"),
+        status: "PENDING",
+      }),
+    });
+  });
+
+  it("si la seña no deja de cambiar, no retira la carga (409 para reintentar)", async () => {
+    tx.cargoItem.findUnique.mockResolvedValue(
+      conSeña({ status: "PENDING", mpPaymentId: null })
+    );
+    tx.payment.updateMany.mockResolvedValue({ count: 0 });
+
+    await expect(tripsService.cancelCargoItem("t1", "i1", "c1")).rejects.toMatchObject({
+      statusCode: 409,
+      code: "PAYMENT_IN_FLIGHT",
+    });
+    expect(tx.cargoItem.update).not.toHaveBeenCalled();
   });
 });
 

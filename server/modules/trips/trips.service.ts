@@ -42,6 +42,7 @@ import {
   CargoItemNotFoundError,
   InvalidTransitionError,
   NotEnoughCapacityError,
+  PaymentInFlightError,
   PaymentRequiredError,
   TripAlreadyStartedError,
   TripDatePassedError,
@@ -809,6 +810,20 @@ export async function cancelCargoItem(
 
           const deposit = item.payments.find((p) => p.type === "DEPOSIT");
 
+          // La seña puede estar en vuelo: el webhook la aprueba con un CAS fuera
+          // de esta TX. Escribir la fila ordena las dos cosas. Si el webhook la
+          // cambió después de nuestra lectura, Serializable aborta (P2034) o el
+          // CAS no encuentra el estado leído, y el reintento ve la seña APPROVED
+          // y encola su devolución. Si escribimos primero, el CAS del webhook
+          // espera a que commiteemos y su relectura ve la carga CANCELLED.
+          if (deposit) {
+            const held = await tx.payment.updateMany({
+              where: { id: deposit.id, status: deposit.status },
+              data: { updatedAt: new Date() },
+            });
+            if (held.count === 0) throw new PaymentInFlightError();
+          }
+
           const paidDeposit =
             deposit?.status === "APPROVED" && deposit.mpPaymentId !== null
               ? deposit
@@ -889,6 +904,7 @@ export async function cancelCargoItem(
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2034") {
         continue;
       }
+      if (err instanceof PaymentInFlightError) continue;
       throw err;
     }
   }
