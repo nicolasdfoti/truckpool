@@ -8,6 +8,7 @@ import {
 } from "mercadopago";
 import { AppError } from "./errors.js";
 import { isLocalUrl } from "./urls.js";
+import { mpCheckoutSandbox } from "./env.js";
 import { decryptSecret } from "./crypto.js";
 
 export type MpPaymentState = "PENDING" | "APPROVED" | "REJECTED" | "REFUNDED";
@@ -208,6 +209,8 @@ export async function createCheckoutPreference(input: PreferenceInput): Promise<
     accessToken: input.carrierMpAccessToken,
   });
   const preferenceClient = new Preference(carrierConfig);
+  // antes de crear nada: en producción con la bandera prendida corta acá
+  const sandboxCheckout = mpCheckoutSandbox();
 
   try {
     const body = {
@@ -252,7 +255,10 @@ export async function createCheckoutPreference(input: PreferenceInput): Promise<
 
     const created = await preferenceClient.create({ body });
 
-    const initPoint = created.sandbox_init_point ?? created.init_point;
+    // el link se elige por MP_CHECKOUT_SANDBOX, nunca por cuál venga: MP manda
+    // los dos, y sin la bandera un pago real terminaba en el sandbox. Si falta
+    // el link pedido no se cae al otro.
+    const initPoint = sandboxCheckout ? created.sandbox_init_point : created.init_point;
     if (!created.id || !initPoint) {
       throw new AppError(
         "Mercado Pago no devolvió una preference utilizable",

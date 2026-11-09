@@ -409,6 +409,86 @@ describe("createCheckoutPreference", () => {
       }
     });
   });
+
+  describe("qué link de checkout devuelve (MP_CHECKOUT_SANDBOX)", () => {
+    const SANDBOX =
+      "https://sandbox.mercadopago.com.ar/checkout/v1/redirect?pref_id=pref-1";
+    const REAL = "https://www.mercadopago.com.ar/checkout/v1/redirect?pref_id=pref-1";
+    const crear = () =>
+      createCheckoutPreference({
+        paymentId: "pay1",
+        cargoItemId: "i1",
+        description: "Cajas",
+        amount: 100,
+        tripId: "t1",
+        carrierMpUserId: "mp-user-123",
+        carrierMpAccessToken: "APP_USR-carrier",
+        platformFeeAmount: 10,
+      });
+
+    afterEach(() => {
+      delete process.env.MP_CHECKOUT_SANDBOX;
+    });
+
+    it.each([
+      ["sin definir", undefined],
+      ["false", "false"],
+    ])(
+      "con MP_CHECKOUT_SANDBOX %s usa init_point aunque MP mande el de sandbox",
+      async (_caso, valor) => {
+        // con credenciales reales, el link de sandbox mandaría un pago real al sandbox
+        if (valor !== undefined) process.env.MP_CHECKOUT_SANDBOX = valor;
+        preferenceCreate.mockResolvedValue({
+          id: "pref-1",
+          init_point: REAL,
+          sandbox_init_point: SANDBOX,
+        });
+        await expect(crear()).resolves.toMatchObject({ initPoint: REAL });
+      }
+    );
+
+    it("con MP_CHECKOUT_SANDBOX=true usa el link de sandbox", async () => {
+      process.env.MP_CHECKOUT_SANDBOX = "true";
+      preferenceCreate.mockResolvedValue({
+        id: "pref-1",
+        init_point: REAL,
+        sandbox_init_point: SANDBOX,
+      });
+      await expect(crear()).resolves.toMatchObject({ initPoint: SANDBOX });
+    });
+
+    it("con MP_CHECKOUT_SANDBOX=true y sin link de sandbox no cae al real", async () => {
+      process.env.MP_CHECKOUT_SANDBOX = "true";
+      preferenceCreate.mockResolvedValue({ id: "pref-1", init_point: REAL });
+      await expect(crear()).rejects.toMatchObject({
+        statusCode: 502,
+        code: "MP_INVALID_RESPONSE",
+      });
+    });
+
+    it("sin MP_CHECKOUT_SANDBOX y sin init_point no cae al de sandbox", async () => {
+      preferenceCreate.mockResolvedValue({ id: "pref-1", sandbox_init_point: SANDBOX });
+      await expect(crear()).rejects.toMatchObject({
+        statusCode: 502,
+        code: "MP_INVALID_RESPONSE",
+      });
+    });
+
+    it("en producción con MP_CHECKOUT_SANDBOX=true no crea la preference", async () => {
+      const original = process.env.NODE_ENV;
+      process.env.NODE_ENV = "production";
+      process.env.MP_CHECKOUT_SANDBOX = "true";
+      try {
+        await expect(crear()).rejects.toMatchObject({
+          statusCode: 500,
+          code: "MP_NOT_CONFIGURED",
+        });
+        expect(preferenceCreate).not.toHaveBeenCalled();
+      } finally {
+        process.env.NODE_ENV = original;
+      }
+    });
+  });
 });
 
 describe("createTestPreference", () => {

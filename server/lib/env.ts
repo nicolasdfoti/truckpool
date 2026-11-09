@@ -73,6 +73,26 @@ function readSandboxFlag(
 }
 
 /**
+ * `MP_CHECKOUT_SANDBOX`: si el checkout de la seña y del saldo manda al link de
+ * sandbox (`sandbox_init_point`) en vez del real (`init_point`). MP devuelve los
+ * dos, así que elegir no puede depender de cuál venga: con credenciales reales,
+ * el de sandbox mandaría un pago real al sandbox. Por defecto false.
+ */
+function readMpCheckoutSandbox(): { enabled: boolean; problem?: string } {
+  return readSandboxFlag(
+    "MP_CHECKOUT_SANDBOX",
+    "manda el checkout al sandbox de Mercado Pago"
+  );
+}
+
+/** Para crear la preference. Repite la traba de producción del arranque. */
+export function mpCheckoutSandbox(): boolean {
+  const { enabled, problem } = readMpCheckoutSandbox();
+  if (problem) throw new AppError(problem, 500, "MP_NOT_CONFIGURED");
+  return enabled;
+}
+
+/**
  * Para el intercambio OAuth. Repite la traba de producción además del chequeo
  * de arranque: aunque algo se saltee assertServerEnv, en producción nunca se
  * piden credenciales de sandbox.
@@ -139,6 +159,8 @@ export function assertServerEnv(): void {
 
   const mpTestToken = readMpOAuthTestToken();
   if (mpTestToken.problem) problems.push(mpTestToken.problem);
+  const checkoutSandbox = readMpCheckoutSandbox();
+  if (checkoutSandbox.problem) problems.push(checkoutSandbox.problem);
 
   if (problems.length > 0) {
     throw new EnvError(problems);

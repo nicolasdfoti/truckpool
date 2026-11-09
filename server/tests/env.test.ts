@@ -97,6 +97,39 @@ describe("assertServerEnv", () => {
     });
   });
 
+  describe("MP_CHECKOUT_SANDBOX", () => {
+    afterEach(() => {
+      delete process.env.MP_CHECKOUT_SANDBOX;
+    });
+
+    it("aborta en producción con MP_CHECKOUT_SANDBOX=true: un pago real no va al sandbox", () => {
+      process.env.NODE_ENV = "production";
+      process.env.MP_CHECKOUT_SANDBOX = "true";
+      expect(() => assertServerEnv()).toThrow(EnvError);
+      expect(() => assertServerEnv()).toThrow(/MP_CHECKOUT_SANDBOX/);
+    });
+
+    it.each([["false"], [""], [undefined]])(
+      "arranca en producción con MP_CHECKOUT_SANDBOX=%j",
+      (valor) => {
+        process.env.NODE_ENV = "production";
+        if (valor === undefined) delete process.env.MP_CHECKOUT_SANDBOX;
+        else process.env.MP_CHECKOUT_SANDBOX = valor;
+        expect(() => assertServerEnv()).not.toThrow();
+      }
+    );
+
+    it("arranca en development con MP_CHECKOUT_SANDBOX=true", () => {
+      process.env.MP_CHECKOUT_SANDBOX = "true";
+      expect(() => assertServerEnv()).not.toThrow();
+    });
+
+    it("aborta con un valor desconocido", () => {
+      process.env.MP_CHECKOUT_SANDBOX = "si";
+      expect(() => assertServerEnv()).toThrow(/MP_CHECKOUT_SANDBOX="si" no es válido/);
+    });
+  });
+
   it("aborta si JWT_SECRET no está definido", () => {
     delete process.env.JWT_SECRET;
     expect(() => assertServerEnv()).toThrow(EnvError);
