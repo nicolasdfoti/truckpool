@@ -3294,7 +3294,7 @@ describe("processRefundRequest (outbox processor)", () => {
     expect(prisma.refundRequest.findUnique).toHaveBeenCalledWith({
       where: { cargoItemId: "i1" },
     });
-    expect(prisma.refundRequest.update).not.toHaveBeenCalled();
+    expect(prisma.refundRequest.updateMany).not.toHaveBeenCalled();
   });
 
   it("si la RefundRequest no es PENDING, no hace nada", async () => {
@@ -3307,7 +3307,7 @@ describe("processRefundRequest (outbox processor)", () => {
 
     await processRefundRequest("i1");
 
-    expect(prisma.refundRequest.update).not.toHaveBeenCalled();
+    expect(prisma.refundRequest.updateMany).not.toHaveBeenCalled();
   });
 
   it("si no hay pago DEPOSIT aprobado con mpPaymentId, marca COMPLETED sin llamar a MP", async () => {
@@ -3331,9 +3331,10 @@ describe("processRefundRequest (outbox processor)", () => {
     await processRefundRequest("i1");
 
     expect(refundPayment).not.toHaveBeenCalled();
-    expect(prisma.refundRequest.update).toHaveBeenCalledWith({
-      where: { id: "rr1" },
-      data: { status: "COMPLETED" },
+    // cierre con CAS sobre PROCESSING (el worker pudo retomarla en el medio)
+    expect(prisma.refundRequest.updateMany).toHaveBeenCalledWith({
+      where: { id: "rr1", status: "PROCESSING" },
+      data: { status: "COMPLETED", carrierDisconnectedAt: null },
     });
   });
 
@@ -3371,9 +3372,10 @@ describe("processRefundRequest (outbox processor)", () => {
       where: { id: "pay1" },
       data: { status: "REFUNDED", refundedAmount: 100 },
     });
-    expect(prisma.refundRequest.update).toHaveBeenCalledWith({
-      where: { id: "rr1" },
-      data: { status: "COMPLETED" },
+    // cierre con CAS sobre PROCESSING (el worker pudo retomarla en el medio)
+    expect(prisma.refundRequest.updateMany).toHaveBeenCalledWith({
+      where: { id: "rr1", status: "PROCESSING" },
+      data: { status: "COMPLETED", carrierDisconnectedAt: null },
     });
   });
 
@@ -3409,9 +3411,10 @@ describe("processRefundRequest (outbox processor)", () => {
     expect(prisma.payment.update).not.toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ status: "REFUNDED" }) })
     );
-    expect(prisma.refundRequest.update).toHaveBeenCalledWith({
-      where: { id: "rr1" },
-      data: { status: "COMPLETED" },
+    // cierre con CAS sobre PROCESSING (el worker pudo retomarla en el medio)
+    expect(prisma.refundRequest.updateMany).toHaveBeenCalledWith({
+      where: { id: "rr1", status: "PROCESSING" },
+      data: { status: "COMPLETED", carrierDisconnectedAt: null },
     });
   });
 
@@ -3442,13 +3445,14 @@ describe("processRefundRequest (outbox processor)", () => {
     expect(refundPayment).toHaveBeenCalledWith("mp-77", 100, OUTBOX_TOKEN_PLAIN, {
       idempotencyKey: "refund-rr1-0",
     });
-    // el reclamo fue un CAS (updateMany); update solo devuelve la request a PENDING
-    expect(prisma.refundRequest.update).toHaveBeenLastCalledWith({
-      where: { id: "rr1" },
+    // el cierre es un CAS sobre PROCESSING; lastError guarda el código, no el
+    // mensaje (un error que no es de MP: su nombre)
+    expect(prisma.refundRequest.updateMany).toHaveBeenLastCalledWith({
+      where: { id: "rr1", status: "PROCESSING" },
       data: expect.objectContaining({
         status: "PENDING",
-        attempts: { increment: 1 },
-        lastError: "network timeout",
+        attempts: 1,
+        lastError: "Error",
       }),
     });
     expect(prisma.payment.update).not.toHaveBeenCalled();
@@ -3478,13 +3482,13 @@ describe("processRefundRequest (outbox processor)", () => {
 
     await processRefundRequest("i1");
 
-    // el reclamo fue un CAS (updateMany); update solo devuelve la request a PENDING
-    expect(prisma.refundRequest.update).toHaveBeenLastCalledWith({
-      where: { id: "rr1" },
+    // el cierre es un CAS sobre PROCESSING; lastError guarda el código, no el mensaje
+    expect(prisma.refundRequest.updateMany).toHaveBeenLastCalledWith({
+      where: { id: "rr1", status: "PROCESSING" },
       data: expect.objectContaining({
         status: "PENDING",
-        attempts: { increment: 1 },
-        lastError: "MP rechazó el reembolso",
+        attempts: 1,
+        lastError: "MP_ERROR",
       }),
     });
   });
@@ -3519,9 +3523,10 @@ describe("processRefundRequest (outbox processor)", () => {
       where: { id: "pay1" },
       data: { status: "REFUNDED", refundedAmount: 100 },
     });
-    expect(prisma.refundRequest.update).toHaveBeenCalledWith({
-      where: { id: "rr1" },
-      data: { status: "COMPLETED" },
+    // cierre con CAS sobre PROCESSING (el worker pudo retomarla en el medio)
+    expect(prisma.refundRequest.updateMany).toHaveBeenCalledWith({
+      where: { id: "rr1", status: "PROCESSING" },
+      data: { status: "COMPLETED", carrierDisconnectedAt: null },
     });
   });
 
@@ -3554,7 +3559,8 @@ describe("processRefundRequest (outbox processor)", () => {
     expect(outcome).toEqual({ kind: "none" });
     expect(refundPayment).not.toHaveBeenCalled();
     expect(prisma.payment.update).not.toHaveBeenCalled();
-    expect(prisma.refundRequest.update).not.toHaveBeenCalled();
+    // solo el reclamo que perdió: ningún cierre
+    expect(prisma.refundRequest.updateMany).toHaveBeenCalledTimes(1);
   });
 
   it("dos processors a la vez: refundPayment una sola vez", async () => {

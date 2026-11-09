@@ -379,7 +379,12 @@ model RefundRequest {
   targetAmount    Decimal      @db.Decimal(12, 2)
   status          RefundStatus @default(PENDING)
   attempts        Int          @default(0)
+  // código del último error (de MP: "MP_ERROR:<status>:<causa>"), nunca el
+  // mensaje crudo
   lastError       String?
+  // desde cuándo el transportista no tiene MP conectado. Mientras tanto los
+  // intentos no cuentan; a las 24 h la request pasa a FAILED con alerta.
+  carrierDisconnectedAt DateTime?
   createdAt       DateTime     @default(now())
   updatedAt       DateTime     @updatedAt
 

@@ -900,9 +900,9 @@ describe("handlePaymentNotification", () => {
       expect(err).toMatchObject({ statusCode: 502, code: "MP_ERROR" });
       // registro durable: aunque MP deje de reintentar, la request sigue ahí
       encolo("100");
-      expect(prisma.refundRequest.update).toHaveBeenCalledWith({
-        where: { id: "rr1" },
-        data: expect.objectContaining({ status: "PENDING", attempts: { increment: 1 } }),
+      expect(prisma.refundRequest.updateMany).toHaveBeenCalledWith({
+        where: { id: "rr1", status: "PROCESSING" },
+        data: expect.objectContaining({ status: "PENDING", attempts: 1 }),
       });
       expect(notifyUsers).not.toHaveBeenCalled();
     });

@@ -44,7 +44,7 @@ const {
   refundPayment,
   verifyWebhookSignature,
 } = await import("../lib/mercadopago.js");
-const { AppError } = await import("../lib/errors.js");
+const { AppError, MpApiError } = await import("../lib/errors.js");
 
 const MP_ID = "mp-77";
 
@@ -205,6 +205,83 @@ describe("refundPayment: la lectura final falla", () => {
     expect(err).toMatchObject({ statusCode: 502, code: "MP_ERROR" });
     expect(JSON.stringify(warn.mock.calls)).not.toContain(token);
     warn.mockRestore();
+  });
+});
+
+// U12: el worker guarda en lastError el código de MP, no el mensaje (puede traer
+// datos del pedido). La forma del error (status + cause[].code) es la del body
+// de error de la API de MP; no está verificada con un fallo real de reembolso.
+describe("refundPayment: el código de error de MP", () => {
+  it("si el reembolso falla, lleva status y causa de MP, sin el mensaje", async () => {
+    paymentGet.mockResolvedValue(devuelto(0));
+    create.mockRejectedValue({
+      status: 400,
+      error: "bad_request",
+      message: "Bearer APP_USR-secreto en el mensaje",
+      cause: [{ code: 2063, description: "texto de MP" }],
+    });
+
+    const err = await refundPayment(MP_ID, 50, "token-de-prueba").catch(
+      (e: unknown) => e
+    );
+
+    expect(err).toBeInstanceOf(MpApiError);
+    expect(err).toMatchObject({ statusCode: 502, code: "MP_ERROR", mpCode: "400:2063" });
+    expect(JSON.stringify(err)).not.toContain("secreto");
+  });
+
+  it("si no puede leer lo devuelto (token inválido), lleva el status y el error de MP", async () => {
+    paymentGet.mockRejectedValue({
+      status: 401,
+      error: "unauthorized",
+      message: "invalid access token",
+    });
+
+    const err = await refundPayment(MP_ID, 50, "token-de-prueba").catch(
+      (e: unknown) => e
+    );
+
+    expect(err).toMatchObject({ code: "MP_ERROR", mpCode: "401:unauthorized" });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("limpia lo que no es un código (sin espacios ni símbolos, corto)", async () => {
+    paymentGet.mockResolvedValue(devuelto(0));
+    create.mockRejectedValue({
+      status: 400,
+      cause: [{ code: "a b<script>" + "x".repeat(80) }],
+    });
+
+    const err = (await refundPayment(MP_ID, 50, "t").catch((e: unknown) => e)) as {
+      mpCode: string;
+    };
+
+    expect(err.mpCode).toMatch(/^400:[A-Za-z0-9_.-]{1,40}$/);
+  });
+
+  it("sin status ni causa queda sin código de MP", async () => {
+    paymentGet.mockResolvedValue(devuelto(0));
+    create.mockRejectedValue(new Error("timeout de red"));
+
+    const err = await refundPayment(MP_ID, 50, "t").catch((e: unknown) => e);
+
+    expect(err).toMatchObject({ code: "MP_ERROR", mpCode: null });
+  });
+});
+
+describe("refundPayment: timeout de los pedidos a MP", () => {
+  // con timeout, un intento colgado termina mucho antes de que el worker lo
+  // dé por vencido (10 min) y lo retome
+  it("los clientes del reembolso se crean con timeout", async () => {
+    paymentGet.mockResolvedValueOnce(devuelto(0)).mockResolvedValueOnce(devuelto(50));
+
+    await refundPayment(MP_ID, 50, "token-de-prueba");
+
+    expect(mpConfigs.length).toBeGreaterThan(0);
+    for (const config of mpConfigs as Array<{ options?: { timeout?: number } }>) {
+      expect(config.options?.timeout).toBeGreaterThan(0);
+      expect(config.options?.timeout).toBeLessThanOrEqual(30_000);
+    }
   });
 });
 

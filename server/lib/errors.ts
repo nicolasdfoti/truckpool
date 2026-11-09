@@ -211,3 +211,19 @@ export class BalanceNotDueError extends AppError {
     );
   }
 }
+
+/**
+ * Un pedido a Mercado Pago falló. Sale como `MP_ERROR` (el código estable que ve
+ * el cliente) y además lleva `mpCode`: el status HTTP y la causa que informó MP
+ * (p. ej. "400:2063"), ya limpios. Es lo que el outbox de reembolsos guarda en
+ * `lastError`; el mensaje crudo de MP no se guarda ni se loguea porque puede
+ * traer datos del pedido.
+ */
+export class MpApiError extends AppError {
+  constructor(
+    message: string,
+    public readonly mpCode: string | null
+  ) {
+    super(message, 502, "MP_ERROR");
+  }
+}
