@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { departureTimeSchema } from "../trips/trips.schemas.js";
 
 export const updateProfileSchema = z.object({
   name: z.string().trim().min(1, "el nombre no puede estar vacío").optional(),
@@ -72,12 +73,9 @@ export const respondTripRequestSchema = z.object({
         .optional()
         .default(20),
       features: z.array(z.string()).optional().default([]),
-      departureTime: z
-        .string()
-        .trim()
-        .regex(/^([01]\d|2[0-3]):[0-5]\d$/, "la hora tiene que tener formato HH:mm")
-        .optional()
-        .nullable(),
+      // obligatoria, igual que al publicar: la ventana de retiro se mide
+      // contra la salida (U11)
+      departureTime: departureTimeSchema,
     })
     .optional(),
 });

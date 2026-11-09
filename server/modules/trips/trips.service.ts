@@ -17,7 +17,7 @@ import {
   priceRangeFor,
   rateFor,
 } from "../../lib/pricing.js";
-import { hoursUntilTrip, quoteCancellation } from "../../lib/cancellation.js";
+import { hoursUntilDeparture, quoteCancellation } from "../../lib/cancellation.js";
 import { balanceOf } from "../payments/payments.service.js";
 import { processRefundRequest } from "../payments/refunds.service.js";
 import {
@@ -381,8 +381,12 @@ export async function estimateTripPrice(input: {
 export async function estimateCancellation(input: {
   depositAmount: number;
   tripDate: string;
+  departureTime?: string | null | undefined;
 }) {
-  return quoteCancellation(input.depositAmount, hoursUntilTrip(input.tripDate));
+  return quoteCancellation(
+    input.depositAmount,
+    hoursUntilDeparture({ date: input.tripDate, departureTime: input.departureTime })
+  );
 }
 
 export async function createTrip(carrierId: string, data: CreateTripInput) {
@@ -438,7 +442,7 @@ export async function createTrip(carrierId: string, data: CreateTripInput) {
       destination: data.destination,
       departureAddress: data.departureAddress ?? null,
       date: data.date,
-      departureTime: data.departureTime ?? null,
+      departureTime: data.departureTime,
       truckType: data.truckType,
       capacityTotal: data.capacityTotal,
       price: new Prisma.Decimal(data.price),
@@ -828,9 +832,10 @@ export async function cancelCargoItem(
             deposit?.status === "APPROVED" && deposit.mpPaymentId !== null
               ? deposit
               : null;
+          // contra la salida (día + hora en ART), no contra `trip.date` (U11)
           const quote = quoteCancellation(
             Number(item.depositAmount),
-            hoursUntilTrip(trip.date)
+            hoursUntilDeparture(trip)
           );
 
           // Un fee es plata que se retiene de un pago que REALMENTE entró. Si la

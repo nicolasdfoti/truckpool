@@ -93,8 +93,15 @@ function cancellationMessage(quote: CancellationQuote | null) {
 }
 
 /** Pide la quote y abre el confirm. Devuelve false si el usuario cancela. */
-async function confirmCancellation(item: CargoItem, tripDate: string) {
-  const quote = await fetchCancellationQuote(item.depositAmount, tripDate);
+async function confirmCancellation(
+  item: CargoItem,
+  trip: { date: string; departureTime: string | null }
+) {
+  const quote = await fetchCancellationQuote(
+    item.depositAmount,
+    trip.date,
+    trip.departureTime
+  );
   return window.confirm(cancellationMessage(quote));
 }
 
@@ -616,7 +623,7 @@ export default function TripDetail() {
                           size="sm"
                           disabled={cancelCargoItem.isPending}
                           onClick={async () => {
-                            if (await confirmCancellation(item, trip.date)) {
+                            if (await confirmCancellation(item, trip)) {
                               cancelCargoItem.mutate(item.id);
                             }
                           }}

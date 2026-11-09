@@ -511,6 +511,7 @@ describe("verificación de identidad", () => {
 
 describe("responder una solicitud de viaje directo", () => {
   const tripDetails = {
+    departureTime: "08:00",
     truckType: "CAMION",
     capacityTotal: 30,
     price: 250000,

@@ -28,19 +28,18 @@ export const createCargoItemSchema = z.object({
 export type CreateCargoItemInput = z.infer<typeof createCargoItemSchema>;
 
 /**
- * Hora de salida en formato 24h "HH:mm". Opcional a propósito: es un dato que
- * muchos fleteros no quieren prometer, y el viaje se publica igual sin él. Se
- * valida con regex y no con `Date`: "25:00" tiene que ser un error de cliente,
- * no una fecha que JS normaliza en silencio.
+ * Hora de salida en formato 24h "HH:mm". Obligatoria en los viajes nuevos: la
+ * ventana de retiro de las cargas se mide contra la salida (U11). Los viajes
+ * viejos sin hora salen a las 23:59 ART (ver lib/cancellation.ts). Se valida
+ * con regex y no con `Date`: "25:00" tiene que ser un error de cliente, no una
+ * fecha que JS normaliza en silencio.
  */
 const DEPARTURE_TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 export const departureTimeSchema = z
-  .string()
+  .string({ message: "la hora de salida es obligatoria" })
   .trim()
-  .regex(DEPARTURE_TIME, "la hora tiene que tener formato HH:mm")
-  .optional()
-  .nullable();
+  .regex(DEPARTURE_TIME, "la hora tiene que tener formato HH:mm");
 
 export const createTripSchema = z.object({
   origin: z.string().trim().min(1, "el origen es obligatorio"),
@@ -176,6 +175,8 @@ export const cancellationQuoteQuerySchema = z.object({
     .refine((v) => !Number.isNaN(new Date(v).getTime()), {
       message: "la fecha del viaje no es válida",
     }),
+  // la hora de salida del viaje; sin ella (viaje viejo) se toman las 23:59 ART
+  departureTime: departureTimeSchema.optional(),
 });
 
 export type CancellationQuoteQuery = z.infer<typeof cancellationQuoteQuerySchema>;

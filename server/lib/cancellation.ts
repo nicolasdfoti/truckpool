@@ -3,9 +3,11 @@
  * tiene una copia (client/src/lib/cancellation.ts) solo para mostrar la
  * estimación antes de confirmar, y nunca decide el resultado real.
  *
- * Todo se mide contra la fecha del viaje, no contra cuándo se creó la carga:
+ * Todo se mide contra la salida del viaje, no contra cuándo se creó la carga:
  * lo que importa al transportista es cuánto le falta para salir.
  */
+import { argentinaTimeOnDay } from "./dates.js";
+
 export const FULL_REFUND_HOURS = 48;
 export const PARTIAL_REFUND_HOURS = 24;
 /** entre 24 y 48 horas se devuelve la mitad de la seña */
@@ -15,6 +17,32 @@ export type CancellationWindow = "FULL_REFUND" | "PARTIAL_REFUND" | "NO_REFUND";
 
 export function hoursUntilTrip(tripDate: Date | string, now: Date = new Date()): number {
   return (new Date(tripDate).getTime() - now.getTime()) / 3_600_000;
+}
+
+/**
+ * Hora de salida de los viajes publicados antes de que fuera obligatoria: el
+ * final del día, para no acortarle a la empresa el plazo que tenía.
+ */
+export const DEFAULT_DEPARTURE_TIME = "23:59";
+
+/**
+ * La salida que ve la empresa: el día calendario argentino de `Trip.date` (que
+ * guarda el mediodía del navegador del fletero, no la salida) a la hora de
+ * `departureTime`, en hora argentina. Sin hora, las 23:59 de ese día.
+ */
+export function departureInstant(
+  tripDate: Date | string,
+  departureTime: string | null | undefined
+): Date {
+  return argentinaTimeOnDay(new Date(tripDate), departureTime ?? DEFAULT_DEPARTURE_TIME);
+}
+
+/** horas que faltan para la salida del viaje (negativas si ya pasó) */
+export function hoursUntilDeparture(
+  trip: { date: Date | string; departureTime: string | null | undefined },
+  now: Date = new Date()
+): number {
+  return hoursUntilTrip(departureInstant(trip.date, trip.departureTime), now);
 }
 
 /**

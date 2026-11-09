@@ -26,11 +26,15 @@ export type CancellationQuote = {
  */
 export async function fetchCancellationQuote(
   depositAmount: number,
-  tripDate: string
+  tripDate: string,
+  departureTime: string | null
 ): Promise<CancellationQuote | null> {
+  // el plazo se cuenta desde la salida (día + hora); sin hora, el server toma
+  // las 23:59 del día del viaje
+  const hora = departureTime ? `&departureTime=${encodeURIComponent(departureTime)}` : "";
   try {
     return await api.get<CancellationQuote>(
-      `/trips/cancellation-quote?depositAmount=${depositAmount}&tripDate=${encodeURIComponent(tripDate)}`
+      `/trips/cancellation-quote?depositAmount=${depositAmount}&tripDate=${encodeURIComponent(tripDate)}${hora}`
     );
   } catch {
     return null;

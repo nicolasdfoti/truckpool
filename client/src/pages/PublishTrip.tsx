@@ -177,7 +177,11 @@ export default function PublishTrip() {
       setFormError("ingresá un precio válido.");
       return;
     }
-    if (departureTime && !DEPARTURE_TIME.test(departureTime)) {
+    if (!departureTime) {
+      setFormError("ingresá la hora de salida.");
+      return;
+    }
+    if (!DEPARTURE_TIME.test(departureTime)) {
       setFormError("la hora de salida tiene que tener formato HH:mm.");
       return;
     }
@@ -193,8 +197,8 @@ export default function PublishTrip() {
         // sin punto exacto, el mapa del recorrido arranca en el origin general
         ...(departureAddress.trim() ? { departureAddress: departureAddress.trim() } : {}),
         date: new Date(`${date}T12:00:00`).toISOString(),
-        // sin hora, el viaje se publica igual: es un dato opcional
-        ...(departureTime ? { departureTime } : {}),
+        // obligatoria: la política de retiro se mide contra la salida
+        departureTime,
         truckType,
         capacityTotal: parsedCapacity,
         price: parsedPrice,
@@ -384,9 +388,12 @@ export default function PublishTrip() {
                   type="time"
                   value={departureTime}
                   onChange={(e) => setDepartureTime(e.target.value)}
+                  required
                   className={inputClass}
                 />
-                <p className="mt-1 text-xs text-ink-muted">opcional.</p>
+                <p className="mt-1 text-xs text-ink-muted">
+                  los plazos para retirar una carga se cuentan desde esta hora.
+                </p>
               </div>
               <div>
                 <label className="text-[13px] text-ink-soft" htmlFor="truckType">

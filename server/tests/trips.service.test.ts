@@ -21,6 +21,7 @@ import { prisma } from "../lib/prisma.js";
 import { geocode } from "../lib/geocode.js";
 import { notifyUsers } from "../lib/notifications.js";
 import { refundPayment } from "../lib/mercadopago.js";
+import { salidaEn } from "./helpers/salida.js";
 
 // Los avisos son best-effort: en los tests de trips lo que importa es a Quién
 // se avisa y con qué tipo/title, nunca que el email salga. Por eso el módulo de
@@ -683,7 +684,7 @@ describe("cancelCargoItem con seña pagada", () => {
 
   it("entre 24 y 48hs: crea RefundRequest PENDING con la mitad (outbox)", async () => {
     tx.trip.findUnique.mockResolvedValue(
-      baseTrip({ carrier: baseCarrier(), date: tripDateIn(36) })
+      baseTrip({ carrier: baseCarrier(), ...salidaEn(36) })
     );
     vi.mocked(refundPayment).mockResolvedValue(50);
 
@@ -707,7 +708,7 @@ describe("cancelCargoItem con seña pagada", () => {
 
   it("menos de 24hs: no devuelve nada y la seña queda como costo", async () => {
     tx.trip.findUnique.mockResolvedValue(
-      baseTrip({ carrier: baseCarrier(), date: tripDateIn(10) })
+      baseTrip({ carrier: baseCarrier(), ...salidaEn(10) })
     );
 
     await tripsService.cancelCargoItem("t1", "i1", "c1");
@@ -727,7 +728,7 @@ describe("cancelCargoItem con seña pagada", () => {
   it("justo en 48hs aplica la mitad, no el total (outbox)", async () => {
     freezeClockAt("2026-10-01T12:00:00.000Z");
     tx.trip.findUnique.mockResolvedValue(
-      baseTrip({ carrier: baseCarrier(), date: tripDateIn(48) })
+      baseTrip({ carrier: baseCarrier(), ...salidaEn(48) })
     );
     vi.mocked(refundPayment).mockResolvedValue(50);
 
@@ -747,7 +748,7 @@ describe("cancelCargoItem con seña pagada", () => {
   it("justo en 24hs todavía devuelve la mitad (outbox)", async () => {
     freezeClockAt("2026-10-01T12:00:00.000Z");
     tx.trip.findUnique.mockResolvedValue(
-      baseTrip({ carrier: baseCarrier(), date: tripDateIn(24) })
+      baseTrip({ carrier: baseCarrier(), ...salidaEn(24) })
     );
     vi.mocked(refundPayment).mockResolvedValue(50)
 
@@ -861,6 +862,124 @@ describe("cancelCargoItem con seña pagada", () => {
     // sin seña cobrada no hay devolución, aunque haya un saldo aprobado (que en
     // la práctica no puede existir con la carga PENDING).
     expect(refundPayment).not.toHaveBeenCalled();
+  });
+});
+
+// U11: la ventana se mide contra la salida (día del viaje + hora, en hora
+// argentina). `date` guarda el mediodía del navegador del fletero (~15:00Z), así
+// que medir contra `date` le daba a la empresa horas de más o de menos.
+describe("cancelCargoItem: ventana contra la hora de salida (U11)", () => {
+  /** el 11/11 tal como lo guarda el cliente: 12:00 ART */
+  const DIA_DEL_VIAJE = new Date("2026-11-11T15:00:00.000Z");
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (prisma.$transaction as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      (fn: unknown) => (fn as (t: unknown) => unknown)(tx)
+    );
+    tx.cargoItem.findUnique.mockResolvedValue(
+      basePaidCargoItem({ payments: [paidDeposit()], company: { name: "Acero SA" } })
+    );
+    tx.cargoItem.update.mockImplementation(({ data }: { data: unknown }) => data);
+    tx.payment.updateMany.mockResolvedValue({ count: 1 });
+    tx.refundRequest = { create: vi.fn().mockResolvedValue({}) };
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function viajeConSalida(departureTime: string | null) {
+    tx.trip.findUnique.mockResolvedValue(
+      baseTrip({ carrier: baseCarrier(), date: DIA_DEL_VIAJE, departureTime })
+    );
+  }
+
+  /** lo que quedó encolado (null = nada) y el fee congelado en la carga */
+  function resultado() {
+    const encolado = tx.refundRequest.create.mock.calls[0]?.[0] as
+      | { data: { targetAmount: Prisma.Decimal } }
+      | undefined;
+    const update = tx.cargoItem.update.mock.calls[0]?.[0] as {
+      data: { cancellationFeeAmount: Prisma.Decimal };
+    };
+    return {
+      devuelve: encolado ? Number(encolado.data.targetAmount) : null,
+      fee: Number(update.data.cancellationFeeAmount),
+    };
+  }
+
+  it("salida 18:00 ART, retiro a 60 h reales: devuelve el 100 %", async () => {
+    viajeConSalida("18:00");
+    freezeClockAt("2026-11-09T09:00:00.000Z");
+
+    await tripsService.cancelCargoItem("t1", "i1", "c1");
+
+    expect(resultado()).toEqual({ devuelve: 100, fee: 0 });
+  });
+
+  it("salida 18:00: a 50 h de la salida (44 h del mediodía) devuelve todo, no la mitad", async () => {
+    viajeConSalida("18:00");
+    freezeClockAt("2026-11-09T19:00:00.000Z");
+
+    await tripsService.cancelCargoItem("t1", "i1", "c1");
+
+    expect(resultado()).toEqual({ devuelve: 100, fee: 0 });
+  });
+
+  it("salida 06:00: a 44 h de la salida (50 h del mediodía) devuelve la mitad, no todo", async () => {
+    viajeConSalida("06:00");
+    freezeClockAt("2026-11-09T13:00:00.000Z");
+
+    await tripsService.cancelCargoItem("t1", "i1", "c1");
+
+    expect(resultado()).toEqual({ devuelve: 50, fee: 50 });
+  });
+
+  it("viaje viejo sin hora: mide contra las 23:59 ART (a 30 h devuelve la mitad)", async () => {
+    viajeConSalida(null);
+    // 30 h antes de las 23:59 ART del 11/11; contra el mediodía serían ~18 h
+    freezeClockAt("2026-11-10T20:59:00.000Z");
+
+    await tripsService.cancelCargoItem("t1", "i1", "c1");
+
+    expect(resultado()).toEqual({ devuelve: 50, fee: 50 });
+  });
+
+  it("borde exacto de 48 h antes de la salida: la mitad", async () => {
+    viajeConSalida("18:00");
+    freezeClockAt("2026-11-09T21:00:00.000Z");
+
+    await tripsService.cancelCargoItem("t1", "i1", "c1");
+
+    expect(resultado()).toEqual({ devuelve: 50, fee: 50 });
+  });
+
+  it("un minuto antes del borde de 48 h: todo", async () => {
+    viajeConSalida("18:00");
+    freezeClockAt("2026-11-09T20:59:00.000Z");
+
+    await tripsService.cancelCargoItem("t1", "i1", "c1");
+
+    expect(resultado()).toEqual({ devuelve: 100, fee: 0 });
+  });
+
+  it("borde exacto de 24 h antes de la salida: todavía la mitad", async () => {
+    viajeConSalida("18:00");
+    freezeClockAt("2026-11-10T21:00:00.000Z");
+
+    await tripsService.cancelCargoItem("t1", "i1", "c1");
+
+    expect(resultado()).toEqual({ devuelve: 50, fee: 50 });
+  });
+
+  it("un minuto después del borde de 24 h: no devuelve nada", async () => {
+    viajeConSalida("18:00");
+    freezeClockAt("2026-11-10T21:01:00.000Z");
+
+    await tripsService.cancelCargoItem("t1", "i1", "c1");
+
+    expect(resultado()).toEqual({ devuelve: null, fee: 100 });
   });
 });
 
@@ -1643,6 +1762,7 @@ describe("addCargoItem", () => {
         origin: "Córdoba",
         destination: "Rosario",
         date: new Date("2026-10-01T10:00:00.000Z"),
+        departureTime: "08:00",
         truckType: "Semi",
         capacityTotal: 30,
         price: 1500,
@@ -1672,6 +1792,7 @@ describe("addCargoItem", () => {
         origin: "Córdoba",
         destination: "Rosario",
         date: new Date("2026-10-01T10:00:00.000Z"),
+        departureTime: "08:00",
         truckType: "Semi",
         capacityTotal: 30,
         price: 1500,
@@ -2421,6 +2542,7 @@ describe("addCargoItem", () => {
       origin: "A",
       destination: "B",
       date: new Date(),
+      departureTime: "08:00",
       truckType: "Semi",
       capacityTotal: 10,
       price: 1000,
@@ -2686,6 +2808,7 @@ describe("addCargoItem", () => {
       origin: "Rosario",
       destination: "Córdoba",
       date: new Date("2026-11-01T10:00:00.000Z"),
+      departureTime: "08:00",
       truckType: "Semi",
       capacityTotal: 20,
       price: 186_500,
@@ -2707,7 +2830,7 @@ describe("addCargoItem", () => {
       expect(geocode).toHaveBeenCalledWith("Córdoba");
       expect(prisma.trip.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          data: expect.objectContaining({ departureTime: null }),
+          data: expect.objectContaining({ departureTime: "08:00" }),
         })
       );
       expect(prisma.trip.create).toHaveBeenCalledWith(
@@ -3098,6 +3221,7 @@ describe("addCargoItem", () => {
       origin: "Rosario",
       destination: "Córdoba",
       date: new Date("2026-11-01T10:00:00.000Z"),
+      departureTime: "08:00",
       truckType: "Semi",
       capacityTotal: 20,
       price: 1000,
@@ -3120,14 +3244,16 @@ describe("addCargoItem", () => {
       expect(trip.departureTime).toBe("05:45");
     });
 
-    it("no inventa hora si el fletero no la carga", async () => {
-      vi.mocked(prisma.trip.create).mockResolvedValue(
-        baseTrip({ id: "t1", departureTime: null }) as never
-      );
+    // un viaje nuevo sin hora lo rechaza el schema (tests/app.test.ts, U11); los
+    // viejos sin hora siguen saliendo con null
+    it("un viaje viejo sin hora sale con null en el resumen", async () => {
+      vi.mocked(prisma.trip.findMany).mockResolvedValue([
+        baseTrip({ id: "t1", departureTime: null }),
+      ] as never);
 
-      const trip = await tripsService.createTrip("u1", base);
+      const [trip] = await tripsService.listOpenTrips();
 
-      expect(trip.departureTime).toBeNull();
+      expect(trip?.departureTime).toBeNull();
     });
 
     it("la lista de viajes también la trae", async () => {

@@ -536,6 +536,7 @@ describe("createTrip y el punto exacto de salida", () => {
       destination: "Rosario",
       departureAddress: "galpón sin geocodificar",
       date: new Date("2026-10-01T10:00:00.000Z"),
+      departureTime: "08:00",
       truckType: "Semi",
       capacityTotal: 30,
       price: 1500,
@@ -578,6 +579,7 @@ describe("createTrip y el punto exacto de salida", () => {
       destination: "Rosario",
       departureAddress: "Av. Colón 1234, Córdoba",
       date: new Date("2026-10-01T10:00:00.000Z"),
+      departureTime: "08:00",
       truckType: "Semi",
       capacityTotal: 30,
       // con coordenadas reales entra la validación de rango: 374 km pide

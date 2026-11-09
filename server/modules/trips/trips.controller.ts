@@ -48,6 +48,7 @@ export async function getCancellationQuote(_req: Request, res: Response) {
   const quote = await tripsService.estimateCancellation({
     depositAmount: query.depositAmount,
     tripDate: query.tripDate,
+    departureTime: query.departureTime,
   });
   res.json(quote);
 }

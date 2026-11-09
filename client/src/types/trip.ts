@@ -56,8 +56,8 @@ export type TripInput = {
   origin: string;
   destination: string;
   date: string;
-  /** "HH:mm" en 24h; opcional (undefined = el viaje se publica sin hora) */
-  departureTime?: string;
+  /** "HH:mm" en 24h; obligatoria: la ventana de retiro se mide contra la salida */
+  departureTime: string;
   /** punto exacto de salida (depósito/galpón); opcional */
   departureAddress?: string;
   truckType: string;
@@ -262,6 +262,6 @@ export type RespondTripRequestInput = {
     price: number;
     depositPercent?: number;
     features?: string[];
-    departureTime?: string | null;
+    departureTime: string;
   };
 };

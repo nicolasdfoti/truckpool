@@ -12,7 +12,8 @@ import { geocode } from "../lib/geocode.js";
 import { createTrip } from "../modules/trips/trips.service.js";
 import { calculateSuggestedPrice } from "../lib/pricing.js";
 import { AppError } from "../lib/errors.js";
-import { quoteCancellation, hoursUntilTrip } from "../lib/cancellation.js";
+import { quoteCancellation, hoursUntilDeparture } from "../lib/cancellation.js";
+import { salidaEn } from "./helpers/salida.js";
 
 // el token del transportista llega a la base cifrado (ver OAuth), así que los
 // mocks usan un sobre real y no un string suelto
@@ -180,6 +181,7 @@ describe("POST /api/trips", () => {
     origin: "Córdoba",
     destination: "Rosario",
     date: "2026-10-01T10:00:00.000Z",
+    departureTime: "08:00",
     truckType: "Semi",
     capacityTotal: 30,
     price: 1500,
@@ -254,38 +256,32 @@ describe("POST /api/trips", () => {
     expect(res.body.departureTime).toBe("06:30");
   });
 
-  it("publica sin hora de salida cuando el fletero no la carga (201)", async () => {
-    const createdTrip = {
-      id: "t-sin-hora",
-      origin: "Córdoba",
-      destination: "Rosario",
-      date: new Date("2026-10-01T10:00:00.000Z"),
-      departureTime: null,
-      truckType: "Semi",
-      capacityTotal: 30,
-      price: new Prisma.Decimal("1500"),
-      status: "OPEN",
-      createdAt: new Date(),
-      carrierId: "u1",
-      features: [],
-      cargoItems: [],
-    } as unknown as Trip;
-    vi.mocked(prisma.trip.create).mockResolvedValue(createdTrip);
+  // U11: la ventana de retiro se mide contra la salida, así que un viaje nuevo
+  // no se publica sin hora (los viejos sin hora salen a las 23:59 ART)
+  it("rechaza un viaje sin hora de salida (400)", async () => {
+    vi.mocked(prisma.trip.create).mockClear();
+    const { departureTime: _sinHora, ...sinHora } = validBody;
+    for (const body of [sinHora, { ...validBody, departureTime: null }]) {
+      const res = await request(app)
+        .post("/api/trips")
+        .set("Authorization", `Bearer ${carrierToken}`)
+        .send(body);
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe("VALIDATION_ERROR");
+    }
+    expect(prisma.trip.create).not.toHaveBeenCalled();
+  });
 
+  it("rechaza aceptar una solicitud de viaje sin hora de salida (400)", async () => {
     const res = await request(app)
-      .post("/api/trips")
+      .patch("/api/users/trip-requests/r1/respond")
       .set("Authorization", `Bearer ${carrierToken}`)
-      .send(validBody);
-
-    expect(res.status).toBe(201);
-    // null y no "" ni undefined: la columna es nullable y el cliente decide
-    // si mostrar la hora o no
-    expect(prisma.trip.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({ departureTime: null }),
-      })
-    );
-    expect(res.body.departureTime).toBeNull();
+      .send({
+        accept: true,
+        tripDetails: { truckType: "Semi", capacityTotal: 30, price: 250_000 },
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("VALIDATION_ERROR");
   });
 
   it("rechaza features fuera del set permitido (400)", async () => {
@@ -567,6 +563,7 @@ describe("DELETE /api/trips/:tripId/cargo-items/:id", () => {
   const openTrip = {
     id: "t1",
     status: "OPEN",
+    ...salidaEn(72),
     capacityTotal: 30,
     cargoItems: [cargoItem],
     platformFeePercent: 10,
@@ -722,7 +719,7 @@ describe("DELETE /api/trips/:tripId/cargo-items/:id", () => {
     };
     const tx = mockTx(paid, {
       ...openTrip,
-      date: new Date(Date.now() + 10 * 3_600_000),
+      ...salidaEn(10),
     });
 
     const res = await request(app)
@@ -2511,6 +2508,7 @@ describe("GET /api/trips/price-estimate", () => {
           origin: "Rosario",
           destination: "Córdoba",
           date: new Date("2026-11-01T10:00:00.000Z"),
+          departureTime: "08:00",
           truckType: "Semi",
           capacityTotal: 20,
           price,
@@ -3052,12 +3050,25 @@ describe("logout con revocación real", () => {
 });
 
 describe("GET /api/trips/cancellation-quote", () => {
-  /** fecha del viaje a X horas desde ahora, para cruzar cada ventana */
-  const inHours = (h: number) => new Date(Date.now() + h * 3_600_000).toISOString();
-  const ask = (depositAmount: number, tripDate: string) =>
-    request(app).get(
-      `/api/trips/cancellation-quote?depositAmount=${depositAmount}&tripDate=${encodeURIComponent(tripDate)}`
+  /**
+   * salida del viaje a X horas desde ahora, para cruzar cada ventana. La
+   * ventana se mide contra día + hora (U11): se manda la hora de ese instante.
+   */
+  const inHours = (h: number) => {
+    const { date, departureTime } = salidaEn(h);
+    return { tripDate: date.toISOString(), departureTime };
+  };
+  const ask = (
+    depositAmount: number,
+    salida: { tripDate: string; departureTime?: string } | string
+  ) => {
+    const { tripDate, departureTime } =
+      typeof salida === "string" ? { tripDate: salida, departureTime: undefined } : salida;
+    return request(app).get(
+      `/api/trips/cancellation-quote?depositAmount=${depositAmount}&tripDate=${encodeURIComponent(tripDate)}` +
+        (departureTime ? `&departureTime=${departureTime}` : "")
     );
+  };
 
   it("es pública: el confirm de retiro se muestra sin sesión", async () => {
     const res = await ask(100_000, inHours(72));
@@ -3112,9 +3123,12 @@ describe("GET /api/trips/cancellation-quote", () => {
     vi.setSystemTime(new Date("2026-11-03T12:00:00.000Z"));
     try {
       for (const hours of [72, 36, 2, 48, 24]) {
-        const tripDate = inHours(hours);
-        const res = await ask(87_000, tripDate);
-        const real = quoteCancellation(87_000, hoursUntilTrip(tripDate));
+        const salida = inHours(hours);
+        const res = await ask(87_000, salida);
+        const real = quoteCancellation(
+          87_000,
+          hoursUntilDeparture({ date: salida.tripDate, departureTime: salida.departureTime })
+        );
         expect(res.body).toEqual(real);
       }
     } finally {
@@ -3136,7 +3150,7 @@ describe("GET /api/trips/cancellation-quote", () => {
 
   it("rechaza una seña que no es número", async () => {
     const res = await request(app).get(
-      `/api/trips/cancellation-quote?depositAmount=abc&tripDate=${encodeURIComponent(inHours(72))}`
+      `/api/trips/cancellation-quote?depositAmount=abc&tripDate=${encodeURIComponent(inHours(72).tripDate)}`
     );
     expect(res.status).toBe(400);
   });
@@ -3144,5 +3158,49 @@ describe("GET /api/trips/cancellation-quote", () => {
   it("rechaza una fecha de viaje que no existe", async () => {
     const res = await ask(100_000, "no-es-fecha");
     expect(res.status).toBe(400);
+  });
+
+  // U11: los bordes se miden contra la salida (día + hora en ART), no contra el
+  // instante de `tripDate`. Viaje del 11/11 guardado a las 12:00 ART, sale 18:00
+  // ART (21:00Z). Reloj congelado: solo Date, supertest sigue con timers reales.
+  describe("bordes contra la hora de salida (U11)", () => {
+    const DIA = "2026-11-11T15:00:00.000Z";
+    const askSalida = (departureTime?: string) =>
+      request(app).get(
+        `/api/trips/cancellation-quote?depositAmount=100&tripDate=${encodeURIComponent(DIA)}` +
+          (departureTime ? `&departureTime=${departureTime}` : "")
+      );
+    const at = async (iso: string, departureTime?: string) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(iso));
+      try {
+        const res = await askSalida(departureTime);
+        expect(res.status).toBe(200);
+        return res.body.window as string;
+      } finally {
+        vi.useRealTimers();
+      }
+    };
+
+    it("48 h exactas antes de la salida: la mitad; un minuto antes, todo", async () => {
+      expect(await at("2026-11-09T21:00:00.000Z", "18:00")).toBe("PARTIAL_REFUND");
+      expect(await at("2026-11-09T20:59:00.000Z", "18:00")).toBe("FULL_REFUND");
+    });
+
+    it("24 h exactas antes de la salida: la mitad; un minuto después, nada", async () => {
+      expect(await at("2026-11-10T21:00:00.000Z", "18:00")).toBe("PARTIAL_REFUND");
+      expect(await at("2026-11-10T21:01:00.000Z", "18:00")).toBe("NO_REFUND");
+    });
+
+    it("sin hora (viaje viejo) mide contra las 23:59 ART", async () => {
+      // 48 h antes de las 23:59 ART del 11/11 (02:59Z del 12/11)
+      expect(await at("2026-11-10T02:59:00.000Z")).toBe("PARTIAL_REFUND");
+      expect(await at("2026-11-10T02:58:00.000Z")).toBe("FULL_REFUND");
+    });
+
+    it("rechaza una hora de salida inválida (400)", async () => {
+      const res = await askSalida("25:00");
+      expect(res.status).toBe(400);
+    });
   });
 });

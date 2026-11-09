@@ -590,7 +590,7 @@ export async function respondTripRequest(
         origin: request.origin,
         destination: request.destination,
         date: request.desiredDate,
-        departureTime: input.tripDetails.departureTime ?? null,
+        departureTime: input.tripDetails.departureTime,
         truckType: input.tripDetails.truckType,
         capacityTotal: input.tripDetails.capacityTotal,
         price: input.tripDetails.price,
