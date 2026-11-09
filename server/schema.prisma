@@ -267,6 +267,8 @@ model Payment {
 
   @@unique([cargoItemId, type])
   @@index([mpPreferenceId])
+  // el webhook busca el pago por el data.id de MP en cada notificación
+  @@index([mpPaymentId])
   @@index([status])
 }
 
@@ -309,6 +311,9 @@ enum NotificationType {
   BALANCE_DUE
   TRIP_REQUEST
   TRIP_REQUEST_RESPONSE
+  // para los admins: plata cobrada en MP que el sistema no pudo asentar
+  // (cobro duplicado, monto o moneda distintos)
+  PAYMENT_ALERT
 }
 
 // aviso in-app. el email es un canal opcional del mismo aviso (se manda solo si
@@ -358,6 +363,14 @@ enum RefundStatus {
   PROCESSING
   COMPLETED
   FAILED
+}
+
+// un aviso a los admins por evento de pago (cobro duplicado, monto distinto,
+// saldo sobre una carga retirada). La clave es tipo:pago:pago de MP: MP repite
+// el webhook y cada repetición tiene que dar el mismo aviso, no uno nuevo.
+model PaymentAlert {
+  key       String   @id
+  createdAt DateTime @default(now())
 }
 
 model RefundRequest {

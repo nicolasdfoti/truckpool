@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { User } from "@prisma/client";
 import { CarrierNotFoundError } from "../lib/errors.js";
 import { decryptSecret } from "../lib/crypto.js";
@@ -650,6 +650,102 @@ describe("OAuth de Mercado Pago", () => {
     expect(prisma.user.update).not.toHaveBeenCalled();
 
     vi.unstubAllGlobals();
+  });
+
+  it("si MP rechaza el código, el mensaje es nuestro: no repite texto de MP", async () => {
+    // el handler global loguea el mensaje de los 5xx propios: lo que diga MP en
+    // error_description no puede terminar en el log ni en la respuesta
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 400,
+        statusText: "Bad Request",
+        json: async () => ({ error: "invalid_grant", error_description: "texto-de-mp" }),
+      })
+    );
+
+    const err = await usersService.exchangeMpCode("u1", "code").catch((e: unknown) => e);
+
+    expect(err).toMatchObject({ statusCode: 502, code: "MP_OAUTH_TOKEN_ERROR" });
+    expect((err as Error).message).not.toContain("texto-de-mp");
+    expect(prisma.user.update).not.toHaveBeenCalled();
+
+    vi.unstubAllGlobals();
+  });
+});
+
+describe("OAuth de Mercado Pago: test_token (MP_OAUTH_TEST_TOKEN)", () => {
+  const ORIGINAL_NODE_ENV = process.env.NODE_ENV;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.MP_CLIENT_ID = "client-id";
+    process.env.MP_CLIENT_SECRET = "client-secret";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ access_token: "APP_USR-token", user_id: 1 }),
+      })
+    );
+    vi.mocked(prisma.user.update).mockResolvedValue(baseUser() as never);
+  });
+
+  afterEach(() => {
+    delete process.env.MP_OAUTH_TEST_TOKEN;
+    process.env.NODE_ENV = ORIGINAL_NODE_ENV;
+    vi.unstubAllGlobals();
+  });
+
+  /** el body que se le mandó a /oauth/token */
+  const bodyEnviado = () => {
+    const [url, init] = vi.mocked(fetch).mock.calls[0]!;
+    expect(url).toBe("https://api.mercadopago.com/oauth/token");
+    return init!.body as URLSearchParams;
+  };
+
+  it("con MP_OAUTH_TEST_TOKEN=true pide credenciales de sandbox (test_token=true)", async () => {
+    process.env.MP_OAUTH_TEST_TOKEN = "true";
+
+    await usersService.exchangeMpCode("u1", "code");
+
+    expect(bodyEnviado().get("test_token")).toBe("true");
+  });
+
+  it("con MP_OAUTH_TEST_TOKEN=false no manda test_token", async () => {
+    process.env.MP_OAUTH_TEST_TOKEN = "false";
+
+    await usersService.exchangeMpCode("u1", "code");
+
+    expect(bodyEnviado().has("test_token")).toBe(false);
+  });
+
+  it("sin MP_OAUTH_TEST_TOKEN el valor por defecto es false: no manda test_token", async () => {
+    await usersService.exchangeMpCode("u1", "code");
+
+    expect(bodyEnviado().has("test_token")).toBe(false);
+  });
+
+  it("en producción, MP_OAUTH_TEST_TOKEN=true no se usa nunca: no llama a MP ni guarda nada", async () => {
+    process.env.NODE_ENV = "production";
+    process.env.MP_OAUTH_TEST_TOKEN = "true";
+
+    await expect(usersService.exchangeMpCode("u1", "code")).rejects.toMatchObject({
+      statusCode: 500,
+      code: "MP_NOT_CONFIGURED",
+    });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
+  it("un valor desconocido no se interpreta: no llama a MP", async () => {
+    process.env.MP_OAUTH_TEST_TOKEN = "TRUE";
+
+    await expect(usersService.exchangeMpCode("u1", "code")).rejects.toMatchObject({
+      code: "MP_NOT_CONFIGURED",
+    });
+    expect(fetch).not.toHaveBeenCalled();
   });
 });
 

@@ -7,6 +7,9 @@ import {
   Preference,
 } from "mercadopago";
 import { AppError } from "./errors.js";
+import { isLocalUrl } from "./urls.js";
+import { mpCheckoutSandbox } from "./env.js";
+import { decryptSecret } from "./crypto.js";
 
 export type MpPaymentState = "PENDING" | "APPROVED" | "REJECTED" | "REFUNDED";
 
@@ -32,6 +35,31 @@ function mpConfig() {
     );
   }
   return new MercadoPagoConfig({ accessToken });
+}
+
+/**
+ * Credenciales MP del transportista dueño del viaje, con el token descifrado.
+ *
+ * Los pagos se crean en la cuenta del transportista (marketplace), así que
+ * consultarlos o reembolsarlos con el token de la plataforma da 404: todo lo que
+ * toca un pago concreto pasa por acá. El token se descifra en el último momento
+ * para que en cualquier log o error de la base quede siempre el sobre cifrado.
+ */
+export function resolveCarrierMpToken(carrier: {
+  mpUserId: string | null;
+  mpAccessToken: string | null;
+}): { mpUserId: string; accessToken: string } {
+  if (!carrier.mpUserId || !carrier.mpAccessToken) {
+    throw new AppError(
+      "el transportista de este viaje no tiene cuenta de Mercado Pago conectada",
+      409,
+      "MP_ACCOUNT_NOT_CONNECTED"
+    );
+  }
+  return {
+    mpUserId: carrier.mpUserId,
+    accessToken: decryptSecret(carrier.mpAccessToken),
+  };
 }
 
 /** La URL pública de la API, de donde salen los back_urls y el webhook. */
@@ -120,10 +148,6 @@ export async function checkAccountConnection(): Promise<MpConnectionCheck> {
   };
 }
 
-export function toPaymentState(status: string | undefined): MpPaymentState {
-  return mapMpStatus(status) ?? "PENDING";
-}
-
 export type PreferenceInput = {
   paymentId: string;
   cargoItemId: string;
@@ -185,6 +209,8 @@ export async function createCheckoutPreference(input: PreferenceInput): Promise<
     accessToken: input.carrierMpAccessToken,
   });
   const preferenceClient = new Preference(carrierConfig);
+  // antes de crear nada: en producción con la bandera prendida corta acá
+  const sandboxCheckout = mpCheckoutSandbox();
 
   try {
     const body = {
@@ -204,20 +230,35 @@ export async function createCheckoutPreference(input: PreferenceInput): Promise<
         cargo_item_id: input.cargoItemId,
         payment_type: input.paymentType ?? "DEPOSIT",
       },
-      notification_url: `${api}/api/payments/webhook?payment_id=${encodeURIComponent(input.paymentId)}`,
-      back_urls: {
-        success: `${returnUrl}&status=approved`,
-        failure: `${returnUrl}&status=rejected`,
-        pending: `${returnUrl}&status=pending`,
-      },
-      auto_return: "approved",
+      // source_news=webhooks: en sandbox llegaron solo Webhooks firmados, sin
+      // IPN, y respondieron 200. Las IPN no traen una firma verificable: el
+      // webhook las rechaza con 401 y MP las reintenta. Alcance de la prueba:
+      // test-preference, no el flujo real de una seña (04-launch, L1).
+      notification_url: `${api}/api/payments/webhook?payment_id=${encodeURIComponent(input.paymentId)}&source_news=webhooks`,
+      // MP no acepta back_urls a localhost: con auto_return la preference falla
+      // con 400 (visto en sandbox). Con APP_URL local no se mandan: el pago lo
+      // confirma el webhook igual, y el comprador vuelve al sitio a mano. Depende
+      // solo de APP_URL, no de NODE_ENV (en producción env.ts exige una pública).
+      ...(isLocalUrl(clientUrl)
+        ? {}
+        : {
+            back_urls: {
+              success: `${returnUrl}&status=approved`,
+              failure: `${returnUrl}&status=rejected`,
+              pending: `${returnUrl}&status=pending`,
+            },
+            auto_return: "approved",
+          }),
       marketplace_fee: platformFeeAmount,
       marketplace: input.carrierMpUserId,
     };
 
     const created = await preferenceClient.create({ body });
 
-    const initPoint = created.sandbox_init_point ?? created.init_point;
+    // el link se elige por MP_CHECKOUT_SANDBOX, nunca por cuál venga: MP manda
+    // los dos, y sin la bandera un pago real terminaba en el sandbox. Si falta
+    // el link pedido no se cae al otro.
+    const initPoint = sandboxCheckout ? created.sandbox_init_point : created.init_point;
     if (!created.id || !initPoint) {
       throw new AppError(
         "Mercado Pago no devolvió una preference utilizable",
@@ -278,11 +319,11 @@ export async function createTestPreference(input: {
       external_reference: testReference,
       metadata: { source: "truckpool-test", external_reference: testReference },
       // El webhook de la plataforma. Sin `payment_id` a propósito: una preference
-      // de prueba no corresponde a un `Payment` de la base, y mandarle un id
-      // inexistente haría que el handler respondiera 404 y Mercado Pago lo
-      // reintentara. Sin esos query params `findPaymentForNotification`
-      // devuelve null y el webhook responde 200 sin tocar nada.
-      notification_url: `${apiUrl()}/api/payments/webhook?source=test-preference`,
+      // de prueba no corresponde a un `Payment` de la base. El webhook busca
+      // primero por el `data.id` firmado (ningún Payment lo tiene) y, sin la
+      // pista, `findPaymentForNotification` devuelve null: responde 200 sin
+      // tocar nada, y MP no reintenta.
+      notification_url: `${apiUrl()}/api/payments/webhook?source=test-preference&source_news=webhooks`,
     };
 
     const created = await preferenceClient.create({ body });
@@ -308,12 +349,50 @@ export async function createTestPreference(input: {
   }
 }
 
+/**
+ * Estado de un pago según Mercado Pago, más su `external_reference` (el
+ * `Payment.id` interno que mandamos al crear la preference): es lo que permite
+ * comprobar que el pago de MP corresponde al pago local que se va a mover. El
+ * monto y la moneda cobrados sirven para no aprobar un pago por menos de lo que
+ * vale (o en otra moneda).
+ */
 export async function fetchPaymentState(
-  mpPaymentId: string
-): Promise<MpPaymentState | null> {
-  const paymentClient = new Payment(mpConfig());
-  const payment = await paymentClient.get({ id: mpPaymentId });
-  return mapMpStatus(payment.status);
+  mpPaymentId: string,
+  accessToken: string
+): Promise<{
+  state: MpPaymentState | null;
+  externalReference: string | null;
+  /** `transaction_amount`: lo que MP cobró, para compararlo con el pago local */
+  amount: number | null;
+  currencyId: string | null;
+}> {
+  const paymentClient = new Payment(new MercadoPagoConfig({ accessToken }));
+
+  let payment;
+  try {
+    payment = await paymentClient.get({ id: mpPaymentId });
+  } catch (err) {
+    if (err instanceof AppError) throw err;
+    // el error crudo del SDK puede traer los headers de la request (y con
+    // ellos el token): solo el status sale de acá
+    console.warn("[mercadopago] fetchPaymentState falló", { status: mpErrorStatus(err) });
+    throw new AppError("no pudimos consultar el pago en Mercado Pago", 502, "MP_ERROR");
+  }
+
+  if (!payment?.id) {
+    throw new AppError(
+      "Mercado Pago no devolvió un pago utilizable",
+      502,
+      "MP_INVALID_RESPONSE"
+    );
+  }
+  return {
+    state: mapMpStatus(payment.status),
+    externalReference: payment.external_reference ?? null,
+    amount:
+      typeof payment.transaction_amount === "number" ? payment.transaction_amount : null,
+    currencyId: payment.currency_id ?? null,
+  };
 }
 
 /**
@@ -351,7 +430,8 @@ export type MpPaymentDetails = {
    *
    * OJO: se pide con el token de la PLATAFORMA (ver `getPaymentDetails`), así
    * que para pagos creados en la cuenta de un transportista puede no existir y
-   * la respuesta es un 404. Es un riesgo conocido, no resuelto todavía.
+   * la respuesta es un 404. Solo afecta al diagnóstico: el webhook y los
+   * reembolsos usan el token del transportista.
    */
   liveMode: boolean;
   /** lo que mandamos como `external_reference`: el `Payment.id` interno */
@@ -388,13 +468,14 @@ function looksLikeNotFound(err: unknown): boolean {
  * que el 404 crudo suba al handler global y termine en un 500 genérico: un
  * pago que no existe en MP y un error de red tienen que poder distinguirse.
  *
- * RIESGO CONOCIDO, no resuelto en esta pasada: siempre consulta con el token
- * de la plataforma (`MP_ACCESS_TOKEN`). Los pagos de una preference creada con
- * `carrierMpAccessToken` viven en la cuenta del transportista y la plataforma no
- * los ve, así que este `get` puede devolver 404 para un pago que sí existe. El
- * mensaje de error lo dice explícitamente para que un 404 no se lea como "el
- * pago no se hizo". Cuando se resuelva, va a ser acá: elegir el token según de
- * quién es la preference que originó el pago.
+ * Es solo para el diagnóstico `GET /payments/mp/:id`, que se monta fuera de
+ * producción. Lo que mueve plata (webhook, `fetchPaymentState`, `refundPayment`)
+ * ya consulta con el token del transportista vía `resolveCarrierMpToken`. Esta
+ * función, en cambio, sigue usando el de la plataforma (`MP_ACCESS_TOKEN`): los
+ * pagos de una preference creada con `carrierMpAccessToken` viven en la cuenta
+ * del transportista y la plataforma no los ve, así que este `get` puede devolver
+ * 404 para un pago que sí existe. El mensaje de error lo dice explícitamente
+ * para que un 404 no se lea como "el pago no se hizo".
  *
  * @throws 404 MP_PAYMENT_NOT_FOUND si MP no lo tiene (o si es de un transportista)
  * @throws 502 MP_ERROR si MP falló por otra razón
@@ -481,17 +562,23 @@ export async function getPaymentDetails(mpPaymentId: string): Promise<MpPaymentD
  * consulta se puede hacer, no se emite ningún reembolso: no saber cuánto se
  * devolvió es exactamente la condición bajo la cual pedir de más es probable.
  *
+ * `idempotencyKey` cubre lo que la consulta previa no puede: dos llamadas
+ * concurrentes que leen el mismo total antes de que cualquiera de las dos pida
+ * nada. Con la misma clave, Mercado Pago ejecuta el reembolso una sola vez.
+ *
  * Devuelve cuánto lleva reembolsado ese pago en total, para dejarlo asentado.
  */
 export async function refundPayment(
   mpPaymentId: string,
-  amount: number
+  amount: number,
+  accessToken: string,
+  opts: { idempotencyKey?: string } = {}
 ): Promise<number> {
   // cuánto le devolvimos HASTA AHORA, antes de pedir nada (ver el comentario de
   // arriba: el reintento de la transacción es lo que hace falta cubrir acá)
   let already: number;
   try {
-    already = await refundedAmount(mpPaymentId);
+    already = await refundedAmount(mpPaymentId, accessToken);
   } catch {
     // a ciegas no se devuelve plata: si no se puede leer el estado, se corta y
     // la empresa reintenta, en vez de arriesgar un reembolso duplicado
@@ -507,18 +594,36 @@ export async function refundPayment(
   if (pending < CENT) return already;
 
   try {
-    await new PaymentRefund(mpConfig()).create({
+    await new PaymentRefund(new MercadoPagoConfig({ accessToken })).create({
       payment_id: mpPaymentId,
       body: { amount: pending },
+      // con la misma clave MP no repite el reembolso aunque llegue dos veces
+      ...(opts.idempotencyKey
+        ? { requestOptions: { idempotencyKey: opts.idempotencyKey } }
+        : {}),
     });
   } catch (err) {
     // puede haber funcionado igual y fallado el response: se vuelve a preguntar
-    const refunded = await refundedAmount(mpPaymentId).catch(() => 0);
+    const refunded = await refundedAmount(mpPaymentId, accessToken).catch(() => 0);
     if (refunded + CENT >= amount) return refunded;
     if (err instanceof AppError) throw err;
     throw new AppError("no pudimos devolver el dinero con Mercado Pago", 502, "MP_ERROR");
   }
-  return refundedAmount(mpPaymentId);
+  try {
+    return await refundedAmount(mpPaymentId, accessToken);
+  } catch (err) {
+    // el reembolso entró pero no pudimos leer el total: el error crudo del SDK
+    // trae los headers (y el token), así que solo sale el status. No se asienta
+    // nada; el reintento lo detecta con la consulta previa y no pide de nuevo.
+    console.warn("[mercadopago] refundedAmount falló tras reembolsar", {
+      status: mpErrorStatus(err),
+    });
+    throw new AppError(
+      "pedimos la devolución a Mercado Pago pero no pudimos confirmar el monto",
+      502,
+      "MP_ERROR"
+    );
+  }
 }
 
 /** tolerancia de un centavo: evita pedir reembolsos de ruido por redondeo */
@@ -528,10 +633,35 @@ function round2(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
-/** cuánto le devolvimos a Mercado Pago hasta ahora por ese pago */
-export async function refundedAmount(mpPaymentId: string): Promise<number> {
-  const res = await new PaymentRefund(mpConfig()).total({ payment_id: mpPaymentId });
-  return Number(res.amount ?? 0);
+/**
+ * Cuánto lleva devuelto ese pago en Mercado Pago, leído del pago mismo
+ * (`transaction_amount_refunded` de GET /v1/payments/{id}).
+ *
+ * No usar `PaymentRefund.total()` del SDK: a pesar del nombre no lee nada, hace
+ * POST /v1/payments/{id}/refunds sin monto, y en MP un reembolso sin monto es
+ * un reembolso del 100 %. Llamarlo como "consulta previa" devolvía la seña
+ * entera aunque correspondiera la mitad (retiro entre 24 y 48 h).
+ *
+ * Si MP no informa el campo, se corta: tomarlo como 0 podría duplicar un
+ * reembolso, y `refundPayment` no devuelve nada a ciegas.
+ */
+export async function refundedAmount(
+  mpPaymentId: string,
+  accessToken: string
+): Promise<number> {
+  const payment = await new Payment(new MercadoPagoConfig({ accessToken })).get({
+    id: mpPaymentId,
+  });
+  const refunded = (payment as { transaction_amount_refunded?: unknown })
+    .transaction_amount_refunded;
+  if (typeof refunded !== "number" || !Number.isFinite(refunded)) {
+    throw new AppError(
+      "Mercado Pago no informó cuánto se devolvió del pago",
+      502,
+      "MP_INVALID_RESPONSE"
+    );
+  }
+  return refunded;
 }
 
 function safeEqual(a: string, b: string) {
@@ -563,10 +693,23 @@ export function verifyWebhookSignature(input: {
     throw new AppError("firma de Mercado Pago inválida", 401, "INVALID_SIGNATURE");
   }
 
-  const manifest = `id:${input.dataId ?? ""};request-id:${input.requestIdHeader};ts:${ts};`;
+  // como indica la doc de MP: el data.id va en minúsculas y, si no vino, su
+  // parte se saca del manifest (no queda `id:;`)
+  const idPart = input.dataId ? `id:${input.dataId.toLowerCase()};` : "";
+  const manifest = `${idPart}request-id:${input.requestIdHeader};ts:${ts};`;
   const expected = createHmac("sha256", secret).update(manifest).digest("hex");
 
   if (!safeEqual(expected, v1.toLowerCase())) {
     throw new AppError("firma de Mercado Pago inválida", 401, "INVALID_SIGNATURE");
   }
+
+  // una firma válida no alcanza: sin frescura, una notificación capturada se
+  // puede reenviar para siempre. MP manda el ts en segundos o en milisegundos.
+  const tsMs = ts.length >= 13 ? Number(ts) : Number(ts) * 1000;
+  if (!Number.isFinite(tsMs) || Math.abs(Date.now() - tsMs) > WEBHOOK_MAX_SKEW_MS) {
+    throw new AppError("firma de Mercado Pago inválida", 401, "INVALID_SIGNATURE");
+  }
 }
+
+/** cuánto puede diferir el `ts` firmado del reloj del server */
+const WEBHOOK_MAX_SKEW_MS = 5 * 60_000;

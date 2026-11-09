@@ -437,6 +437,7 @@ Para que el transportista pueda publicar, primero hay que aprobarlo desde
 | --- | --- |
 | `DATABASE_URL` | Conexión a PostgreSQL |
 | `JWT_SECRET` | Firma de los tokens (64 hex recomendado) |
+| `NODE_ENV` | Obligatoria: `development` o `production` (sin ella no arranca; `test` lo usa solo vitest y el server lo rechaza) |
 | `CORS_ORIGIN` | Orígenes permitidos, separados por comas |
 | `PORT` | Puerto de la API (4000) |
 | `TRUST_PROXY` | Saltos de proxy para tomar la IP real |
@@ -444,6 +445,8 @@ Para que el transportista pueda publicar, primero hay que aprobarlo desde
 | `MP_ACCESS_TOKEN` | Token de la cuenta de la plataforma |
 | `MP_WEBHOOK_SECRET` | Firma de los webhooks de MP |
 | `MP_CLIENT_ID` / `MP_CLIENT_SECRET` | OAuth de Mercado Pago Marketplace |
+| `MP_OAUTH_TEST_TOKEN` | `true` pide credenciales de sandbox en el OAuth (`test_token`); default `false`. Con `NODE_ENV=production` el server no arranca |
+| `MP_CHECKOUT_SANDBOX` | `true` manda el checkout al link de sandbox (`sandbox_init_point`); default `false` (`init_point`). Con `NODE_ENV=production` el server no arranca |
 | `TOKEN_ENCRYPTION_KEY` | 64 hex (32 bytes) para cifrar tokens MP |
 | `RESEND_API_KEY` | API key de Resend |
 | `EMAIL_FROM` | Remitente verificado |

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import request from "supertest";
 import { Prisma } from "@prisma/client";
 import type { Trip, User } from "@prisma/client";
@@ -30,6 +30,7 @@ vi.mock("../lib/mercadopago", async (importOriginal) => {
     ...actual,
     createCheckoutPreference: vi.fn(),
     createTestPreference: vi.fn(),
+    checkAccountConnection: vi.fn(),
     fetchPaymentState: vi.fn(),
     refundPayment: vi.fn(),
   };
@@ -75,6 +76,7 @@ vi.mock("../lib/prisma", () => ({
       findFirst: vi.fn(),
       create: vi.fn(),
       update: vi.fn(),
+      updateMany: vi.fn(),
       upsert: vi.fn(),
       aggregate: vi.fn(),
     },
@@ -539,7 +541,7 @@ describe("POST /api/trips/:id/cargo-items y la fecha del viaje", () => {
 });
 
 function signedWebhook(dataId: string, secret: string, requestId = "req-1") {
-  const ts = "1756200000";
+  const ts = String(Math.floor(Date.now() / 1000));
   const manifest = `id:${dataId};request-id:${requestId};ts:${ts};`;
   const v1 = createHmac("sha256", secret).update(manifest).digest("hex");
   return { "x-signature": `ts=${ts},v1=${v1}`, "x-request-id": requestId };
@@ -583,7 +585,11 @@ describe("DELETE /api/trips/:tripId/cargo-items/:id", () => {
           ...(data as Record<string, unknown>),
         })),
       },
-      payment: { update: vi.fn().mockResolvedValue(undefined) },
+      payment: {
+        update: vi.fn().mockResolvedValue(undefined),
+        // el retiro toma la fila de la seña para ordenarse con el webhook
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
       refundRequest: { create: vi.fn().mockResolvedValue({}) },
       trip: {
         findUnique: vi.fn().mockResolvedValue(trip),
@@ -788,6 +794,49 @@ describe("DELETE /api/trips/:tripId/cargo-items/:id", () => {
   });
 });
 
+describe("diagnósticos de Mercado Pago", () => {
+  it("fuera de prod, /payments/mp/test llega a la prueba de conexión (no a la traza de /mp/:id)", async () => {
+    vi.mocked(mp.checkAccountConnection).mockResolvedValue({
+      paymentMethodsCount: 3,
+      sample: [],
+    });
+
+    const res = await request(app)
+      .get("/api/payments/mp/test")
+      .set("Authorization", `Bearer ${adminToken}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ ok: true, paymentMethodsCount: 3 });
+    expect(mp.checkAccountConnection).toHaveBeenCalledTimes(1);
+  });
+
+  describe("con NODE_ENV=production no están montados", () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    });
+
+    it.each([
+      ["get", "/api/payments/mp/test"],
+      ["get", "/api/payments/mp/123"],
+      ["post", "/api/payments/mp/test-preference"],
+    ] as const)("%s %s → 404", async (method, path) => {
+      vi.resetModules();
+      vi.stubEnv("NODE_ENV", "production");
+      const { app: prodApp } = await import("../src/app.js");
+
+      // con sesión de ADMIN: si la ruta existiera respondería algo distinto
+      const agent = request(prodApp);
+      const res = await (method === "get" ? agent.get(path) : agent.post(path))
+        .set("Authorization", `Bearer ${adminToken}`)
+        .send({ title: "x", quantity: 1, unitPrice: 1 });
+
+      expect(res.status).toBe(404);
+      expect(res.body.code).toBe("NOT_FOUND");
+    });
+  });
+});
+
 describe("POST /api/payments/mp/test-preference", () => {
   const body = { title: "Transporte TruckPool - Prueba", quantity: 1, unitPrice: 100 };
 
@@ -795,7 +844,8 @@ describe("POST /api/payments/mp/test-preference", () => {
     vi.mocked(mp.createTestPreference).mockReset();
     vi.mocked(mp.createTestPreference).mockResolvedValue({
       preferenceId: "pref-1",
-      sandboxInitPoint: "https://sandbox.mercadopago.com.ar/checkout/v1/redirect?pref_id=pref-1",
+      sandboxInitPoint:
+        "https://sandbox.mercadopago.com.ar/checkout/v1/redirect?pref_id=pref-1",
       initPoint: "https://www.mercadopago.com.ar/checkout/v1/redirect?pref_id=pref-1",
     });
   });
@@ -946,11 +996,17 @@ describe("POST /api/cargo-items/:id/payment-preference", () => {
 
 describe("POST /api/payments/webhook", () => {
   const secret = "whsec-de-prueba";
+  // con la forma del body real de MP (doc de Webhooks): id y user_id numéricos,
+  // live_mode booleano. Un payload inventado escondió un 400 en sandbox.
   const payload = {
+    id: 12345678901,
+    live_mode: false,
     type: "payment",
-    action: "updated",
-    live_mode: "false",
-    data: { id: "mp-77", status: "approved" },
+    date_created: "2026-11-03T20:09:14.000-03:00",
+    user_id: 44444,
+    api_version: "v1",
+    action: "payment.updated",
+    data: { id: "mp-77" },
   };
 
   beforeEach(() => {
@@ -977,13 +1033,75 @@ describe("POST /api/payments/webhook", () => {
     expect(res.status).toBe(401);
   });
 
+  /** el Payment local, con el carrier del viaje (el token va cifrado) */
+  const pagoLocal = () => ({
+    id: "pay1",
+    cargoItemId: "i1",
+    amount: new Prisma.Decimal("500.00"),
+    status: "PENDING",
+    type: "DEPOSIT",
+    refundedAmount: null,
+    cargoItem: {
+      status: "PENDING",
+      companyId: "c1",
+      tripId: "t1",
+      trip: { carrier: { mpUserId: "mp-user-123", mpAccessToken: MP_TOKEN_STORED } },
+    },
+    mpPreferenceId: "pref-123",
+    mpPaymentId: null,
+    platformFeeAmount: 50,
+    carrierAmount: 450,
+  });
+
+  it("el estado sale de MP, no del body: un data.status falso no aprueba", async () => {
+    // la firma cubre data.id, no data.status: alguien con un webhook válido
+    // capturado podría cambiarle el status. MP dice que sigue pendiente.
+    vi.mocked(prisma.payment.findFirst).mockResolvedValue(pagoLocal() as never);
+    vi.mocked(mp.fetchPaymentState).mockResolvedValue({
+      state: "PENDING",
+      externalReference: "pay1",
+      amount: 500,
+      currencyId: "ARS",
+    });
+    vi.mocked(prisma.payment.update).mockResolvedValue({
+      id: "pay1",
+      status: "PENDING",
+    } as never);
+
+    const res = await request(app)
+      .post("/api/payments/webhook?payment_id=pay1&data.id=mp-77&type=payment")
+      .set(signedWebhook("mp-77", secret))
+      .send({ ...payload, data: { id: "mp-77", status: "approved" } });
+
+    expect(res.status).toBe(200);
+    expect(mp.fetchPaymentState).toHaveBeenCalledWith("mp-77", "APP_USR-mp-token-plano");
+    for (const escritura of [prisma.payment.update, prisma.payment.updateMany]) {
+      expect(escritura).not.toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ status: "APPROVED" }) })
+      );
+    }
+    expect(res.body.status).not.toBe("APPROVED");
+  });
+
   it("actualiza el status a APPROVED con la firma válida (200)", async () => {
+    vi.mocked(mp.fetchPaymentState).mockResolvedValue({
+      state: "APPROVED",
+      externalReference: "pay1",
+      amount: 500,
+      currencyId: "ARS",
+    });
+    vi.mocked(prisma.payment.updateMany).mockResolvedValue({ count: 1 } as never);
     vi.mocked(prisma.payment.findFirst).mockResolvedValue({
       id: "pay1",
       cargoItemId: "i1",
       amount: new Prisma.Decimal("500.00"),
       status: "PENDING",
-      cargoItem: { status: "PENDING", companyId: "c1", tripId: "t1" },
+      cargoItem: {
+        status: "PENDING",
+        companyId: "c1",
+        tripId: "t1",
+        trip: { carrier: { mpUserId: "mp-user-123", mpAccessToken: MP_TOKEN_STORED } },
+      },
       mpPreferenceId: "pref-123",
       mpPaymentId: null,
       // el reparto ya está asentado desde la preference: el webhook lo conserva
@@ -996,51 +1114,284 @@ describe("POST /api/payments/webhook", () => {
       id: "pay1",
       status: "APPROVED",
     } as never);
-    // el webhook relee la carga para repartir la comisión
-    vi.mocked(prisma.cargoItem.findUnique).mockResolvedValue({
-      id: "i1",
-      trip: { platformFeePercent: 10, carrier: { mpUserId: "mp-user-123" } },
-    } as never);
 
     const res = await request(app)
-      .post("/api/payments/webhook?payment_id=pay1")
+      .post("/api/payments/webhook?payment_id=pay1&data.id=mp-77&type=payment")
       .set(signedWebhook("mp-77", secret))
       .send(payload);
 
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ received: true, updated: true, status: "APPROVED" });
-    // 10% de los 500 del pago
-    expect(prisma.payment.update).toHaveBeenCalledWith({
-      where: { id: "pay1" },
-      data: {
-        status: "APPROVED",
-        mpPaymentId: "mp-77",
-        platformFeeAmount: 50,
-        carrierAmount: 450,
-      },
+    // CAS contra el estado leído; la comisión no se toca (quedó en la preference)
+    expect(prisma.payment.updateMany).toHaveBeenCalledWith({
+      where: { id: "pay1", status: "PENDING" },
+      data: { status: "APPROVED", mpPaymentId: "mp-77" },
     });
   });
 
-  it("busca por mpPreferenceId cuando viene en la query", async () => {
-    vi.mocked(prisma.payment.findFirst).mockResolvedValue({
+  it("ignora ?preference_id: no es un dato firmado", async () => {
+    // nada guardado con ese data.id y sin payment_id: no hay pago que tocar
+    vi.mocked(prisma.payment.findFirst).mockResolvedValue(null);
+
+    const res = await request(app)
+      .post("/api/payments/webhook?preference_id=pref-123&data.id=mp-78&type=payment")
+      .set(signedWebhook("mp-78", secret))
+      .send({ ...payload, data: { id: "mp-78" } });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ received: true, updated: false });
+    expect(prisma.payment.findFirst).not.toHaveBeenCalledWith(
+      expect.objectContaining({ where: { mpPreferenceId: "pref-123" } })
+    );
+    expect(prisma.payment.update).not.toHaveBeenCalled();
+  });
+
+  it("regresión: el ejemplo de la doc de MP, tal cual, responde 200 (antes: 400)", async () => {
+    // body copiado de la doc de Webhooks de MP. live_mode llega booleano: el
+    // schema lo pedía como texto y cortaba con 400 antes de leer la firma.
+    vi.mocked(prisma.payment.findFirst).mockResolvedValue(null);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const ejemploDeLaDoc = {
+      id: 12345,
+      live_mode: true,
+      type: "payment",
+      date_created: "2015-03-25T10:04:58.396-04:00",
+      user_id: 44444,
+      api_version: "v1",
+      action: "payment.created",
+      data: { id: "999999999" },
+    };
+
+    const res = await request(app)
+      .post(
+        "/api/payments/webhook?source=test-preference&source_news=webhooks&data.id=999999999&type=payment"
+      )
+      .set(signedWebhook("999999999", secret))
+      .send(ejemploDeLaDoc);
+
+    expect(res.status).toBe(200);
+    // pago que no es nuestro (como el de test-preference): 200 sin tocar nada
+    expect(res.body).toEqual({ received: true, updated: false, status: null });
+    expect(prisma.payment.findFirst).toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      "[payments] webhook de un pago desconocido: se ignora"
+    );
+    warn.mockRestore();
+  });
+
+  /** firma de MP cuando la notificación no trae data.id: el manifest no lo lleva */
+  function signedWebhookSinId(requestId = "req-1") {
+    const ts = String(Math.floor(Date.now() / 1000));
+    const manifest = `request-id:${requestId};ts:${ts};`;
+    const v1 = createHmac("sha256", secret).update(manifest).digest("hex");
+    return { "x-signature": `ts=${ts},v1=${v1}`, "x-request-id": requestId };
+  }
+
+  it("query y body con data.id distintos: se firma y se procesa el de la query", async () => {
+    // MP firma el data.id de la query; el del body no está firmado y no se usa
+    vi.mocked(prisma.payment.findFirst).mockResolvedValue(pagoLocal() as never);
+    vi.mocked(mp.fetchPaymentState).mockResolvedValue({
+      state: "PENDING",
+      externalReference: "pay1",
+      amount: 500,
+      currencyId: "ARS",
+    });
+    vi.mocked(prisma.payment.update).mockResolvedValue({
       id: "pay1",
       status: "PENDING",
     } as never);
-    vi.mocked(prisma.payment.update).mockResolvedValue({
-      id: "pay1",
-      status: "REJECTED",
-    } as never);
 
     const res = await request(app)
-      .post("/api/payments/webhook?preference_id=pref-123")
-      .set(signedWebhook("mp-78", secret))
-      .send({ ...payload, data: { id: "mp-78", status: "rejected" } });
+      .post("/api/payments/webhook?payment_id=pay1&data.id=mp-77&type=payment")
+      .set(signedWebhook("mp-77", secret))
+      .send({ ...payload, data: { id: "mp-99" } });
 
     expect(res.status).toBe(200);
-    expect(prisma.payment.findFirst).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { mpPreferenceId: "pref-123" } })
+    expect(mp.fetchPaymentState).toHaveBeenCalledWith("mp-77", "APP_USR-mp-token-plano");
+    const usados = JSON.stringify([
+      vi.mocked(prisma.payment.findFirst).mock.calls,
+      vi.mocked(mp.fetchPaymentState).mock.calls,
+    ]);
+    expect(usados).not.toContain("mp-99");
+  });
+
+  it("una firma hecha con el data.id del body no vale si la query trae otro (401)", async () => {
+    const res = await request(app)
+      .post("/api/payments/webhook?payment_id=pay1&data.id=mp-77&type=payment")
+      .set(signedWebhook("mp-99", secret))
+      .send({ ...payload, data: { id: "mp-99" } });
+
+    expect(res.status).toBe(401);
+    expect(res.body.code).toBe("INVALID_SIGNATURE");
+    expect(prisma.payment.findFirst).not.toHaveBeenCalled();
+  });
+
+  it("sin data.id en la query: firma sin id, 200 sin buscar ni consultar a MP", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const res = await request(app)
+      .post("/api/payments/webhook?payment_id=pay1&type=payment")
+      .set(signedWebhookSinId())
+      .send(payload);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ received: true, updated: false, status: null });
+    expect(prisma.payment.findFirst).not.toHaveBeenCalled();
+    expect(mp.fetchPaymentState).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      "[payments] webhook firmado sin data.id en la query: se ignora"
     );
-    expect(res.body.status).toBe("REJECTED");
+    warn.mockRestore();
+  });
+
+  it("data.id repetido en la query: 401, no se sabe cuál firmó MP", async () => {
+    const res = await request(app)
+      .post(
+        "/api/payments/webhook?payment_id=pay1&data.id=mp-77&data.id=mp-78&type=payment"
+      )
+      .set(signedWebhook("mp-77", secret))
+      .send(payload);
+
+    expect(res.status).toBe(401);
+    expect(res.body.code).toBe("INVALID_SIGNATURE");
+    expect(prisma.payment.findFirst).not.toHaveBeenCalled();
+  });
+
+  it("la firma se verifica antes que el body: firma inválida + body inválido es 401, no 400", async () => {
+    const res = await request(app)
+      .post("/api/payments/webhook?payment_id=pay1&data.id=mp-77&type=payment")
+      .set("x-signature", "ts=1756200000,v1=deadbeef")
+      .set("x-request-id", "req-1")
+      .send({ type: 123 });
+
+    expect(res.status).toBe(401);
+    expect(res.body.code).toBe("INVALID_SIGNATURE");
+  });
+
+  it("una IPN sin body ni firma (?topic=&id=) responde 401, no 400", async () => {
+    const res = await request(app).post("/api/payments/webhook?topic=payment&id=123");
+
+    expect(res.status).toBe(401);
+    expect(res.body.code).toBe("INVALID_SIGNATURE");
+  });
+
+  it.each([
+    ["id", "texto"],
+    ["id", null],
+    ["live_mode", "true"],
+    ["live_mode", 1],
+    ["user_id", "44444"],
+    ["user_id", { anidado: true }],
+    ["date_created", 1762210154],
+    ["api_version", 1],
+    ["action", null],
+    ["action", ["payment.created"]],
+    ["campo_nuevo_de_mp", { cualquier: "cosa" }],
+  ])(
+    "un campo que no usamos (%s = %j) no rechaza la notificación",
+    async (campo, valor) => {
+      vi.mocked(prisma.payment.findFirst).mockResolvedValue(null);
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const res = await request(app)
+        .post("/api/payments/webhook?payment_id=pay1&data.id=mp-77&type=payment")
+        .set(signedWebhook("mp-77", secret))
+        .send({ ...payload, [campo]: valor });
+
+      expect(res.status).toBe(200);
+      warn.mockRestore();
+    }
+  );
+
+  it("un data.id numérico en el body no rechaza la notificación", async () => {
+    // el body ya no se usa para la firma ni para buscar el pago: cuenta el de la query
+    vi.mocked(prisma.payment.findFirst).mockResolvedValue(null);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const res = await request(app)
+      .post(
+        "/api/payments/webhook?source=test-preference&data.id=187626021366&type=payment"
+      )
+      .set(signedWebhook("187626021366", secret))
+      .send({ ...payload, data: { id: 187626021366 } });
+
+    expect(res.status).toBe(200);
+    expect(JSON.stringify(vi.mocked(prisma.payment.findFirst).mock.calls)).toContain(
+      '"187626021366"'
+    );
+    warn.mockRestore();
+  });
+
+  it("una notificación que no es de pago (merchant_order) responde 200 sin consultar a MP", async () => {
+    // MP firma también las merchant_order: su data.id es el de la orden, no un
+    // pago, así que buscarlo ni consultarlo tiene sentido
+    const res = await request(app)
+      .post("/api/payments/webhook?payment_id=pay1&data.id=order-55&type=merchant_order")
+      .set(signedWebhook("order-55", secret))
+      .send({ ...payload, type: "merchant_order", data: { id: "order-55" } });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ received: true, updated: false, status: null });
+    expect(prisma.payment.findFirst).not.toHaveBeenCalled();
+    expect(mp.fetchPaymentState).not.toHaveBeenCalled();
+  });
+
+  it("un AppError 5xx propio se loguea con su mensaje (no quedar ciego operando)", async () => {
+    delete process.env.MP_WEBHOOK_SECRET;
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const res = await request(app)
+      .post("/api/payments/webhook?payment_id=pay1&data.id=mp-77&type=payment")
+      .set(signedWebhook("mp-77", secret))
+      .send(payload);
+
+    expect(res.status).toBe(503);
+    expect(error).toHaveBeenCalledWith(expect.any(String), {
+      name: "AppError",
+      code: "MP_NOT_CONFIGURED",
+      message: "Mercado Pago no está configurado: falta MP_WEBHOOK_SECRET",
+    });
+    error.mockRestore();
+  });
+
+  it("un AppError 4xx no se loguea: es un error del cliente, no de la operación", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const res = await request(app)
+      .post("/api/payments/webhook?payment_id=pay1")
+      .set("x-signature", "ts=1756200000,v1=deadbeef")
+      .set("x-request-id", "req-1")
+      .send(payload);
+
+    expect(res.status).toBe(401);
+    expect(error).not.toHaveBeenCalled();
+    error.mockRestore();
+  });
+
+  it("un error inesperado no lleva sus headers al log (solo name y code)", async () => {
+    const token = "APP_USR-secreto-del-log";
+    vi.mocked(prisma.payment.findFirst).mockRejectedValue(
+      Object.assign(new Error("fallo con la request adentro"), {
+        code: "ECONNRESET",
+        config: { headers: { Authorization: `Bearer ${token}` } },
+      })
+    );
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const res = await request(app)
+      .post("/api/payments/webhook?payment_id=pay1&data.id=mp-77&type=payment")
+      .set(signedWebhook("mp-77", secret))
+      .send(payload);
+
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: "error interno", code: "INTERNAL_ERROR" });
+    const logueado = JSON.stringify(error.mock.calls);
+    expect(logueado).not.toContain(token);
+    expect(error).toHaveBeenCalledWith(expect.any(String), {
+      name: "Error",
+      code: "ECONNRESET",
+    });
+    error.mockRestore();
   });
 });
 
@@ -2752,11 +3103,22 @@ describe("GET /api/trips/cancellation-quote", () => {
    * el front arma el texto de confirmación con esto y no con una copia propia.
    */
   it("devuelve lo mismo que la función que usa el retiro real", async () => {
-    for (const hours of [72, 36, 2, 48, 24]) {
-      const tripDate = inHours(hours);
-      const res = await ask(87_000, tripDate);
-      const real = quoteCancellation(87_000, hoursUntilTrip(tripDate));
-      expect(res.body).toEqual(real);
+    // Date congelado: 48 y 24 caen justo en el borde de la ventana. Con el reloj
+    // real, el server y la expectativa leían la hora en momentos distintos; si el
+    // request entraba en el mismo milisegundo que inHours(24), el server veía 24 h
+    // exactas (PARTIAL_REFUND) y la expectativa, un instante después, menos de
+    // 24 h (NO_REFUND). Solo se congela Date: supertest sigue con timers reales.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-03T12:00:00.000Z"));
+    try {
+      for (const hours of [72, 36, 2, 48, 24]) {
+        const tripDate = inHours(hours);
+        const res = await ask(87_000, tripDate);
+        const real = quoteCancellation(87_000, hoursUntilTrip(tripDate));
+        expect(res.body).toEqual(real);
+      }
+    } finally {
+      vi.useRealTimers();
     }
   });
 
@@ -2783,6 +3145,4 @@ describe("GET /api/trips/cancellation-quote", () => {
     const res = await ask(100_000, "no-es-fecha");
     expect(res.status).toBe(400);
   });
-
-  ;
 });

@@ -48,6 +48,9 @@
     "typescript-eslint": "^8.69.0",
     "vitest": "^4.0.0"
   },
+  "overrides": {
+    "pg": "^8"
+  },
   "allowScripts": {
     "esbuild@0.28.2": true,
     "@prisma/engines@7.10.0": true,

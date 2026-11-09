@@ -17,9 +17,9 @@ import {
   priceRangeFor,
   rateFor,
 } from "../../lib/pricing.js";
-import { refundPayment } from "../../lib/mercadopago.js";
 import { hoursUntilTrip, quoteCancellation } from "../../lib/cancellation.js";
 import { balanceOf } from "../payments/payments.service.js";
+import { processRefundRequest } from "../payments/refunds.service.js";
 import {
   manifestFileName,
   renderManifestPdf,
@@ -42,6 +42,7 @@ import {
   CargoItemNotFoundError,
   InvalidTransitionError,
   NotEnoughCapacityError,
+  PaymentInFlightError,
   PaymentRequiredError,
   TripAlreadyStartedError,
   TripDatePassedError,
@@ -808,6 +809,21 @@ export async function cancelCargoItem(
           }
 
           const deposit = item.payments.find((p) => p.type === "DEPOSIT");
+
+          // La seña puede estar en vuelo: el webhook la aprueba con un CAS fuera
+          // de esta TX. Escribir la fila ordena las dos cosas. Si el webhook la
+          // cambió después de nuestra lectura, Serializable aborta (P2034) o el
+          // CAS no encuentra el estado leído, y el reintento ve la seña APPROVED
+          // y encola su devolución. Si escribimos primero, el CAS del webhook
+          // espera a que commiteemos y su relectura ve la carga CANCELLED.
+          if (deposit) {
+            const held = await tx.payment.updateMany({
+              where: { id: deposit.id, status: deposit.status },
+              data: { updatedAt: new Date() },
+            });
+            if (held.count === 0) throw new PaymentInFlightError();
+          }
+
           const paidDeposit =
             deposit?.status === "APPROVED" && deposit.mpPaymentId !== null
               ? deposit
@@ -888,6 +904,7 @@ export async function cancelCargoItem(
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2034") {
         continue;
       }
+      if (err instanceof PaymentInFlightError) continue;
       throw err;
     }
   }
@@ -2002,72 +2019,3 @@ export async function getPublicTracking(
     cargoStatus: item.status,
   };
 }
-
-/**
- * Processor de reembolsos (patrón outbox).
- *
- * Toma la RefundRequest PENDING del cargo indicado, llama a refundPayment
- * (idempotente: si MP ya devolvió, no duplica), y actualiza:
- * - RefundRequest: status -> COMPLETED (o FAILED si error irrecuperable)
- * - Payment: refundedAmount, y status -> REFUNDED si cubrió todo.
- *
- * Si falla la red o MP devuelve error transitorio, incrementa attempts y
- * guarda lastError; la request queda en PENDING para reintento. No lanza:
- * el caller (cancelCargoItem) ya confirmó la cancelación; el reembolso se
- * recupera después.
- */
-export async function processRefundRequest(cargoItemId: string): Promise<void> {
-  const req = await prisma.refundRequest.findUnique({
-    where: { cargoItemId },
-  });
-  if (!req || req.status !== "PENDING") return; // nada que hacer
-
-  // Marcar PROCESSING para evitar carreras si se llama concurrente
-  await prisma.refundRequest.update({
-    where: { id: req.id },
-    data: { status: "PROCESSING" },
-  });
-
-  try {
-    const payment = await prisma.payment.findUnique({
-      where: { cargoItemId_type: { cargoItemId, type: "DEPOSIT" } },
-    });
-    if (!payment || payment.status !== "APPROVED" || !payment.mpPaymentId) {
-      // no hay pago reembolsable: marcar completado (no hay nada que hacer)
-      await prisma.refundRequest.update({
-        where: { id: req.id },
-        data: { status: "COMPLETED" },
-      });
-      return;
-    }
-
-    const targetAmount = Number(req.targetAmount);
-    const refundedAmount = await refundPayment(payment.mpPaymentId, targetAmount);
-
-    // actualizar Payment con lo que MP confirmó
-    const fullyRefunded = refundedAmount >= Number(payment.amount);
-    await prisma.payment.update({
-      where: { id: payment.id },
-      data: fullyRefunded
-        ? { status: "REFUNDED", refundedAmount }
-        : { refundedAmount },
-    });
-
-    await prisma.refundRequest.update({
-      where: { id: req.id },
-      data: { status: "COMPLETED" },
-    });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    await prisma.refundRequest.update({
-      where: { id: req.id },
-      data: {
-        status: "PENDING",
-        attempts: { increment: 1 },
-        lastError: message.slice(0, 500),
-      },
-    });
-    // no re-lanzamos: el caller ya confirmó la cancelación
-  }
-}
-

@@ -6,7 +6,8 @@ export type NotificationType =
   | "CARGO_CANCELLED"
   | "TRIP_STATUS_CHANGED"
   | "PAYMENT_APPROVED"
-  | "BALANCE_DUE";
+  | "BALANCE_DUE"
+  | "PAYMENT_ALERT";
 
 export type Notification = {
   id: string;

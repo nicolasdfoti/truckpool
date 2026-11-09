@@ -11,6 +11,7 @@ import { toCargoItemResponse, toTripSummary } from "../../lib/mappers.js";
 import { endOfArgentinaDay } from "../../lib/dates.js";
 import { encryptSecret } from "../../lib/crypto.js";
 import { signOAuthState } from "../../lib/auth.js";
+import { mpOAuthTestToken } from "../../lib/env.js";
 import type {
   RequestVerificationInput,
   ReviewVerificationInput,
@@ -685,6 +686,9 @@ export async function exchangeMpCode(userId: string, code: string): Promise<void
     );
   }
 
+  // se lee antes de llamar a MP: en producción o con un valor inválido corta acá
+  const testToken = mpOAuthTestToken();
+
   const tokenUrl = "https://api.mercadopago.com/oauth/token";
   const body = new URLSearchParams({
     grant_type: "authorization_code",
@@ -693,6 +697,8 @@ export async function exchangeMpCode(userId: string, code: string): Promise<void
     code,
     redirect_uri: redirectUri,
   });
+  // credenciales de sandbox (doc de MP): solo con MP_OAUTH_TEST_TOKEN=true
+  if (testToken) body.set("test_token", "true");
 
   const res = await fetch(tokenUrl, {
     method: "POST",
@@ -701,9 +707,13 @@ export async function exchangeMpCode(userId: string, code: string): Promise<void
   });
 
   if (!res.ok) {
-    const err = (await res.json().catch(() => ({}))) as { error_description?: string };
+    // el texto de MP (error_description) no va en el mensaje: el handler global
+    // loguea los 5xx propios y la respuesta llega al cliente. Solo el status.
+    console.warn("[users] MP rechazó el intercambio del código OAuth", {
+      status: res.status,
+    });
     throw new AppError(
-      `Mercado Pago OAuth error: ${err.error_description ?? res.statusText}`,
+      "Mercado Pago no aceptó la conexión de la cuenta: probá conectarla de nuevo",
       502,
       "MP_OAUTH_TOKEN_ERROR"
     );

@@ -1,6 +1,9 @@
 node_modules/
 dist/
 .env
+# copias del .env (por ejemplo .env.sandbox): tienen secretos
+.env.*
+!.env.example
 coverage/
 *.local
 .DS_Store
