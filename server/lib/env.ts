@@ -8,6 +8,7 @@
  */
 
 import { AppError } from "./errors.js";
+import { isLocalUrl } from "./urls.js";
 
 /**
  * El secreto de desarrollo que antes estaba hardcodeado en `lib/auth.ts`.
@@ -123,6 +124,17 @@ export function assertServerEnv(): void {
     problems.push(
       `NODE_ENV="${nodeEnv}" no es un valor conocido (${KNOWN_NODE_ENVS.join(", ")})`
     );
+  }
+
+  // Con APP_URL local, la preference no manda back_urls (MP las rechaza): en
+  // producción el comprador no volvería nunca al sitio después de pagar.
+  if (nodeEnv === "production") {
+    const appUrl = process.env.APP_URL;
+    if (appUrl === undefined || appUrl.trim() === "" || isLocalUrl(appUrl)) {
+      problems.push(
+        "APP_URL tiene que ser la URL pública del front en producción (no localhost): Mercado Pago no acepta back_urls locales"
+      );
+    }
   }
 
   const mpTestToken = readMpOAuthTestToken();

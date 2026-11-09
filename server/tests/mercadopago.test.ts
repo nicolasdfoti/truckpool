@@ -332,6 +332,83 @@ describe("createCheckoutPreference", () => {
       "http://localhost:4000/api/payments/webhook?payment_id=pay1&source_news=webhooks"
     );
   });
+
+  describe("back_urls y auto_return según APP_URL", () => {
+    afterEach(() => {
+      delete process.env.APP_URL;
+    });
+
+    /** el body que se le mandó a MP para una seña */
+    const bodyDeLaSena = async () => {
+      preferenceCreate.mockResolvedValue({
+        id: "pref-1",
+        init_point: "https://mp/pref-1",
+      });
+      await createCheckoutPreference({
+        paymentId: "pay1",
+        cargoItemId: "i1",
+        description: "Cajas",
+        amount: 9310,
+        tripId: "t1",
+        carrierMpUserId: "mp-user-123",
+        carrierMpAccessToken: "APP_USR-carrier",
+        platformFeeAmount: 931,
+      });
+      return (preferenceCreate.mock.calls[0]![0] as { body: Record<string, unknown> })
+        .body;
+    };
+
+    it.each([
+      ["sin definir (localhost:5173 por defecto)", undefined],
+      ["localhost", "http://localhost:5173"],
+      ["127.0.0.1", "http://127.0.0.1:5173"],
+      ["::1", "http://[::1]:5173"],
+      ["*.localhost", "http://app.localhost:5173"],
+    ])(
+      "con APP_URL %s no manda back_urls ni auto_return (MP rechaza localhost)",
+      async (_caso, valor) => {
+        // en sandbox MP respondió 400 "auto_return invalid. back_url.success must
+        // be defined" con back_urls a localhost
+        if (valor !== undefined) process.env.APP_URL = valor;
+
+        const body = await bodyDeLaSena();
+
+        expect(body).not.toHaveProperty("back_urls");
+        expect(body).not.toHaveProperty("auto_return");
+        // el webhook y el split no dependen de la vuelta al sitio
+        expect(body.notification_url).toContain("/api/payments/webhook?payment_id=pay1");
+        expect(body.marketplace_fee).toBe(931);
+      }
+    );
+
+    it("con una APP_URL pública manda back_urls a /pagos/retorno y auto_return", async () => {
+      process.env.APP_URL = "https://app.truckpool.app";
+
+      const body = await bodyDeLaSena();
+
+      const retorno =
+        "https://app.truckpool.app/pagos/retorno?tripId=t1&cargoItemId=i1&type=DEPOSIT";
+      expect(body.back_urls).toEqual({
+        success: `${retorno}&status=approved`,
+        failure: `${retorno}&status=rejected`,
+        pending: `${retorno}&status=pending`,
+      });
+      expect(body.auto_return).toBe("approved");
+    });
+
+    it("no depende de NODE_ENV: en producción con APP_URL local tampoco los manda", async () => {
+      const original = process.env.NODE_ENV;
+      process.env.NODE_ENV = "production";
+      process.env.APP_URL = "http://localhost:5173";
+      try {
+        const body = await bodyDeLaSena();
+        expect(body).not.toHaveProperty("back_urls");
+        expect(body).not.toHaveProperty("auto_return");
+      } finally {
+        process.env.NODE_ENV = original;
+      }
+    });
+  });
 });
 
 describe("createTestPreference", () => {

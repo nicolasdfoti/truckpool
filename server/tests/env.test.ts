@@ -10,6 +10,7 @@ const ORIGINAL = {
   JWT_SECRET: process.env.JWT_SECRET,
   DATABASE_URL: process.env.DATABASE_URL,
   NODE_ENV: process.env.NODE_ENV,
+  APP_URL: process.env.APP_URL,
 };
 
 function restore(key: keyof typeof ORIGINAL) {
@@ -22,12 +23,41 @@ describe("assertServerEnv", () => {
     process.env.JWT_SECRET = "un-secreto-cualquiera";
     process.env.DATABASE_URL = "postgresql://algo/algo";
     process.env.NODE_ENV = "development";
+    // producción exige una APP_URL pública (ver los tests de APP_URL)
+    process.env.APP_URL = "https://app.truckpool.app";
   });
 
   afterEach(() => {
     restore("JWT_SECRET");
     restore("DATABASE_URL");
     restore("NODE_ENV");
+    restore("APP_URL");
+  });
+
+  describe("APP_URL", () => {
+    it.each([
+      ["sin definir", undefined],
+      ["localhost", "http://localhost:5173"],
+      ["127.0.0.1", "http://127.0.0.1:5173"],
+      ["inválida", "no-es-una-url"],
+    ])("aborta en producción con APP_URL %s: MP no vuelve al sitio", (_caso, valor) => {
+      process.env.NODE_ENV = "production";
+      if (valor === undefined) delete process.env.APP_URL;
+      else process.env.APP_URL = valor;
+      expect(() => assertServerEnv()).toThrow(EnvError);
+      expect(() => assertServerEnv()).toThrow(/APP_URL/);
+    });
+
+    it("arranca en producción con una APP_URL pública", () => {
+      process.env.NODE_ENV = "production";
+      process.env.APP_URL = "https://app.truckpool.app";
+      expect(() => assertServerEnv()).not.toThrow();
+    });
+
+    it("arranca en development con APP_URL en localhost", () => {
+      process.env.APP_URL = "http://localhost:5173";
+      expect(() => assertServerEnv()).not.toThrow();
+    });
   });
 
   it("no se queja con una configuración completa", () => {

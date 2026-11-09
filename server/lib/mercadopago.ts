@@ -7,6 +7,7 @@ import {
   Preference,
 } from "mercadopago";
 import { AppError } from "./errors.js";
+import { isLocalUrl } from "./urls.js";
 import { decryptSecret } from "./crypto.js";
 
 export type MpPaymentState = "PENDING" | "APPROVED" | "REJECTED" | "REFUNDED";
@@ -231,12 +232,20 @@ export async function createCheckoutPreference(input: PreferenceInput): Promise<
       // webhook las rechaza con 401 y MP las reintenta. Alcance de la prueba:
       // test-preference, no el flujo real de una seña (04-launch, L1).
       notification_url: `${api}/api/payments/webhook?payment_id=${encodeURIComponent(input.paymentId)}&source_news=webhooks`,
-      back_urls: {
-        success: `${returnUrl}&status=approved`,
-        failure: `${returnUrl}&status=rejected`,
-        pending: `${returnUrl}&status=pending`,
-      },
-      auto_return: "approved",
+      // MP no acepta back_urls a localhost: con auto_return la preference falla
+      // con 400 (visto en sandbox). Con APP_URL local no se mandan: el pago lo
+      // confirma el webhook igual, y el comprador vuelve al sitio a mano. Depende
+      // solo de APP_URL, no de NODE_ENV (en producción env.ts exige una pública).
+      ...(isLocalUrl(clientUrl)
+        ? {}
+        : {
+            back_urls: {
+              success: `${returnUrl}&status=approved`,
+              failure: `${returnUrl}&status=rejected`,
+              pending: `${returnUrl}&status=pending`,
+            },
+            auto_return: "approved",
+          }),
       marketplace_fee: platformFeeAmount,
       marketplace: input.carrierMpUserId,
     };
