@@ -13,7 +13,8 @@ import { notifyUsers } from "../lib/notifications.js";
 
 vi.mock("../lib/prisma", () => ({
   prisma: {
-    cargoItem: { findUnique: vi.fn() },
+    cargoItem: { findUnique: vi.fn(), updateMany: vi.fn() },
+    trip: { update: vi.fn() },
     user: { findMany: vi.fn() },
     paymentAlert: { create: vi.fn(), delete: vi.fn() },
     refundRequest: {
@@ -29,6 +30,7 @@ vi.mock("../lib/prisma", () => ({
       update: vi.fn(),
       updateMany: vi.fn(),
     },
+    $transaction: vi.fn(),
   },
 }));
 
@@ -407,6 +409,9 @@ describe("handlePaymentNotification", () => {
     vi.mocked(prisma.user.findMany).mockResolvedValue([{ id: "admin1" }] as never);
     vi.mocked(prisma.paymentAlert.create).mockResolvedValue({} as never);
     vi.mocked(prisma.paymentAlert.delete).mockResolvedValue({} as never);
+    // la transacción corre contra el mismo mock: tx === prisma
+    vi.mocked(prisma.$transaction).mockImplementation((async (fn: unknown) =>
+      (fn as (tx: typeof prisma) => unknown)(prisma)) as never);
     mpDice("APPROVED");
   });
 
@@ -1305,6 +1310,346 @@ describe("handlePaymentNotification", () => {
         });
       });
     });
+  });
+});
+
+describe("seña devuelta por fuera de la app (desde el panel de MP)", () => {
+  // El fletero devolvió la seña entera desde su cuenta de MP: MP pasa el pago a
+  // refunded y el webhook lo lleva a REFUNDED. La app solo devuelve señas de
+  // cargas ya retiradas, así que una carga viva con la seña REFUNDED es una
+  // devolución que la app no pidió: la carga se retira sola, sin penalidad.
+  const notificacion = { mpPaymentId: "mp-77", hintPaymentId: "pay1" };
+
+  /** lo que relee la transacción: el pago con su carga y el viaje */
+  function devuelta(
+    opts: {
+      paymentStatus?: string;
+      type?: string;
+      cargoStatus?: string;
+      tripStatus?: string;
+      payments?: Array<{ type: string }>;
+      capacityTotal?: number;
+      cargoItems?: Array<{ id: string; volume: number; status: string }>;
+    } = {}
+  ) {
+    return {
+      id: "pay1",
+      status: opts.paymentStatus ?? "REFUNDED",
+      type: opts.type ?? "DEPOSIT",
+      amount: new Prisma.Decimal("100.00"),
+      refundedAmount: null,
+      cargoItem: {
+        id: "i1",
+        status: opts.cargoStatus ?? "PENDING",
+        companyId: companyUserId,
+        volume: 10,
+        description: "Cajas de maquinaria",
+        company: { name: "Acero SA" },
+        payments: opts.payments ?? [{ type: "DEPOSIT" }],
+        trip: {
+          id: "t1",
+          status: opts.tripStatus ?? "OPEN",
+          capacityTotal: opts.capacityTotal ?? 30,
+          carrierId: "carrier1",
+          origin: "Córdoba",
+          destination: "Rosario",
+          cargoItems: opts.cargoItems ?? [
+            { id: "i1", volume: 10, status: opts.cargoStatus ?? "PENDING" },
+          ],
+        },
+      },
+    };
+  }
+
+  /** MP informa refunded sobre el pago que la app tenía APPROVED */
+  function mpInformaDevolucion(local: Record<string, unknown> = {}) {
+    vi.mocked(prisma.payment.findFirst).mockResolvedValue(
+      basePayment({ status: "APPROVED", mpPaymentId: "mp-77", ...local }) as never
+    );
+    vi.mocked(mp.fetchPaymentState).mockResolvedValue({
+      state: "REFUNDED",
+      externalReference: "pay1",
+      amount: 100,
+      currencyId: "ARS",
+    });
+  }
+
+  const serializacion = () =>
+    new Prisma.PrismaClientKnownRequestError("could not serialize access", {
+      code: "P2034",
+      clientVersion: "test",
+    });
+
+  /** a quién se avisó y con qué tipo */
+  const avisados = () =>
+    vi.mocked(notifyUsers).mock.calls.map(([ids, data]) => ({ ids, type: data.type }));
+
+  /** nunca otra devolución: ni MP ni el outbox */
+  const sinReembolsoNuevo = () => {
+    expect(mp.refundPayment).not.toHaveBeenCalled();
+    expect(prisma.refundRequest.upsert).not.toHaveBeenCalled();
+  };
+
+  const cargaRetirada = () =>
+    expect(prisma.cargoItem.updateMany).toHaveBeenCalledWith({
+      where: { id: "i1", status: { in: ["PENDING", "CONFIRMED"] } },
+      data: {
+        status: "CANCELLED",
+        cancelledAt: expect.any(Date),
+        cancellationFeeAmount: new Prisma.Decimal(0),
+      },
+    });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(prisma.$transaction).mockImplementation((async (fn: unknown) =>
+      (fn as (tx: typeof prisma) => unknown)(prisma)) as never);
+    mpInformaDevolucion();
+    vi.mocked(prisma.payment.findUnique)
+      .mockReset()
+      .mockResolvedValue(devuelta() as never);
+    vi.mocked(prisma.payment.updateMany).mockResolvedValue({ count: 1 } as never);
+    vi.mocked(prisma.cargoItem.updateMany).mockResolvedValue({ count: 1 } as never);
+    vi.mocked(prisma.trip.update).mockResolvedValue({} as never);
+    vi.mocked(prisma.user.findMany).mockResolvedValue([{ id: "admin1" }] as never);
+    vi.mocked(prisma.paymentAlert.create).mockResolvedValue({} as never);
+    vi.mocked(notifyUsers).mockResolvedValue(1);
+  });
+
+  it("carga PENDING: la retira sin penalidad, asienta lo devuelto y avisa a la empresa y al fletero", async () => {
+    const result = await handlePaymentNotification(notificacion);
+
+    expect(result).toEqual({ updated: true, status: "REFUNDED" });
+    // la relectura y la escritura van en una transacción serializable: se
+    // puede cruzar con el retiro de la empresa
+    expect(prisma.$transaction).toHaveBeenCalledWith(
+      expect.any(Function),
+      expect.objectContaining({
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+      })
+    );
+    cargaRetirada();
+    // MP devolvió el total: queda asentado, y con eso nada lo vuelve a devolver
+    expect(prisma.payment.updateMany).toHaveBeenCalledWith({
+      where: { id: "pay1", status: "REFUNDED", refundedAmount: null },
+      data: { refundedAmount: new Prisma.Decimal("100.00") },
+    });
+    // el viaje no estaba lleno: sigue OPEN
+    expect(prisma.trip.update).not.toHaveBeenCalled();
+    expect(avisados()).toEqual([
+      { ids: [companyUserId], type: "CARGO_CANCELLED" },
+      { ids: ["carrier1"], type: "CARGO_CANCELLED" },
+    ]);
+    sinReembolsoNuevo();
+  });
+
+  it("carga CONFIRMED con el viaje FULL: la retira igual y el viaje vuelve a OPEN", async () => {
+    vi.mocked(prisma.payment.findUnique).mockResolvedValue(
+      devuelta({
+        cargoStatus: "CONFIRMED",
+        tripStatus: "FULL",
+        capacityTotal: 20,
+        cargoItems: [
+          { id: "i1", volume: 10, status: "CONFIRMED" },
+          { id: "i2", volume: 10, status: "CONFIRMED" },
+        ],
+      }) as never
+    );
+
+    await handlePaymentNotification(notificacion);
+
+    cargaRetirada();
+    expect(prisma.trip.update).toHaveBeenCalledWith({
+      where: { id: "t1" },
+      data: { status: "OPEN" },
+    });
+    expect(avisados()).toHaveLength(2);
+    sinReembolsoNuevo();
+  });
+
+  it("carga con un pago de saldo (BALANCE): no la toca y avisa a los admins", async () => {
+    vi.mocked(prisma.payment.findUnique).mockResolvedValue(
+      devuelta({
+        cargoStatus: "CONFIRMED",
+        payments: [{ type: "DEPOSIT" }, { type: "BALANCE" }],
+      }) as never
+    );
+
+    await handlePaymentNotification(notificacion);
+
+    expect(prisma.cargoItem.updateMany).not.toHaveBeenCalled();
+    expect(prisma.trip.update).not.toHaveBeenCalled();
+    expect(prisma.paymentAlert.create).toHaveBeenCalledWith({
+      data: { key: "EXTERNAL_REFUND:pay1:mp-77" },
+    });
+    expect(avisados()).toEqual([{ ids: ["admin1"], type: "PAYMENT_ALERT" }]);
+    sinReembolsoNuevo();
+  });
+
+  it("viaje en curso: no toca la carga y avisa a los admins", async () => {
+    vi.mocked(prisma.payment.findUnique).mockResolvedValue(
+      devuelta({ cargoStatus: "CONFIRMED", tripStatus: "IN_TRANSIT" }) as never
+    );
+
+    await handlePaymentNotification(notificacion);
+
+    expect(prisma.cargoItem.updateMany).not.toHaveBeenCalled();
+    expect(prisma.paymentAlert.create).toHaveBeenCalledWith({
+      data: { key: "EXTERNAL_REFUND:pay1:mp-77" },
+    });
+    expect(avisados()).toEqual([{ ids: ["admin1"], type: "PAYMENT_ALERT" }]);
+    sinReembolsoNuevo();
+  });
+
+  it("devolución del saldo: no toca la carga y avisa a los admins", async () => {
+    mpInformaDevolucion({ type: "BALANCE" });
+    vi.mocked(prisma.payment.findUnique).mockResolvedValue(
+      devuelta({
+        type: "BALANCE",
+        cargoStatus: "CONFIRMED",
+        tripStatus: "IN_TRANSIT",
+        payments: [{ type: "DEPOSIT" }, { type: "BALANCE" }],
+      }) as never
+    );
+
+    await handlePaymentNotification(notificacion);
+
+    expect(prisma.cargoItem.updateMany).not.toHaveBeenCalled();
+    expect(prisma.paymentAlert.create).toHaveBeenCalledWith({
+      data: { key: "EXTERNAL_REFUND:pay1:mp-77" },
+    });
+    expect(avisados()).toEqual([{ ids: ["admin1"], type: "PAYMENT_ALERT" }]);
+    sinReembolsoNuevo();
+  });
+
+  it("carga ya retirada (la devolución la pidió la app): no hace nada más", async () => {
+    vi.mocked(prisma.payment.findUnique).mockResolvedValue(
+      devuelta({ cargoStatus: "CANCELLED" }) as never
+    );
+
+    const result = await handlePaymentNotification(notificacion);
+
+    expect(result).toEqual({ updated: true, status: "REFUNDED" });
+    expect(prisma.cargoItem.updateMany).not.toHaveBeenCalled();
+    expect(notifyUsers).not.toHaveBeenCalled();
+    expect(prisma.paymentAlert.create).not.toHaveBeenCalled();
+    sinReembolsoNuevo();
+  });
+
+  it("caída entre REFUNDED y el retiro: la notificación repetida termina el retiro", async () => {
+    // el webhook anterior pasó el pago a REFUNDED y se cayó antes de retirar
+    vi.mocked(prisma.payment.findFirst).mockResolvedValue(
+      basePayment({ status: "REFUNDED", mpPaymentId: "mp-77" }) as never
+    );
+
+    const result = await handlePaymentNotification(notificacion);
+
+    // el pago no se vuelve a mover; solo se retira la carga
+    expect(prisma.payment.updateMany).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: expect.anything() }),
+      })
+    );
+    cargaRetirada();
+    expect(avisados()).toHaveLength(2);
+    expect(result).toEqual({ updated: false, status: "REFUNDED" });
+    sinReembolsoNuevo();
+  });
+
+  it("webhook duplicado: el segundo no retira ni avisa de nuevo", async () => {
+    await handlePaymentNotification(notificacion);
+
+    // MP repite la notificación: el pago ya está REFUNDED y la carga retirada
+    vi.mocked(prisma.payment.findFirst).mockResolvedValue(
+      basePayment({ status: "REFUNDED", mpPaymentId: "mp-77" }) as never
+    );
+    vi.mocked(prisma.payment.findUnique).mockResolvedValue(
+      devuelta({ cargoStatus: "CANCELLED" }) as never
+    );
+    await handlePaymentNotification(notificacion);
+
+    expect(prisma.cargoItem.updateMany).toHaveBeenCalledTimes(1);
+    expect(avisados()).toHaveLength(2);
+    sinReembolsoNuevo();
+  });
+
+  it("carrera con el retiro de la empresa: si la retiró antes de la escritura, no avisa ni toca el viaje", async () => {
+    // la empresa retiró la carga entre la relectura y el update: el CAS no la encuentra
+    vi.mocked(prisma.cargoItem.updateMany).mockResolvedValue({ count: 0 } as never);
+    vi.mocked(prisma.payment.findUnique).mockResolvedValue(
+      devuelta({ tripStatus: "FULL", capacityTotal: 10 }) as never
+    );
+
+    await handlePaymentNotification(notificacion);
+
+    expect(prisma.payment.updateMany).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ refundedAmount: expect.anything() }),
+      })
+    );
+    expect(prisma.trip.update).not.toHaveBeenCalled();
+    expect(notifyUsers).not.toHaveBeenCalled();
+    sinReembolsoNuevo();
+  });
+
+  it("conflicto de serialización con otra transacción: reintenta y retira una sola vez", async () => {
+    vi.mocked(prisma.$transaction)
+      .mockRejectedValueOnce(serializacion())
+      .mockImplementation((async (fn: unknown) =>
+        (fn as (tx: typeof prisma) => unknown)(prisma)) as never);
+
+    await handlePaymentNotification(notificacion);
+
+    expect(prisma.$transaction).toHaveBeenCalledTimes(2);
+    expect(prisma.cargoItem.updateMany).toHaveBeenCalledTimes(1);
+    expect(avisados()).toHaveLength(2);
+    sinReembolsoNuevo();
+  });
+
+  it("si el conflicto no se resuelve, el webhook falla para que MP reintente, sin avisar", async () => {
+    vi.mocked(prisma.$transaction).mockRejectedValue(serializacion());
+
+    await expect(handlePaymentNotification(notificacion)).rejects.toMatchObject({
+      code: "P2034",
+    });
+    expect(notifyUsers).not.toHaveBeenCalled();
+    sinReembolsoNuevo();
+  });
+
+  it("si falla un aviso, la carga igual queda retirada, el otro aviso sale y el webhook responde bien", async () => {
+    // falla el de la empresa: el del fletero sale igual
+    vi.mocked(notifyUsers).mockRejectedValueOnce(new Error("base caída"));
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const result = await handlePaymentNotification(notificacion);
+
+    cargaRetirada();
+    expect(result).toEqual({ updated: true, status: "REFUNDED" });
+    expect(avisados()).toEqual([
+      { ids: [companyUserId], type: "CARGO_CANCELLED" },
+      { ids: ["carrier1"], type: "CARGO_CANCELLED" },
+    ]);
+    expect(error).toHaveBeenCalledTimes(1);
+    error.mockRestore();
+  });
+
+  it("devolución parcial (MP sigue en approved): no toca la carga", async () => {
+    vi.mocked(mp.fetchPaymentState).mockResolvedValue({
+      state: "APPROVED",
+      externalReference: "pay1",
+      amount: 100,
+      currencyId: "ARS",
+    });
+    vi.mocked(prisma.payment.findUnique).mockResolvedValue(
+      basePayment({ status: "APPROVED", mpPaymentId: "mp-77" }) as never
+    );
+
+    await handlePaymentNotification(notificacion);
+
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(prisma.cargoItem.updateMany).not.toHaveBeenCalled();
+    expect(notifyUsers).not.toHaveBeenCalled();
+    sinReembolsoNuevo();
   });
 });
 

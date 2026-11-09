@@ -17,6 +17,7 @@ import {
   NothingToPayError,
   PaymentNotFoundError,
 } from "../../lib/errors.js";
+import { activeVolume } from "../../lib/mappers.js";
 import { notifyUsers } from "../../lib/notifications.js";
 import { processRefundRequest } from "./refunds.service.js";
 
@@ -339,6 +340,15 @@ export async function handlePaymentNotification(input: PaymentNotificationInput)
       );
       if (refunded) return { updated: refunded !== payment.status, status: refunded };
     }
+    // un webhook anterior pudo pasar el pago a REFUNDED y caerse antes de
+    // retirar la carga: el repetido termina el trabajo
+    if (state === "REFUNDED") {
+      await releaseCargoAfterExternalRefund(
+        payment.id,
+        mpPaymentId,
+        payment.cargoItem.tripId
+      );
+    }
     return { updated: false, status: payment.status };
   }
 
@@ -357,6 +367,14 @@ export async function handlePaymentNotification(input: PaymentNotificationInput)
     data: { status: state, mpPaymentId },
   });
   if (swapped.count === 0) return { updated: false, status: payment.status };
+
+  if (state === "REFUNDED") {
+    await releaseCargoAfterExternalRefund(
+      payment.id,
+      mpPaymentId,
+      payment.cargoItem.tripId
+    );
+  }
 
   // Solo avisa el webhook que ganó la transición a APPROVED: MP repite la
   // notificación y no puede ser motivo de tres campanas.
@@ -506,6 +524,199 @@ async function refundIfCancelled(
   }
   if (outcome.kind === "completed" && outcome.paymentStatus) return outcome.paymentStatus;
   return current.status;
+}
+
+/** reintentos de la transacción ante un conflicto de serialización (P2034) */
+const EXTERNAL_REFUND_RETRIES = 3;
+
+type ExternalRefundOutcome =
+  | { kind: "nada" }
+  | { kind: "admins"; body: string }
+  | {
+      kind: "retirada";
+      amount: number;
+      companyId: string;
+      companyName: string;
+      carrierId: string;
+      volume: number;
+      trip: { id: string; origin: string; destination: string };
+    };
+
+/**
+ * La seña volvió entera por fuera de la app: el transportista la devolvió desde
+ * su cuenta de MP y el webhook ya pasó el pago a REFUNDED.
+ *
+ * La app solo devuelve señas de cargas ya retiradas (`cancelCargoItem`,
+ * `refundIfCancelled`), así que una carga viva con la seña REFUNDED es una
+ * devolución que la app no pidió. Sin seña la reserva no tiene respaldo: si el
+ * viaje no salió, la carga se retira sola, sin penalidad (la plata ya volvió
+ * entera), se libera el espacio y se avisa a la empresa y al transportista.
+ * Lo que no se puede deshacer solo (el viaje ya salió, la carga tiene un pago
+ * de saldo, o lo devuelto fue el saldo) no se toca: se avisa a los admins.
+ *
+ * Nunca le pide plata a MP ni encola una devolución: deja `refundedAmount`
+ * asentado con el total, y una carga CANCELLED ya no se puede retirar.
+ *
+ * Relee todo dentro de una transacción serializable: se puede cruzar con el
+ * retiro de la empresa o con la liberación de reservas vencidas. El CAS sobre
+ * el estado de la carga hace que de dos caminos simultáneos solo uno la retire
+ * (y avise). Si el conflicto no se resuelve, el error sube y MP reintenta.
+ */
+async function releaseCargoAfterExternalRefund(
+  paymentId: string,
+  mpPaymentId: string,
+  tripId: string
+): Promise<void> {
+  let outcome: ExternalRefundOutcome | null = null;
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < EXTERNAL_REFUND_RETRIES; attempt++) {
+    try {
+      outcome = await prisma.$transaction(
+        async (tx): Promise<ExternalRefundOutcome> => {
+          const current = await tx.payment.findUnique({
+            where: { id: paymentId },
+            select: {
+              status: true,
+              type: true,
+              amount: true,
+              cargoItem: {
+                select: {
+                  id: true,
+                  status: true,
+                  companyId: true,
+                  volume: true,
+                  company: { select: { name: true } },
+                  payments: { select: { type: true } },
+                  trip: {
+                    select: {
+                      id: true,
+                      status: true,
+                      capacityTotal: true,
+                      carrierId: true,
+                      origin: true,
+                      destination: true,
+                      cargoItems: { select: { id: true, volume: true, status: true } },
+                    },
+                  },
+                },
+              },
+            },
+          });
+          if (!current || current.status !== "REFUNDED") return { kind: "nada" };
+          const item = current.cargoItem;
+          // retirada por la app (que pidió esta devolución) o por un webhook anterior
+          if (item.status === "CANCELLED") return { kind: "nada" };
+
+          const trip = item.trip;
+          if (current.type !== "DEPOSIT") {
+            return {
+              kind: "admins",
+              body: `MP informa que el pago ${mpPaymentId} del saldo ${paymentId} se devolvió entero desde la cuenta del transportista. la carga no se tocó: revisala.`,
+            };
+          }
+          if (trip.status !== "OPEN" && trip.status !== "FULL") {
+            return {
+              kind: "admins",
+              body: `MP informa que el pago ${mpPaymentId} de la seña ${paymentId} se devolvió entero desde la cuenta del transportista, y el viaje ya salió. la carga no se tocó: revisala.`,
+            };
+          }
+          if (item.payments.some((p) => p.type === "BALANCE")) {
+            return {
+              kind: "admins",
+              body: `MP informa que el pago ${mpPaymentId} de la seña ${paymentId} se devolvió entero desde la cuenta del transportista, y la carga ya tiene un pago de saldo. la carga no se tocó: revisala.`,
+            };
+          }
+
+          // CAS: si la empresa la retiró después de la relectura, no se pisa su retiro
+          const released = await tx.cargoItem.updateMany({
+            where: { id: item.id, status: { in: ["PENDING", "CONFIRMED"] } },
+            data: {
+              status: "CANCELLED",
+              cancelledAt: new Date(),
+              // la seña volvió entera: no se retuvo nada
+              cancellationFeeAmount: new Prisma.Decimal(0),
+            },
+          });
+          if (released.count === 0) return { kind: "nada" };
+
+          await tx.payment.updateMany({
+            where: { id: paymentId, status: "REFUNDED", refundedAmount: null },
+            data: { refundedAmount: current.amount },
+          });
+
+          const used = activeVolume(trip.cargoItems.filter((c) => c.id !== item.id));
+          if (trip.status === "FULL" && used < trip.capacityTotal) {
+            await tx.trip.update({ where: { id: trip.id }, data: { status: "OPEN" } });
+          }
+
+          return {
+            kind: "retirada",
+            amount: Number(current.amount),
+            companyId: item.companyId,
+            companyName: item.company.name,
+            carrierId: trip.carrierId,
+            volume: item.volume,
+            trip: { id: trip.id, origin: trip.origin, destination: trip.destination },
+          };
+        },
+        {
+          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+          maxWait: 5000,
+          timeout: 15000,
+        }
+      );
+      break;
+    } catch (err) {
+      lastError = err;
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2034") {
+        continue;
+      }
+      throw err;
+    }
+  }
+  if (!outcome) throw lastError;
+
+  if (outcome.kind === "admins") {
+    console.warn(`[payments] devolución hecha por fuera de la app: payment=${paymentId}`);
+    await alertAdmins(`EXTERNAL_REFUND:${paymentId}:${mpPaymentId}`, {
+      tripId,
+      title: "devolución hecha desde Mercado Pago",
+      body: outcome.body,
+    });
+    return;
+  }
+  if (outcome.kind !== "retirada") return;
+
+  // best-effort: la carga ya quedó retirada. Un aviso que falla no se reintenta
+  // (el repetido de MP ve la carga CANCELLED), pero tampoco tumba el webhook ni
+  // frena el otro aviso.
+  const r = outcome;
+  const ruta = `${r.trip.origin} → ${r.trip.destination}`;
+  const avisos = await Promise.allSettled([
+    notifyUsers([r.companyId], {
+      type: "CARGO_CANCELLED",
+      title: "el transportista te devolvió la seña",
+      body: `te devolvió la seña de $${r.amount} desde Mercado Pago, así que tu carga (${r.volume} m³) se retiró del viaje ${ruta}. si todavía querés ese espacio, reservalo de nuevo.`,
+      tripId: r.trip.id,
+    }),
+    notifyUsers([r.carrierId], {
+      type: "CARGO_CANCELLED",
+      title: `devolviste una seña del viaje ${ruta}`,
+      body: `como devolviste la seña de $${r.amount} desde Mercado Pago, la carga de ${r.companyName} (${r.volume} m³) se retiró del viaje y el espacio quedó libre.`,
+      tripId: r.trip.id,
+    }),
+  ]);
+  for (const aviso of avisos) {
+    if (aviso.status === "rejected") {
+      console.error(
+        "[payments] falló el aviso de una seña devuelta por fuera de la app",
+        {
+          name: aviso.reason instanceof Error ? aviso.reason.name : typeof aviso.reason,
+        }
+      );
+    }
+  }
 }
 
 // companyId y el viaje se piden para poder avisarle a la empresa qué se acreditó.

@@ -638,6 +638,30 @@ describe("cancelCargoItem con seña pagada", () => {
     vi.mocked(refundPayment).mockResolvedValue(100);
   });
 
+  it("seña ya devuelta desde el panel de MP (REFUNDED): retira sin encolar otra devolución ni llamar a MP", async () => {
+    // carrera con el webhook: MP ya pasó la seña a REFUNDED y la empresa retira
+    // antes de que el webhook alcance a retirar la carga
+    tx.cargoItem.findUnique.mockResolvedValue(
+      basePaidCargoItem({
+        payments: [paidDeposit({ status: "REFUNDED" })],
+        company: { name: "Acero SA" },
+      })
+    );
+
+    await tripsService.cancelCargoItem("t1", "i1", "c1");
+
+    expect(tx.refundRequest.create).not.toHaveBeenCalled();
+    expect(refundPayment).not.toHaveBeenCalled();
+    expect(tx.cargoItem.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: "CANCELLED",
+          cancellationFeeAmount: new Prisma.Decimal(0),
+        }),
+      })
+    );
+  });
+
   it("más de 48hs: crea RefundRequest PENDING con monto total (outbox)", async () => {
     await tripsService.cancelCargoItem("t1", "i1", "c1");
 
