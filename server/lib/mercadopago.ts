@@ -633,15 +633,35 @@ function round2(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
-/** cuánto le devolvimos a Mercado Pago hasta ahora por ese pago */
+/**
+ * Cuánto lleva devuelto ese pago en Mercado Pago, leído del pago mismo
+ * (`transaction_amount_refunded` de GET /v1/payments/{id}).
+ *
+ * No usar `PaymentRefund.total()` del SDK: a pesar del nombre no lee nada, hace
+ * POST /v1/payments/{id}/refunds sin monto, y en MP un reembolso sin monto es
+ * un reembolso del 100 %. Llamarlo como "consulta previa" devolvía la seña
+ * entera aunque correspondiera la mitad (retiro entre 24 y 48 h).
+ *
+ * Si MP no informa el campo, se corta: tomarlo como 0 podría duplicar un
+ * reembolso, y `refundPayment` no devuelve nada a ciegas.
+ */
 export async function refundedAmount(
   mpPaymentId: string,
   accessToken: string
 ): Promise<number> {
-  const res = await new PaymentRefund(new MercadoPagoConfig({ accessToken })).total({
-    payment_id: mpPaymentId,
+  const payment = await new Payment(new MercadoPagoConfig({ accessToken })).get({
+    id: mpPaymentId,
   });
-  return Number(res.amount ?? 0);
+  const refunded = (payment as { transaction_amount_refunded?: unknown })
+    .transaction_amount_refunded;
+  if (typeof refunded !== "number" || !Number.isFinite(refunded)) {
+    throw new AppError(
+      "Mercado Pago no informó cuánto se devolvió del pago",
+      502,
+      "MP_INVALID_RESPONSE"
+    );
+  }
+  return refunded;
 }
 
 function safeEqual(a: string, b: string) {
