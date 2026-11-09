@@ -11,6 +11,7 @@ import { toCargoItemResponse, toTripSummary } from "../../lib/mappers.js";
 import { endOfArgentinaDay } from "../../lib/dates.js";
 import { encryptSecret } from "../../lib/crypto.js";
 import { signOAuthState } from "../../lib/auth.js";
+import { mpOAuthTestToken } from "../../lib/env.js";
 import type {
   RequestVerificationInput,
   ReviewVerificationInput,
@@ -685,6 +686,9 @@ export async function exchangeMpCode(userId: string, code: string): Promise<void
     );
   }
 
+  // se lee antes de llamar a MP: en producción o con un valor inválido corta acá
+  const testToken = mpOAuthTestToken();
+
   const tokenUrl = "https://api.mercadopago.com/oauth/token";
   const body = new URLSearchParams({
     grant_type: "authorization_code",
@@ -693,6 +697,8 @@ export async function exchangeMpCode(userId: string, code: string): Promise<void
     code,
     redirect_uri: redirectUri,
   });
+  // credenciales de sandbox (doc de MP): solo con MP_OAUTH_TEST_TOKEN=true
+  if (testToken) body.set("test_token", "true");
 
   const res = await fetch(tokenUrl, {
     method: "POST",

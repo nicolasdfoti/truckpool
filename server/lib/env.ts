@@ -7,6 +7,8 @@
  * falle ruidosamente en vez de servir requests.
  */
 
+import { AppError } from "./errors.js";
+
 /**
  * El secreto de desarrollo que antes estaba hardcodeado en `lib/auth.ts`.
  * Ya no se usa para firmar nada: queda sólo para detectar que alguien copió un
@@ -30,6 +32,54 @@ export class EnvError extends Error {
     );
     this.name = "EnvError";
   }
+}
+
+/**
+ * MP_OAUTH_TEST_TOKEN: si el intercambio OAuth de Mercado Pago pide
+ * credenciales de sandbox (`test_token=true` en /oauth/token, como indica la
+ * doc de MP). Se activa solo con esta variable, nunca por NODE_ENV: NODE_ENV
+ * solo la traba, porque en producción no se acepta. Valores: "true", "false"
+ * o vacío (= false). Cualquier otro valor es un error: un typo no puede elegir
+ * el modo en silencio.
+ */
+function readMpOAuthTestToken(): { enabled: boolean; problem?: string } {
+  return readSandboxFlag(
+    "MP_OAUTH_TEST_TOKEN",
+    "pide credenciales de sandbox de Mercado Pago"
+  );
+}
+
+/**
+ * Lee una bandera de sandbox de Mercado Pago: "true", "false" o vacío (= false).
+ * Otro valor es un problema, y "true" con NODE_ENV=production también.
+ */
+function readSandboxFlag(
+  name: string,
+  what: string
+): { enabled: boolean; problem?: string } {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "" || raw === "false") return { enabled: false };
+  if (raw !== "true") {
+    return { enabled: false, problem: `${name}="${raw}" no es válido: usá true o false` };
+  }
+  if (process.env.NODE_ENV === "production") {
+    return {
+      enabled: false,
+      problem: `${name}=true ${what}: no se puede usar en producción`,
+    };
+  }
+  return { enabled: true };
+}
+
+/**
+ * Para el intercambio OAuth. Repite la traba de producción además del chequeo
+ * de arranque: aunque algo se saltee assertServerEnv, en producción nunca se
+ * piden credenciales de sandbox.
+ */
+export function mpOAuthTestToken(): boolean {
+  const { enabled, problem } = readMpOAuthTestToken();
+  if (problem) throw new AppError(problem, 500, "MP_NOT_CONFIGURED");
+  return enabled;
 }
 
 /**
@@ -74,6 +124,9 @@ export function assertServerEnv(): void {
       `NODE_ENV="${nodeEnv}" no es un valor conocido (${KNOWN_NODE_ENVS.join(", ")})`
     );
   }
+
+  const mpTestToken = readMpOAuthTestToken();
+  if (mpTestToken.problem) problems.push(mpTestToken.problem);
 
   if (problems.length > 0) {
     throw new EnvError(problems);

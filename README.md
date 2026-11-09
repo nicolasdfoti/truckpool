@@ -445,6 +445,7 @@ Para que el transportista pueda publicar, primero hay que aprobarlo desde
 | `MP_ACCESS_TOKEN` | Token de la cuenta de la plataforma |
 | `MP_WEBHOOK_SECRET` | Firma de los webhooks de MP |
 | `MP_CLIENT_ID` / `MP_CLIENT_SECRET` | OAuth de Mercado Pago Marketplace |
+| `MP_OAUTH_TEST_TOKEN` | `true` pide credenciales de sandbox en el OAuth (`test_token`); default `false`. Con `NODE_ENV=production` el server no arranca |
 | `TOKEN_ENCRYPTION_KEY` | 64 hex (32 bytes) para cifrar tokens MP |
 | `RESEND_API_KEY` | API key de Resend |
 | `EMAIL_FROM` | Remitente verificado |
