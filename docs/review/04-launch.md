@@ -202,6 +202,7 @@ Los de 03§5 no absorbidos. Validación: `npm run lint && npm run build` + e2e. 
 - [ ] QW2 copy del diagrama · QW3 login (`autocomplete`, sin mínimo en "acceder") · QW5 landing sin "MVP… Próximamente: Pagos" y CTA corregidos.
 - [ ] QW7 error en admin · QW8 404 vs error + título de pestaña · QW10 anuncios de DnD en español · QW11 copy de `MP_NOT_CONFIGURED`.
 - [ ] QW13 fila de carga en mobile · QW15 contraste · QW16 `:focus-visible` global · QW17 campanita oculta a anónimos · QW18 solicitudes vencidas (el server ya las rechaza por L5).
+- [ ] `NotificationType` del client (`client/src/types/notification.ts`) sin `TRIP_REQUEST` ni `TRIP_REQUEST_RESPONSE`, que el enum del server sí tiene (`server/schema.prisma`). Hoy ningún `switch` ni mapa del client depende del tipo, así que no se ve; agregarlos antes de que alguno lo haga. Detectado al cerrar L4 (2026-11-10), anterior a L4.
 
 ### L9 — Cuentas y verificación · 1ª SEMANA · M
 Archivos: `users.{service,schemas}.ts`, `lib/mercadopago.ts`, `lib/auth.ts`, schema Prisma, `pages/AdminVerifications.tsx`, `pages/Login.tsx`.
