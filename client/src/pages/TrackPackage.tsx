@@ -41,6 +41,8 @@ function tripStatusLabel(status: string): { label: string; className: string } {
       return { label: "En viaje", className: "bg-success-bg text-success-deep" };
     case "COMPLETED":
       return { label: "Completado", className: "bg-canvas-line text-ink-soft" };
+    case "CANCELLED":
+      return { label: "Cancelado", className: "bg-danger/10 text-danger" };
     default:
       return { label: status.toLowerCase(), className: "bg-canvas-line text-ink-soft" };
   }

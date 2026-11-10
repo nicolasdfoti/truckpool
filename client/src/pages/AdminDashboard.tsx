@@ -85,6 +85,7 @@ const STATUS_LABELS: [keyof AdminStats["tripsByStatus"], string][] = [
   ["FULL", "completos"],
   ["IN_TRANSIT", "en tránsito"],
   ["COMPLETED", "finalizados"],
+  ["CANCELLED", "cancelados"],
 ];
 
 export default function AdminDashboard() {

@@ -1,4 +1,5 @@
-export type TripStatus = "OPEN" | "FULL" | "IN_TRANSIT" | "COMPLETED";
+/** CANCELLED: el fletero lo canceló antes de salir; las cargas activas se cancelan */
+export type TripStatus = "OPEN" | "FULL" | "IN_TRANSIT" | "COMPLETED" | "CANCELLED";
 export type CargoItemStatus = "PENDING" | "CONFIRMED" | "CANCELLED";
 /** CHARGED_BACK: contracargo en Mercado Pago; no se vuelve a pagar, lo resuelve un admin. */
 export type PaymentStatus =
@@ -21,6 +22,7 @@ export const TRIP_STATUS_LABELS: Record<TripStatus, string> = {
   FULL: "completo",
   IN_TRANSIT: "en viaje",
   COMPLETED: "completado",
+  CANCELLED: "cancelado",
 };
 
 export type Trip = {

@@ -72,8 +72,9 @@ export const createTripSchema = z.object({
 
 export type CreateTripInput = z.infer<typeof createTripSchema>;
 
+// CANCELLED: el fletero cancela un viaje que no salió (D6); solo desde OPEN/FULL
 export const updateTripStatusSchema = z.object({
-  status: z.enum(["IN_TRANSIT", "COMPLETED"]),
+  status: z.enum(["IN_TRANSIT", "COMPLETED", "CANCELLED"]),
 });
 
 const optionalText = z.preprocess(

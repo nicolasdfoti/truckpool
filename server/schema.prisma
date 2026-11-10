@@ -63,6 +63,9 @@ enum TripStatus {
   FULL
   IN_TRANSIT
   COMPLETED
+  // el fletero lo canceló antes de salir (desde OPEN o FULL). Las cargas
+  // activas se cancelan con la seña cobrada devuelta entera. Es final.
+  CANCELLED
 }
 
 model Trip {

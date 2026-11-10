@@ -1454,6 +1454,64 @@ describe("transiciones y confirmación de carga", () => {
     expect(res.status).toBe(401);
   });
 
+  describe("PATCH /:id/status a CANCELLED (D6)", () => {
+    const viajeAbierto = {
+      id: "t1",
+      origin: "Córdoba",
+      destination: "Rosario",
+      date: new Date("2026-11-20T15:00:00.000Z"),
+      departureTime: "08:00",
+      truckType: "Semi",
+      capacityTotal: 30,
+      price: new Prisma.Decimal("1500.00"),
+      depositPercent: 20,
+      status: "OPEN",
+      carrierId: "u1",
+      features: [],
+      cargoItems: [],
+      carrier: { name: "Transportes Flete" },
+    };
+
+    beforeEach(() => {
+      const tx = {
+        trip: {
+          findUnique: vi.fn().mockResolvedValue(viajeAbierto),
+          update: vi.fn().mockImplementation(({ data }: { data: object }) => ({
+            ...viajeAbierto,
+            ...data,
+          })),
+        },
+      };
+      vi.mocked(prisma.$transaction).mockImplementation(
+        (fn: unknown) => (fn as (c: unknown) => unknown)(tx) as never
+      );
+      vi.mocked(prisma.cargoItem.findMany).mockResolvedValue([]);
+    });
+
+    it("el transportista dueño cancela su viaje OPEN (200)", async () => {
+      const res = await request(app)
+        .patch("/api/trips/t1/status")
+        .set("Authorization", `Bearer ${carrierToken}`)
+        .send({ status: "CANCELLED" });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({
+        id: "t1",
+        status: "CANCELLED",
+        acceptsCargo: false,
+      });
+    });
+
+    it("una empresa no puede cancelar un viaje (403)", async () => {
+      const res = await request(app)
+        .patch("/api/trips/t1/status")
+        .set("Authorization", `Bearer ${companyToken}`)
+        .send({ status: "CANCELLED" });
+
+      expect(res.status).toBe(403);
+    });
+  });
+
   it("PATCH cargo-items/:id requiere token (401)", async () => {
     const res = await request(app).patch("/api/trips/t1/cargo-items/i1").send({});
     expect(res.status).toBe(401);
@@ -2303,7 +2361,7 @@ describe("GET /api/admin/stats", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.stats).toMatchObject({
-      tripsByStatus: { OPEN: 2, FULL: 0, IN_TRANSIT: 0, COMPLETED: 1 },
+      tripsByStatus: { OPEN: 2, FULL: 0, IN_TRANSIT: 0, COMPLETED: 1, CANCELLED: 0 },
       totalTrips: 3,
       volumeTransported: 10.5,
       billedAmount: 1200.5,

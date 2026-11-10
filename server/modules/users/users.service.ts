@@ -288,7 +288,10 @@ export async function reviewVerification(userId: string, input: ReviewVerificati
  * honesta de estimarlo.
  */
 export type AdminStats = {
-  tripsByStatus: Record<"OPEN" | "FULL" | "IN_TRANSIT" | "COMPLETED", number>;
+  tripsByStatus: Record<
+    "OPEN" | "FULL" | "IN_TRANSIT" | "COMPLETED" | "CANCELLED",
+    number
+  >;
   totalTrips: number;
   volumeTransported: number;
   billedAmount: number | null;
@@ -300,7 +303,7 @@ export type AdminStats = {
   notes: string[];
 };
 
-const TRIP_STATUSES = ["OPEN", "FULL", "IN_TRANSIT", "COMPLETED"] as const;
+const TRIP_STATUSES = ["OPEN", "FULL", "IN_TRANSIT", "COMPLETED", "CANCELLED"] as const;
 
 export async function getAdminStats(): Promise<AdminStats> {
   const notes: string[] = [];

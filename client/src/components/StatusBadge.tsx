@@ -6,6 +6,7 @@ const STATUS_STYLES: Record<TripStatus, string> = {
   FULL: "bg-step-1 text-accent-ink",
   IN_TRANSIT: "bg-step-2 text-brand",
   COMPLETED: "bg-line text-ink-soft",
+  CANCELLED: "bg-danger/10 text-danger",
 };
 
 export function StatusBadge({ status }: { status: TripStatus }) {

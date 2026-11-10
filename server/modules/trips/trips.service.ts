@@ -116,9 +116,13 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
-const ALLOWED_TRANSITIONS: Record<"IN_TRANSIT" | "COMPLETED", Trip["status"][]> = {
+type TripStatusChange = "IN_TRANSIT" | "COMPLETED" | "CANCELLED";
+
+const ALLOWED_TRANSITIONS: Record<TripStatusChange, Trip["status"][]> = {
   IN_TRANSIT: ["OPEN", "FULL"],
   COMPLETED: ["IN_TRANSIT"],
+  // D6: el fletero cancela un viaje que todavía no salió. Es final.
+  CANCELLED: ["OPEN", "FULL"],
 };
 
 function startOfUtcDay(date: Date) {
@@ -584,10 +588,61 @@ async function cancelCargoForTrip(
   return cancelled;
 }
 
+/**
+ * Aviso de estado del viaje: una vez por empresa, aunque tenga varias cargas
+ * (notifyUsers deduplica los ids, pero el aviso se arma con la descripción de
+ * la primera carga para no duplicar texto). Solo a las cargas que viajan: una
+ * retirada o cancelada no "va en camino" ni "llegó a destino". Los avisos
+ * nunca rompen la actualización de estado.
+ */
+async function notifyTripStatusChange(
+  tripId: string,
+  trip: { origin: string; destination: string; carrierName: string },
+  status: "IN_TRANSIT" | "COMPLETED"
+) {
+  const items = await prisma.cargoItem.findMany({
+    where: { tripId, status: "CONFIRMED" },
+    select: { description: true, companyId: true },
+    orderBy: { createdAt: "asc" },
+  });
+  const seenCompanies = new Set<string>();
+  for (const item of items) {
+    if (seenCompanies.has(item.companyId)) continue;
+    seenCompanies.add(item.companyId);
+    const statusTrip = {
+      id: tripId,
+      origin: trip.origin,
+      destination: trip.destination,
+      carrierName: trip.carrierName,
+    };
+    await bestEffortNotify(() =>
+      notifyUsers([item.companyId], {
+        type: "TRIP_STATUS_CHANGED",
+        title:
+          status === "IN_TRANSIT"
+            ? `tu viaje va en camino: ${statusTrip.origin} → ${statusTrip.destination}`
+            : `tu viaje se completó: ${statusTrip.origin} → ${statusTrip.destination}`,
+        body:
+          status === "IN_TRANSIT"
+            ? `${statusTrip.carrierName} salió, donde va tu carga ${item.description.toLowerCase()}.`
+            : `${statusTrip.origin} → ${statusTrip.destination} se completó y tu carga ${item.description.toLowerCase()} llegó a destino.`,
+        tripId,
+        email: (user) =>
+          tripStatusEmail({
+            company: user,
+            trip: statusTrip,
+            status,
+            cargoDescription: item.description,
+          }),
+      })
+    );
+  }
+}
+
 export async function updateTripStatus(
   tripId: string,
   carrierId: string,
-  status: "IN_TRANSIT" | "COMPLETED"
+  status: TripStatusChange
 ): Promise<ReturnType<typeof toTripSummary>> {
   // El cambio de estado y los saldos a cobrar se escriben juntos: si el viaje
   // quedara IN_TRANSIT sin sus pagos BALANCE, nadie podría cobrarlos y el
@@ -644,16 +699,18 @@ export async function updateTripStatus(
           if (pending.length > 0) throw new BalancePendingError(pending.length);
         }
 
-        // D3: lo que no se confirmó no viaja. Antes del update del viaje, así
+        // D3: al salir, lo que no se confirmó no viaja. D6: un viaje cancelado
+        // no lleva nada (PENDING ni CONFIRMED). Antes del update del viaje, así
         // el resumen que se devuelve ya trae esas cargas CANCELLED.
-        const cancelled =
+        const toCancel =
           status === "IN_TRANSIT"
-            ? await cancelCargoForTrip(
-                tx,
-                trip.cargoItems.filter((item) => item.status === "PENDING"),
-                now
-              )
-            : [];
+            ? trip.cargoItems.filter((item) => item.status === "PENDING")
+            : status === "CANCELLED"
+              ? trip.cargoItems.filter(
+                  (item) => item.status === "PENDING" || item.status === "CONFIRMED"
+                )
+              : [];
+        const cancelled = await cancelCargoForTrip(tx, toCancel, now);
 
         const updated = await tx.trip.update({
           where: { id: tripId },
@@ -699,48 +756,8 @@ export async function updateTripStatus(
     )
   );
 
-  // Aviso de estado del viaje: una vez por empresa, aunque tenga varias cargas
-  // (notifyUsers deduplica los ids, pero el aviso se arma con la descripción de
-  // la primera carga para no duplicar texto). Solo a las cargas que viajan: una
-  // retirada o cancelada no "va en camino" ni "llegó a destino". Los avisos
-  // nunca rompen la actualización de estado.
-  const items = await prisma.cargoItem.findMany({
-    where: { tripId, status: "CONFIRMED" },
-    select: { description: true, companyId: true },
-    orderBy: { createdAt: "asc" },
-  });
-  const seenCompanies = new Set<string>();
-  for (const item of items) {
-    if (seenCompanies.has(item.companyId)) continue;
-    seenCompanies.add(item.companyId);
-    const statusTrip = {
-      id: tripId,
-      origin: result.trip.origin,
-      destination: result.trip.destination,
-      carrierName: result.trip.carrierName,
-    };
-    await bestEffortNotify(() =>
-      notifyUsers([item.companyId], {
-        type: "TRIP_STATUS_CHANGED",
-        title:
-          status === "IN_TRANSIT"
-            ? `tu viaje va en camino: ${statusTrip.origin} → ${statusTrip.destination}`
-            : `tu viaje se completó: ${statusTrip.origin} → ${statusTrip.destination}`,
-        body:
-          status === "IN_TRANSIT"
-            ? `${statusTrip.carrierName} salió, donde va tu carga ${item.description.toLowerCase()}.`
-            : `${statusTrip.origin} → ${statusTrip.destination} se completó y tu carga ${item.description.toLowerCase()} llegó a destino.`,
-        tripId,
-        email: (user) =>
-          tripStatusEmail({
-            company: user,
-            trip: statusTrip,
-            status,
-            cargoDescription: item.description,
-          }),
-      })
-    );
-  }
+  // Aviso de estado del viaje (un viaje cancelado avisa con CARGO_CANCELLED, abajo)
+  if (status !== "CANCELLED") await notifyTripStatusChange(tripId, result.trip, status);
 
   // El saldo se cobra ahora: le decimos a cada empresa cuánto y cómo pagarlo.
   // Si la empresa tiene varias cargas en el viaje va un solo email con la suma,
@@ -800,17 +817,26 @@ export async function updateTripStatus(
     );
   }
 
-  // D3: a cada empresa cuya carga no viaja, qué pasó y qué se le devuelve
+  // D3 y D6: a cada empresa cuya carga no viaja, qué pasó y qué se le devuelve
+  const ruta = `${result.trip.origin} → ${result.trip.destination}`;
   for (const item of result.cancelled) {
     const desc = item.description.toLowerCase();
+    const motivo =
+      status === "CANCELLED"
+        ? `${result.trip.carrierName} canceló el viaje, así que tu carga ${desc} no viaja.`
+        : `el viaje salió sin que tu carga ${desc} estuviera confirmada, así que no viaja.`;
+    const plata =
+      item.refundAmount > 0
+        ? `te devolvemos la seña entera ($${item.refundAmount}).`
+        : "no se cobró la seña; si se llega a acreditar, te la devolvemos entera.";
     await bestEffortNotify(() =>
       notifyUsers([item.companyId], {
         type: "CARGO_CANCELLED",
-        title: `tu carga se canceló: ${result.trip.origin} → ${result.trip.destination}`,
-        body:
-          item.refundAmount > 0
-            ? `el viaje salió sin que tu carga ${desc} estuviera confirmada, así que no viaja. te devolvemos la seña entera ($${item.refundAmount}).`
-            : `el viaje salió sin que tu carga ${desc} estuviera confirmada, así que no viaja. no se cobró la seña; si se llega a acreditar, te la devolvemos entera.`,
+        title:
+          status === "CANCELLED"
+            ? `se canceló el viaje: ${ruta}`
+            : `tu carga se canceló: ${ruta}`,
+        body: `${motivo} ${plata}`,
         tripId,
       })
     );
