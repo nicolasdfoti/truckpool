@@ -2544,6 +2544,50 @@ describe("GET /api/trips/geocode", () => {
   });
 });
 
+describe("GET /api/trips/:id/cargo-quote", () => {
+  beforeEach(() => {
+    vi.mocked(prisma.trip.findUnique).mockReset();
+  });
+
+  it("es pública y cotiza precio, seña y saldo de la carga por volumen", async () => {
+    vi.mocked(prisma.trip.findUnique).mockResolvedValue({
+      price: new Prisma.Decimal("1500.00"),
+      capacityTotal: 30,
+      depositPercent: 20,
+    } as never);
+
+    const res = await request(app).get("/api/trips/t1/cargo-quote?volume=10");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      volume: 10,
+      depositPercent: 20,
+      priceShare: 500,
+      depositAmount: 100,
+      balanceAmount: 400,
+    });
+  });
+
+  it("400 si el volumen no es un número positivo", async () => {
+    for (const volume of ["0", "-3", "abc"]) {
+      const res = await request(app).get(`/api/trips/t1/cargo-quote?volume=${volume}`);
+      expect(res.status).toBe(400);
+    }
+    const sinVolumen = await request(app).get("/api/trips/t1/cargo-quote");
+    expect(sinVolumen.status).toBe(400);
+    expect(prisma.trip.findUnique).not.toHaveBeenCalled();
+  });
+
+  it("404 TRIP_NOT_FOUND si el viaje no existe", async () => {
+    vi.mocked(prisma.trip.findUnique).mockResolvedValue(null);
+
+    const res = await request(app).get("/api/trips/nope/cargo-quote?volume=5");
+
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe("TRIP_NOT_FOUND");
+  });
+});
+
 describe("GET /api/trips/price-estimate", () => {
   const rosario = { lat: -32.9442, lng: -60.6505 };
   const cordoba = { lat: -31.4201, lng: -64.1888 };

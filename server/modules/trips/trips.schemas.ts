@@ -159,6 +159,20 @@ export const priceEstimateQuerySchema = z.object({
 export type PriceEstimateQuery = z.infer<typeof priceEstimateQuerySchema>;
 
 /**
+ * Cotización de una carga por volumen antes de reservar (resumen de L7). El
+ * volumen sigue la misma regla que al reservar (`createCargoItemSchema`), pero
+ * llega como query string.
+ */
+export const cargoQuoteQuerySchema = z.object({
+  volume: z.coerce
+    .number({ message: "volume debe ser un número" })
+    .positive("volume debe ser mayor a 0")
+    .finite("volume debe ser un número válido"),
+});
+
+export type CargoQuoteQuery = z.infer<typeof cargoQuoteQuerySchema>;
+
+/**
  * Parámetros para pedir al backend cuánto se devolvería de una seña si se
  * retirara ahora. El cliente NO reimplementa esta fórmula: la pide, para que
  * un cambio en PARTIAL_REFUND_RATIO no pueda dejar al cliente prometiendo un

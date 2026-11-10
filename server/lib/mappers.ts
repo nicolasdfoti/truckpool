@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import type { CargoItem, CargoItemStatus, Payment, Trip } from "@prisma/client";
 import { isTripDateAvailable } from "./dates.js";
+import type { CargoPrice } from "./pricing.js";
 
 /**
  * Una carga retirada (CANCELLED) queda en el historial pero no cuenta: ni para
@@ -157,5 +158,19 @@ export function toCargoItemResponse(item: CargoItemWithPayments) {
     pickupLng: item.pickupLng,
     trackingCode: item.trackingCode,
     stopOrder: item.stopOrder,
+  };
+}
+
+/** cotización de una carga antes de reservar: los montos de `cargoPrice` en pesos */
+export function toCargoQuoteResponse(
+  quote: CargoPrice,
+  input: { volume: number; depositPercent: number }
+) {
+  return {
+    volume: input.volume,
+    depositPercent: input.depositPercent,
+    priceShare: Number(quote.priceShare),
+    depositAmount: Number(quote.depositAmount),
+    balanceAmount: Number(quote.balanceAmount),
   };
 }

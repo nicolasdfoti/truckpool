@@ -5,6 +5,7 @@ import type {
   LocationQuery,
   PriceEstimateQuery,
   CancellationQuoteQuery,
+  CargoQuoteQuery,
 } from "./trips.schemas.js";
 import { AppError } from "../../lib/errors.js";
 import { geocode } from "../../lib/geocode.js";
@@ -36,6 +37,17 @@ export async function getPriceEstimate(_req: Request, res: Response) {
     truckType: query.truckType,
   });
   res.json(estimate);
+}
+
+/**
+ * GET /api/trips/:id/cargo-quote?volume=N — precio, seña y saldo de una carga
+ * de N m³ antes de reservar. Pública como el detalle del viaje: el precio ya es
+ * público.
+ */
+export async function getCargoQuote(req: Request, res: Response) {
+  const query = (res.locals.query ?? {}) as CargoQuoteQuery;
+  const quote = await tripsService.quoteCargoPrice(getParam(req, "id"), query.volume);
+  res.json(quote);
 }
 
 /**

@@ -1202,6 +1202,58 @@ describe("cancelCargoItem: carrera con el webhook que aprueba la seña", () => {
   });
 });
 
+describe("quoteCargoPrice", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (prisma.$transaction as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      (fn: unknown) => (fn as (t: unknown) => unknown)(tx)
+    );
+    tx.cargoItem.create.mockImplementation(({ data }: { data: unknown }) => ({
+      id: "i1",
+      ...(data as object),
+    }));
+    tx.payment.create.mockImplementation(({ data }: { data: unknown }) => ({
+      id: "p1",
+      ...(data as object),
+    }));
+  });
+
+  it("cotiza lo mismo que después cobra addCargoItem", async () => {
+    const viaje = baseTrip({
+      price: new Prisma.Decimal("1000.00"),
+      capacityTotal: 3,
+      depositPercent: 15,
+    });
+    vi.mocked(prisma.trip.findUnique).mockResolvedValue(viaje as never);
+    tx.trip.findUnique.mockResolvedValue(viaje);
+
+    const quote = await tripsService.quoteCargoPrice("t1", 1);
+    const reservada = await tripsService.addCargoItem("t1", "c1", {
+      description: "Maquinaria",
+      pickupAddress: "Córdoba, Córdoba",
+      volume: 1,
+    });
+
+    expect(quote).toEqual({
+      volume: 1,
+      depositPercent: 15,
+      priceShare: 333.33,
+      depositAmount: 50,
+      balanceAmount: 283.33,
+    });
+    expect(quote.priceShare).toBe(reservada.priceShare);
+    expect(quote.depositAmount).toBe(reservada.depositAmount);
+  });
+
+  it("404 si el viaje no existe", async () => {
+    vi.mocked(prisma.trip.findUnique).mockResolvedValue(null);
+
+    await expect(tripsService.quoteCargoPrice("nope", 1)).rejects.toBeInstanceOf(
+      TripNotFoundError
+    );
+  });
+});
+
 describe("addCargoItem con cargas retiradas", () => {
   beforeEach(() => {
     vi.clearAllMocks();

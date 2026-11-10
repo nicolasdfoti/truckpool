@@ -5,6 +5,7 @@ import {
   activeVolume,
   isActiveCargo,
   toCargoItemResponse,
+  toCargoQuoteResponse,
   toTripSummary,
   tripAcceptsCargo,
 } from "../../lib/mappers.js";
@@ -423,6 +424,24 @@ export async function estimateTripPrice(input: {
 
   const distanceKm = haversineKm(origin, destination);
   return { ...base, geocoded: true, ...priceRangeFor(input.truckType, distanceKm) };
+}
+
+/**
+ * Cuánto pagaría una empresa por `volume` m³ en este viaje: precio de la carga,
+ * seña y saldo. Es la misma fórmula que cobra `addCargoItem` (`cargoPrice`),
+ * así el resumen antes de reservar no puede prometer otro número. No mira la
+ * capacidad libre ni el estado del viaje: eso lo decide la reserva.
+ */
+export async function quoteCargoPrice(tripId: string, volume: number) {
+  const trip = await prisma.trip.findUnique({
+    where: { id: tripId },
+    select: { price: true, capacityTotal: true, depositPercent: true },
+  });
+  if (!trip) throw new TripNotFoundError();
+  return toCargoQuoteResponse(cargoPrice(trip, volume), {
+    volume,
+    depositPercent: trip.depositPercent,
+  });
 }
 
 /**
