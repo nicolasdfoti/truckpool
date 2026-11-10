@@ -87,6 +87,20 @@ function nextCalendarDay(day: CalendarParts): CalendarParts {
 }
 
 /**
+ * Instante de la hora `hhmm` ("HH:mm") del día calendario argentino en que cae
+ * `day`. Sirve para la salida de un viaje: `Trip.date` guarda un instante del
+ * día (el mediodía del navegador del fletero) y `departureTime` la hora suelta.
+ */
+export function argentinaTimeOnDay(day: Date, hhmm: string): Date {
+  const [hours, minutes] = hhmm.split(":").map(Number);
+  const start = startOfDayInstant(
+    calendarParts(day, ARGENTINA_TIME_ZONE),
+    ARGENTINA_TIME_ZONE
+  );
+  return new Date(start.getTime() + ((hours ?? 0) * 60 + (minutes ?? 0)) * 60_000);
+}
+
+/**
  * Último milisegundo del día de hoy en Argentina. Es el corte de disponibilidad:
  * `Trip.date > corte` equivale a "el día calendario del viaje es posterior a hoy
  * en Argentina". Es un instante, así que sirve tanto para el `where` de Prisma

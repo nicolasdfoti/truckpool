@@ -49,8 +49,8 @@ Server tests mock Prisma, Mercado Pago, Nominatim, OSRM routing and email per fi
 - `capacityUsed` is not a column — it's derived by summing active `CargoItem.volume` (`activeVolume`/`isActiveCargo` in mappers).
 - `addCargoItem` runs in a `Serializable` transaction with retry on `P2034`; keep capacity checks inside it.
 - `depositAmount` is frozen at booking time.
-- Cancellation penalty: >48 h free, 24–48 h half the deposit, <24 h full deposit (`lib/cancellation.ts`). The client doesn't recompute it: `client/src/lib/cancellation.ts` asks `GET /trips/cancellation-quote`.
-- Trip status `OPEN → FULL → IN_TRANSIT → COMPLETED`; cargo `PENDING → CONFIRMED | CANCELLED`; payment `PENDING → APPROVED | REJECTED → REFUNDED`.
+- Cancellation penalty: >48 h free, 24–48 h half the deposit, <24 h full deposit (`lib/cancellation.ts`). The client doesn't recompute it: `client/src/lib/cancellation.ts` asks `GET /trips/:tripId/cargo-items/:cargoItemId/cancellation-quote` (U21: $ 0 if the deposit wasn't paid). The public `GET /trips/cancellation-quote` is unused and slated for removal in L11.
+- Trip status `OPEN → FULL → IN_TRANSIT → COMPLETED`, or `CANCELLED` from OPEN/FULL (carrier cancels; active cargo is cancelled with the paid deposit refunded in full); cargo `PENDING → CONFIRMED | CANCELLED`; payment `PENDING → APPROVED | REJECTED → REFUNDED`, and `APPROVED → CHARGED_BACK` (final).
 - Geocoding (Nominatim, 1 req/s queue, 24 h cache) and emails (Resend) are best-effort: failure must never block publishing a trip or a business operation. Coordinates are nullable on purpose.
 - Only the `COMPANY` reviews, once per `COMPLETED` trip; the reviewee is always derived from the trip.
 

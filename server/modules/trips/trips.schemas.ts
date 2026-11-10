@@ -28,19 +28,18 @@ export const createCargoItemSchema = z.object({
 export type CreateCargoItemInput = z.infer<typeof createCargoItemSchema>;
 
 /**
- * Hora de salida en formato 24h "HH:mm". Opcional a propósito: es un dato que
- * muchos fleteros no quieren prometer, y el viaje se publica igual sin él. Se
- * valida con regex y no con `Date`: "25:00" tiene que ser un error de cliente,
- * no una fecha que JS normaliza en silencio.
+ * Hora de salida en formato 24h "HH:mm". Obligatoria en los viajes nuevos: la
+ * ventana de retiro de las cargas se mide contra la salida (U11). Los viajes
+ * viejos sin hora salen a las 23:59 ART (ver lib/cancellation.ts). Se valida
+ * con regex y no con `Date`: "25:00" tiene que ser un error de cliente, no una
+ * fecha que JS normaliza en silencio.
  */
 const DEPARTURE_TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 export const departureTimeSchema = z
-  .string()
+  .string({ message: "la hora de salida es obligatoria" })
   .trim()
-  .regex(DEPARTURE_TIME, "la hora tiene que tener formato HH:mm")
-  .optional()
-  .nullable();
+  .regex(DEPARTURE_TIME, "la hora tiene que tener formato HH:mm");
 
 export const createTripSchema = z.object({
   origin: z.string().trim().min(1, "el origen es obligatorio"),
@@ -73,8 +72,9 @@ export const createTripSchema = z.object({
 
 export type CreateTripInput = z.infer<typeof createTripSchema>;
 
+// CANCELLED: el fletero cancela un viaje que no salió (D6); solo desde OPEN/FULL
 export const updateTripStatusSchema = z.object({
-  status: z.enum(["IN_TRANSIT", "COMPLETED"]),
+  status: z.enum(["IN_TRANSIT", "COMPLETED", "CANCELLED"]),
 });
 
 const optionalText = z.preprocess(
@@ -159,6 +159,20 @@ export const priceEstimateQuerySchema = z.object({
 export type PriceEstimateQuery = z.infer<typeof priceEstimateQuerySchema>;
 
 /**
+ * Cotización de una carga por volumen antes de reservar (resumen de L7). El
+ * volumen sigue la misma regla que al reservar (`createCargoItemSchema`), pero
+ * llega como query string.
+ */
+export const cargoQuoteQuerySchema = z.object({
+  volume: z.coerce
+    .number({ message: "volume debe ser un número" })
+    .positive("volume debe ser mayor a 0")
+    .finite("volume debe ser un número válido"),
+});
+
+export type CargoQuoteQuery = z.infer<typeof cargoQuoteQuerySchema>;
+
+/**
  * Parámetros para pedir al backend cuánto se devolvería de una seña si se
  * retirara ahora. El cliente NO reimplementa esta fórmula: la pide, para que
  * un cambio en PARTIAL_REFUND_RATIO no pueda dejar al cliente prometiendo un
@@ -176,6 +190,8 @@ export const cancellationQuoteQuerySchema = z.object({
     .refine((v) => !Number.isNaN(new Date(v).getTime()), {
       message: "la fecha del viaje no es válida",
     }),
+  // la hora de salida del viaje; sin ella (viaje viejo) se toman las 23:59 ART
+  departureTime: departureTimeSchema.optional(),
 });
 
 export type CancellationQuoteQuery = z.infer<typeof cancellationQuoteQuerySchema>;

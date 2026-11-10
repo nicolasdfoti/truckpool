@@ -3,17 +3,25 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 // El SDK de Mercado Pago se reemplaza entero: acá se prueba la lógica de
 // idempotencia de refundPayment, no la integración con MP.
-const { create, total, paymentGet, paymentMethods, preferenceCreate, mpConfigs } =
-  vi.hoisted(() => ({
-    create: vi.fn(),
-    paymentGet: vi.fn(),
-    total: vi.fn(),
-    paymentMethods: vi.fn(),
-    preferenceCreate: vi.fn(),
-    // guardamos los opts de cada MercadoPagoConfig para poder verificar de dónde
-    // sale el access token
-    mpConfigs: [] as Array<{ accessToken?: string }>,
-  }));
+const {
+  create,
+  total,
+  paymentGet,
+  paymentSearch,
+  paymentMethods,
+  preferenceCreate,
+  mpConfigs,
+} = vi.hoisted(() => ({
+  create: vi.fn(),
+  paymentGet: vi.fn(),
+  paymentSearch: vi.fn(),
+  total: vi.fn(),
+  paymentMethods: vi.fn(),
+  preferenceCreate: vi.fn(),
+  // guardamos los opts de cada MercadoPagoConfig para poder verificar de dónde
+  // sale el access token
+  mpConfigs: [] as Array<{ accessToken?: string }>,
+}));
 
 vi.mock("mercadopago", () => ({
   MercadoPagoConfig: class {
@@ -27,6 +35,7 @@ vi.mock("mercadopago", () => ({
   },
   Payment: class {
     get = paymentGet;
+    search = paymentSearch;
   },
   PaymentMethod: class {
     get = paymentMethods;
@@ -42,9 +51,10 @@ const {
   createTestPreference,
   fetchPaymentState,
   refundPayment,
+  searchPaymentsByExternalReference,
   verifyWebhookSignature,
 } = await import("../lib/mercadopago.js");
-const { AppError } = await import("../lib/errors.js");
+const { AppError, MpApiError } = await import("../lib/errors.js");
 
 const MP_ID = "mp-77";
 
@@ -205,6 +215,83 @@ describe("refundPayment: la lectura final falla", () => {
     expect(err).toMatchObject({ statusCode: 502, code: "MP_ERROR" });
     expect(JSON.stringify(warn.mock.calls)).not.toContain(token);
     warn.mockRestore();
+  });
+});
+
+// U12: el worker guarda en lastError el código de MP, no el mensaje (puede traer
+// datos del pedido). La forma del error (status + cause[].code) es la del body
+// de error de la API de MP; no está verificada con un fallo real de reembolso.
+describe("refundPayment: el código de error de MP", () => {
+  it("si el reembolso falla, lleva status y causa de MP, sin el mensaje", async () => {
+    paymentGet.mockResolvedValue(devuelto(0));
+    create.mockRejectedValue({
+      status: 400,
+      error: "bad_request",
+      message: "Bearer APP_USR-secreto en el mensaje",
+      cause: [{ code: 2063, description: "texto de MP" }],
+    });
+
+    const err = await refundPayment(MP_ID, 50, "token-de-prueba").catch(
+      (e: unknown) => e
+    );
+
+    expect(err).toBeInstanceOf(MpApiError);
+    expect(err).toMatchObject({ statusCode: 502, code: "MP_ERROR", mpCode: "400:2063" });
+    expect(JSON.stringify(err)).not.toContain("secreto");
+  });
+
+  it("si no puede leer lo devuelto (token inválido), lleva el status y el error de MP", async () => {
+    paymentGet.mockRejectedValue({
+      status: 401,
+      error: "unauthorized",
+      message: "invalid access token",
+    });
+
+    const err = await refundPayment(MP_ID, 50, "token-de-prueba").catch(
+      (e: unknown) => e
+    );
+
+    expect(err).toMatchObject({ code: "MP_ERROR", mpCode: "401:unauthorized" });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("limpia lo que no es un código (sin espacios ni símbolos, corto)", async () => {
+    paymentGet.mockResolvedValue(devuelto(0));
+    create.mockRejectedValue({
+      status: 400,
+      cause: [{ code: "a b<script>" + "x".repeat(80) }],
+    });
+
+    const err = (await refundPayment(MP_ID, 50, "t").catch((e: unknown) => e)) as {
+      mpCode: string;
+    };
+
+    expect(err.mpCode).toMatch(/^400:[A-Za-z0-9_.-]{1,40}$/);
+  });
+
+  it("sin status ni causa queda sin código de MP", async () => {
+    paymentGet.mockResolvedValue(devuelto(0));
+    create.mockRejectedValue(new Error("timeout de red"));
+
+    const err = await refundPayment(MP_ID, 50, "t").catch((e: unknown) => e);
+
+    expect(err).toMatchObject({ code: "MP_ERROR", mpCode: null });
+  });
+});
+
+describe("refundPayment: timeout de los pedidos a MP", () => {
+  // con timeout, un intento colgado termina mucho antes de que el worker lo
+  // dé por vencido (10 min) y lo retome
+  it("los clientes del reembolso se crean con timeout", async () => {
+    paymentGet.mockResolvedValueOnce(devuelto(0)).mockResolvedValueOnce(devuelto(50));
+
+    await refundPayment(MP_ID, 50, "token-de-prueba");
+
+    expect(mpConfigs.length).toBeGreaterThan(0);
+    for (const config of mpConfigs as Array<{ options?: { timeout?: number } }>) {
+      expect(config.options?.timeout).toBeGreaterThan(0);
+      expect(config.options?.timeout).toBeLessThanOrEqual(30_000);
+    }
   });
 });
 
@@ -785,9 +872,44 @@ describe("fetchPaymentState", () => {
 
     await expect(fetchPaymentState("mp-77", "token-de-prueba")).resolves.toEqual({
       state: "APPROVED",
+      inMediation: false,
       externalReference: "pay1",
       amount: 100,
       currencyId: "ARS",
+    });
+  });
+
+  // la forma de Payment.get para estos dos estados sale de la documentación de
+  // MP; no se vio todavía en un pago real (ver L4 en docs/review/04-launch.md)
+  it("un contracargo es CHARGED_BACK, no REJECTED", async () => {
+    paymentGet.mockResolvedValue({
+      id: 77,
+      status: "charged_back",
+      status_detail: "settled",
+      external_reference: "pay1",
+      transaction_amount: 100,
+      currency_id: "ARS",
+    });
+
+    await expect(fetchPaymentState("mp-77", "token-de-prueba")).resolves.toMatchObject({
+      state: "CHARGED_BACK",
+      inMediation: false,
+    });
+  });
+
+  it("un reclamo abierto (in_mediation) no mueve el estado y se informa aparte", async () => {
+    paymentGet.mockResolvedValue({
+      id: 77,
+      status: "in_mediation",
+      status_detail: "in_process",
+      external_reference: "pay1",
+      transaction_amount: 100,
+      currency_id: "ARS",
+    });
+
+    await expect(fetchPaymentState("mp-77", "token-de-prueba")).resolves.toMatchObject({
+      state: null,
+      inMediation: true,
     });
   });
 
@@ -795,6 +917,97 @@ describe("fetchPaymentState", () => {
     paymentGet.mockResolvedValue({ status: "approved" });
 
     await expect(fetchPaymentState("mp-77", "token-de-prueba")).rejects.toMatchObject({
+      statusCode: 502,
+      code: "MP_INVALID_RESPONSE",
+    });
+  });
+});
+
+// la forma de la respuesta de búsqueda sale de la documentación de MP; no se vio
+// todavía con el token de OAuth de un fletero (ver el gate en
+// docs/review/04-launch.md)
+describe("searchPaymentsByExternalReference", () => {
+  const TOKEN = "APP_USR-secreto";
+
+  beforeEach(() => {
+    paymentSearch.mockReset();
+    mpConfigs.length = 0;
+  });
+
+  it("busca con el token del fletero, con timeout, por external_reference y del más viejo al más nuevo", async () => {
+    paymentSearch.mockResolvedValue({ results: [] });
+
+    await searchPaymentsByExternalReference("pay1", TOKEN);
+
+    expect(paymentSearch).toHaveBeenCalledWith({
+      options: { external_reference: "pay1", sort: "date_created", criteria: "asc" },
+    });
+    expect(mpConfigs.at(-1)).toEqual({
+      accessToken: TOKEN,
+      options: { timeout: 20_000 },
+    });
+  });
+
+  it("devuelve cada pago con su estado mapeado, ordenados por creación y solo los de esa referencia", async () => {
+    paymentSearch.mockResolvedValue({
+      results: [
+        {
+          id: 3,
+          status: "approved",
+          external_reference: "pay1",
+          date_created: "2026-11-10T10:05:00.000-03:00",
+        },
+        {
+          id: 1,
+          status: "rejected",
+          external_reference: "pay1",
+          date_created: "2026-11-10T10:00:00.000-03:00",
+        },
+        {
+          id: 2,
+          status: "approved",
+          external_reference: "otro",
+          date_created: "2026-11-10T10:01:00.000-03:00",
+        },
+        {
+          id: 4,
+          status: "in_process",
+          external_reference: "pay1",
+          date_created: "2026-11-10T10:07:00.000-03:00",
+        },
+      ],
+    });
+
+    await expect(searchPaymentsByExternalReference("pay1", TOKEN)).resolves.toEqual([
+      { id: "1", state: "REJECTED", externalReference: "pay1" },
+      { id: "3", state: "APPROVED", externalReference: "pay1" },
+      { id: "4", state: "PENDING", externalReference: "pay1" },
+    ]);
+  });
+
+  it("traduce un error del SDK a MP_ERROR sin loguear el token", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    paymentSearch.mockRejectedValue(
+      Object.assign(new Error("Unauthorized"), {
+        status: 401,
+        config: { headers: { Authorization: `Bearer ${TOKEN}` } },
+      })
+    );
+
+    const err = await searchPaymentsByExternalReference("pay1", TOKEN).catch(
+      (e: unknown) => e
+    );
+
+    expect(err).toBeInstanceOf(MpApiError);
+    expect(err).toMatchObject({ statusCode: 502, code: "MP_ERROR", mpCode: "401" });
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(TOKEN);
+    warn.mockRestore();
+  });
+
+  it("una respuesta sin lista de resultados es MP_INVALID_RESPONSE", async () => {
+    paymentSearch.mockResolvedValue({});
+
+    await expect(searchPaymentsByExternalReference("pay1", TOKEN)).rejects.toMatchObject({
       statusCode: 502,
       code: "MP_INVALID_RESPONSE",
     });

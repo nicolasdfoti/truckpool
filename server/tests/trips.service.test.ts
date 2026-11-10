@@ -21,6 +21,9 @@ import { prisma } from "../lib/prisma.js";
 import { geocode } from "../lib/geocode.js";
 import { notifyUsers } from "../lib/notifications.js";
 import { refundPayment } from "../lib/mercadopago.js";
+import { salidaEn } from "./helpers/salida.js";
+import { cargoPrice } from "../lib/pricing.js";
+import { CARRIER_CAN_CHARGE } from "../lib/mappers.js";
 
 // Los avisos son best-effort: en los tests de trips lo que importa es a Quién
 // se avisa y con qué tipo/title, nunca que el email salga. Por eso el módulo de
@@ -95,6 +98,8 @@ const tx = {
     create: vi.fn(),
     findUnique: vi.fn(),
     update: vi.fn(),
+    // reservas sin seña de la empresa (tope de U15): ninguna por defecto
+    findMany: vi.fn().mockResolvedValue([]),
   },
   payment: {
     update: vi.fn(),
@@ -163,7 +168,13 @@ function baseTrip(overrides: Record<string, unknown> = {}) {
     originLng: null,
     destLat: null,
     destLng: null,
-    carrier: { id: "u1", isAvailableForRequests: true },
+    // por defecto el fletero tiene MP conectado: puede cobrar la seña
+    carrier: {
+      id: "u1",
+      isAvailableForRequests: true,
+      mpUserId: "mp-u1",
+      mpAccessToken: "token-cifrado",
+    },
     ...overrides,
   };
 }
@@ -242,9 +253,19 @@ describe("listOpenTrips", () => {
     await tripsService.listOpenTrips({}, AHORA);
 
     expect(prisma.trip.findMany).toHaveBeenCalledWith({
-      where: { status: "OPEN", date: { gt: CORTE_ARGENTINA } },
+      where: { status: "OPEN", carrier: CARRIER_CAN_CHARGE, date: { gt: CORTE_ARGENTINA } },
       include: { cargoItems: true, carrier: { select: { name: true } } },
       orderBy: { date: "asc" },
+    });
+  });
+
+  it("no lista viajes de fleteros sin Mercado Pago conectado", async () => {
+    await tripsService.listOpenTrips({}, AHORA);
+
+    const where = vi.mocked(prisma.trip.findMany).mock.calls[0]?.[0]?.where;
+    expect(where?.carrier).toEqual({
+      mpUserId: { not: null },
+      mpAccessToken: { not: null },
     });
   });
 
@@ -255,6 +276,7 @@ describe("listOpenTrips", () => {
       expect.objectContaining({
         where: {
           status: "OPEN",
+          carrier: CARRIER_CAN_CHARGE,
           origin: { contains: "ros", mode: "insensitive" },
           date: { gt: CORTE_ARGENTINA },
         },
@@ -272,6 +294,7 @@ describe("listOpenTrips", () => {
       expect.objectContaining({
         where: {
           status: "OPEN",
+          carrier: CARRIER_CAN_CHARGE,
           origin: { contains: "Córdoba", mode: "insensitive" },
           features: { hasEvery: ["seguro", "expreso"] },
           date: { gt: CORTE_ARGENTINA },
@@ -293,6 +316,7 @@ describe("listOpenTrips", () => {
       expect.objectContaining({
         where: {
           status: "OPEN",
+          carrier: CARRIER_CAN_CHARGE,
           date: {
             gt: CORTE_ARGENTINA,
             gte: new Date("2026-10-01T00:00:00.000Z"),
@@ -310,6 +334,7 @@ describe("listOpenTrips", () => {
       expect.objectContaining({
         where: {
           status: "OPEN",
+          carrier: CARRIER_CAN_CHARGE,
           destination: { contains: "Rosario", mode: "insensitive" },
           date: { gt: CORTE_ARGENTINA },
         },
@@ -393,7 +418,9 @@ function avisoA(userId: string) {
   const [, data] = call;
   return {
     ...data,
-    email: data.email?.({ name: "Destinatario", email: "d@e.com" }),
+    email: data.email
+      ? data.email({ name: "Destinatario", email: "d@e.com" })
+      : undefined,
   };
 }
 
@@ -488,17 +515,6 @@ describe("cancelCargoItem", () => {
         }),
       })
     );
-  });
-
-  it("no deja retirar una carga ya confirmada", async () => {
-    tx.cargoItem.findUnique.mockResolvedValue(
-      baseCargoItem({ status: "CONFIRMED", payments: [], company: { name: "Acero SA" } })
-    );
-
-    await expect(tripsService.cancelCargoItem("t1", "i1", "c1")).rejects.toBeInstanceOf(
-      CargoItemNotCancellableError
-    );
-    expect(tx.cargoItem.update).not.toHaveBeenCalled();
   });
 
   it("no deja retirar dos veces la misma carga", async () => {
@@ -683,7 +699,7 @@ describe("cancelCargoItem con seña pagada", () => {
 
   it("entre 24 y 48hs: crea RefundRequest PENDING con la mitad (outbox)", async () => {
     tx.trip.findUnique.mockResolvedValue(
-      baseTrip({ carrier: baseCarrier(), date: tripDateIn(36) })
+      baseTrip({ carrier: baseCarrier(), ...salidaEn(36) })
     );
     vi.mocked(refundPayment).mockResolvedValue(50);
 
@@ -707,7 +723,7 @@ describe("cancelCargoItem con seña pagada", () => {
 
   it("menos de 24hs: no devuelve nada y la seña queda como costo", async () => {
     tx.trip.findUnique.mockResolvedValue(
-      baseTrip({ carrier: baseCarrier(), date: tripDateIn(10) })
+      baseTrip({ carrier: baseCarrier(), ...salidaEn(10) })
     );
 
     await tripsService.cancelCargoItem("t1", "i1", "c1");
@@ -727,7 +743,7 @@ describe("cancelCargoItem con seña pagada", () => {
   it("justo en 48hs aplica la mitad, no el total (outbox)", async () => {
     freezeClockAt("2026-10-01T12:00:00.000Z");
     tx.trip.findUnique.mockResolvedValue(
-      baseTrip({ carrier: baseCarrier(), date: tripDateIn(48) })
+      baseTrip({ carrier: baseCarrier(), ...salidaEn(48) })
     );
     vi.mocked(refundPayment).mockResolvedValue(50);
 
@@ -747,7 +763,7 @@ describe("cancelCargoItem con seña pagada", () => {
   it("justo en 24hs todavía devuelve la mitad (outbox)", async () => {
     freezeClockAt("2026-10-01T12:00:00.000Z");
     tx.trip.findUnique.mockResolvedValue(
-      baseTrip({ carrier: baseCarrier(), date: tripDateIn(24) })
+      baseTrip({ carrier: baseCarrier(), ...salidaEn(24) })
     );
     vi.mocked(refundPayment).mockResolvedValue(50)
 
@@ -840,7 +856,7 @@ describe("cancelCargoItem con seña pagada", () => {
     );
   });
 
-  it("ignora un pago BALANCE: el saldo no se devuelve en un retiro", async () => {
+  it("con un pago BALANCE no se retira y el saldo no se devuelve", async () => {
     tx.cargoItem.findUnique.mockResolvedValue(
       baseCargoItem({
         payments: [
@@ -856,12 +872,447 @@ describe("cancelCargoItem con seña pagada", () => {
       })
     );
 
-    await tripsService.cancelCargoItem("t1", "i1", "c1");
-
-    // sin seña cobrada no hay devolución, aunque haya un saldo aprobado (que en
-    // la práctica no puede existir con la carga PENDING).
+    // el saldo nace al pasar a IN_TRANSIT (en la práctica no puede existir con la
+    // carga PENDING): con saldo la carga ya viajó y no se retira (D4)
+    await expect(tripsService.cancelCargoItem("t1", "i1", "c1")).rejects.toMatchObject({
+      statusCode: 409,
+      code: "TRIP_ALREADY_STARTED",
+    });
+    expect(tx.cargoItem.update).not.toHaveBeenCalled();
     expect(refundPayment).not.toHaveBeenCalled();
   });
+});
+
+// U21: la cotización de retiro de una carga puntual, con lo que de verdad se
+// cobró de su seña. La pública (`estimateCancellation`) solo ve un monto y una
+// fecha, así que le prometía «la seña no se devuelve» a quien nunca la pagó.
+describe("getCargoCancellationQuote (U21)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (prisma.$transaction as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      (fn: unknown) => (fn as (t: unknown) => unknown)(tx)
+    );
+  });
+
+  /** el viaje sale en `horas` y la carga tiene esta seña */
+  function cargaConSena(horas: number, sena: Record<string, unknown> | null) {
+    const salida = salidaEn(horas);
+    const item = baseCargoItem({
+      payments: sena ? [paidDeposit(sena)] : [],
+      company: { name: "Acero SA" },
+    });
+    const trip = baseTrip({ ...salida, cargoItems: [item] });
+    vi.mocked(prisma.cargoItem.findUnique).mockResolvedValue(item as never);
+    vi.mocked(prisma.trip.findUnique).mockResolvedValue(trip as never);
+    tx.cargoItem.findUnique.mockResolvedValue(item);
+    tx.trip.findUnique.mockResolvedValue(trip);
+    tx.cargoItem.update.mockImplementation(({ data }: { data: object }) => ({
+      ...item,
+      ...data,
+    }));
+  }
+
+  it("seña PENDING (sin pagar): no promete devolución ni retención, $ 0", async () => {
+    cargaConSena(30, { status: "PENDING", mpPaymentId: null });
+
+    const quote = await tripsService.getCargoCancellationQuote("t1", "i1", "c1");
+
+    expect(quote).toEqual({
+      window: "PARTIAL_REFUND",
+      cancellable: true,
+      refundAmount: 0,
+      feeAmount: 0,
+    });
+  });
+
+  it("seña por acreditarse (pago creado en MP, pendiente): todavía no se cobró, $ 0", async () => {
+    cargaConSena(10, { status: "PENDING", mpPaymentId: "mp-9" });
+
+    const quote = await tripsService.getCargoCancellationQuote("t1", "i1", "c1");
+
+    expect(quote).toMatchObject({ window: "NO_REFUND", refundAmount: 0, feeAmount: 0 });
+  });
+
+  it("sin pago de seña: $ 0", async () => {
+    cargaConSena(72, null);
+
+    const quote = await tripsService.getCargoCancellationQuote("t1", "i1", "c1");
+
+    expect(quote).toMatchObject({ window: "FULL_REFUND", refundAmount: 0, feeAmount: 0 });
+  });
+
+  it.each([
+    [72, { window: "FULL_REFUND", cancellable: true, refundAmount: 100, feeAmount: 0 }],
+    [36, { window: "PARTIAL_REFUND", cancellable: true, refundAmount: 50, feeAmount: 50 }],
+    [10, { window: "NO_REFUND", cancellable: true, refundAmount: 0, feeAmount: 100 }],
+  ])("seña APPROVED a %i h de la salida: la ventana de la política", async (horas, esperado) => {
+    cargaConSena(horas, {});
+
+    const quote = await tripsService.getCargoCancellationQuote("t1", "i1", "c1");
+
+    expect(quote).toEqual(esperado);
+  });
+
+  it("dice lo mismo que después hace el retiro", async () => {
+    cargaConSena(36, {});
+
+    const quote = await tripsService.getCargoCancellationQuote("t1", "i1", "c1");
+    await tripsService.cancelCargoItem("t1", "i1", "c1");
+
+    expect(tx.cargoItem.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          cancellationFeeAmount: new Prisma.Decimal(quote.feeAmount),
+        }),
+      })
+    );
+    expect(tx.refundRequest.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        targetAmount: new Prisma.Decimal(quote.refundAmount),
+      }),
+    });
+  });
+
+  it("desde la salida: CLOSED, sin montos", async () => {
+    cargaConSena(-1, {});
+
+    const quote = await tripsService.getCargoCancellationQuote("t1", "i1", "c1");
+
+    expect(quote).toEqual({
+      window: "CLOSED",
+      cancellable: false,
+      refundAmount: 0,
+      feeAmount: 0,
+    });
+  });
+
+  it("viaje IN_TRANSIT aunque la salida sea futura: CLOSED", async () => {
+    cargaConSena(72, {});
+    vi.mocked(prisma.trip.findUnique).mockResolvedValue(
+      baseTrip({ ...salidaEn(72), status: "IN_TRANSIT" }) as never
+    );
+
+    const quote = await tripsService.getCargoCancellationQuote("t1", "i1", "c1");
+
+    expect(quote).toMatchObject({ window: "CLOSED", cancellable: false });
+  });
+
+  it("carga con saldo (ya viajó): CLOSED", async () => {
+    const item = baseCargoItem({
+      payments: [paidDeposit(), paidDeposit({ id: "pay2", type: "BALANCE" })],
+    });
+    vi.mocked(prisma.cargoItem.findUnique).mockResolvedValue(item as never);
+    vi.mocked(prisma.trip.findUnique).mockResolvedValue(
+      baseTrip({ ...salidaEn(72) }) as never
+    );
+
+    const quote = await tripsService.getCargoCancellationQuote("t1", "i1", "c1");
+
+    expect(quote).toMatchObject({ window: "CLOSED", cancellable: false });
+  });
+
+  it("403 si la carga es de otra empresa", async () => {
+    cargaConSena(72, {});
+
+    await expect(
+      tripsService.getCargoCancellationQuote("t1", "i1", "otra")
+    ).rejects.toMatchObject({ statusCode: 403, code: "FORBIDDEN" });
+  });
+
+  it("409 CARGO_ITEM_CANCELLED si ya la retiró", async () => {
+    vi.mocked(prisma.cargoItem.findUnique).mockResolvedValue(
+      baseCargoItem({ status: "CANCELLED", payments: [] }) as never
+    );
+
+    await expect(
+      tripsService.getCargoCancellationQuote("t1", "i1", "c1")
+    ).rejects.toBeInstanceOf(CargoItemNotCancellableError);
+  });
+
+  it("404 si la carga no es de ese viaje", async () => {
+    vi.mocked(prisma.cargoItem.findUnique).mockResolvedValue(
+      baseCargoItem({ tripId: "otro", payments: [] }) as never
+    );
+
+    await expect(
+      tripsService.getCargoCancellationQuote("t1", "i1", "c1")
+    ).rejects.toBeInstanceOf(CargoItemNotFoundError);
+  });
+});
+
+// U11: la ventana se mide contra la salida (día del viaje + hora, en hora
+// argentina). `date` guarda el mediodía del navegador del fletero (~15:00Z), así
+// que medir contra `date` le daba a la empresa horas de más o de menos.
+describe("cancelCargoItem: ventana contra la hora de salida (U11)", () => {
+  /** el 11/11 tal como lo guarda el cliente: 12:00 ART */
+  const DIA_DEL_VIAJE = new Date("2026-11-11T15:00:00.000Z");
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (prisma.$transaction as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      (fn: unknown) => (fn as (t: unknown) => unknown)(tx)
+    );
+    tx.cargoItem.findUnique.mockResolvedValue(
+      basePaidCargoItem({ payments: [paidDeposit()], company: { name: "Acero SA" } })
+    );
+    tx.cargoItem.update.mockImplementation(({ data }: { data: unknown }) => data);
+    tx.payment.updateMany.mockResolvedValue({ count: 1 });
+    tx.refundRequest = { create: vi.fn().mockResolvedValue({}) };
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function viajeConSalida(departureTime: string | null) {
+    tx.trip.findUnique.mockResolvedValue(
+      baseTrip({ carrier: baseCarrier(), date: DIA_DEL_VIAJE, departureTime })
+    );
+  }
+
+  /** lo que quedó encolado (null = nada) y el fee congelado en la carga */
+  function resultado() {
+    const encolado = tx.refundRequest.create.mock.calls[0]?.[0] as
+      | { data: { targetAmount: Prisma.Decimal } }
+      | undefined;
+    const update = tx.cargoItem.update.mock.calls[0]?.[0] as {
+      data: { cancellationFeeAmount: Prisma.Decimal };
+    };
+    return {
+      devuelve: encolado ? Number(encolado.data.targetAmount) : null,
+      fee: Number(update.data.cancellationFeeAmount),
+    };
+  }
+
+  it("salida 18:00 ART, retiro a 60 h reales: devuelve el 100 %", async () => {
+    viajeConSalida("18:00");
+    freezeClockAt("2026-11-09T09:00:00.000Z");
+
+    await tripsService.cancelCargoItem("t1", "i1", "c1");
+
+    expect(resultado()).toEqual({ devuelve: 100, fee: 0 });
+  });
+
+  it("salida 18:00: a 50 h de la salida (44 h del mediodía) devuelve todo, no la mitad", async () => {
+    viajeConSalida("18:00");
+    freezeClockAt("2026-11-09T19:00:00.000Z");
+
+    await tripsService.cancelCargoItem("t1", "i1", "c1");
+
+    expect(resultado()).toEqual({ devuelve: 100, fee: 0 });
+  });
+
+  it("salida 06:00: a 44 h de la salida (50 h del mediodía) devuelve la mitad, no todo", async () => {
+    viajeConSalida("06:00");
+    freezeClockAt("2026-11-09T13:00:00.000Z");
+
+    await tripsService.cancelCargoItem("t1", "i1", "c1");
+
+    expect(resultado()).toEqual({ devuelve: 50, fee: 50 });
+  });
+
+  it("viaje viejo sin hora: mide contra las 23:59 ART (a 30 h devuelve la mitad)", async () => {
+    viajeConSalida(null);
+    // 30 h antes de las 23:59 ART del 11/11; contra el mediodía serían ~18 h
+    freezeClockAt("2026-11-10T20:59:00.000Z");
+
+    await tripsService.cancelCargoItem("t1", "i1", "c1");
+
+    expect(resultado()).toEqual({ devuelve: 50, fee: 50 });
+  });
+
+  it("borde exacto de 48 h antes de la salida: la mitad", async () => {
+    viajeConSalida("18:00");
+    freezeClockAt("2026-11-09T21:00:00.000Z");
+
+    await tripsService.cancelCargoItem("t1", "i1", "c1");
+
+    expect(resultado()).toEqual({ devuelve: 50, fee: 50 });
+  });
+
+  it("un minuto antes del borde de 48 h: todo", async () => {
+    viajeConSalida("18:00");
+    freezeClockAt("2026-11-09T20:59:00.000Z");
+
+    await tripsService.cancelCargoItem("t1", "i1", "c1");
+
+    expect(resultado()).toEqual({ devuelve: 100, fee: 0 });
+  });
+
+  it("borde exacto de 24 h antes de la salida: todavía la mitad", async () => {
+    viajeConSalida("18:00");
+    freezeClockAt("2026-11-10T21:00:00.000Z");
+
+    await tripsService.cancelCargoItem("t1", "i1", "c1");
+
+    expect(resultado()).toEqual({ devuelve: 50, fee: 50 });
+  });
+
+  it("un minuto después del borde de 24 h: no devuelve nada", async () => {
+    viajeConSalida("18:00");
+    freezeClockAt("2026-11-10T21:01:00.000Z");
+
+    await tripsService.cancelCargoItem("t1", "i1", "c1");
+
+    expect(resultado()).toEqual({ devuelve: null, fee: 100 });
+  });
+});
+
+describe("cancelCargoItem: carga CONFIRMED retirable hasta la salida (D4)", () => {
+  /** el 11/11 tal como lo guarda el cliente (12:00 ART), con salida a las 18:00 ART */
+  const DIA_DEL_VIAJE = new Date("2026-11-11T15:00:00.000Z");
+
+  const confirmada = (overrides: Record<string, unknown> = {}) =>
+    basePaidCargoItem({
+      status: "CONFIRMED",
+      payments: [paidDeposit()],
+      company: { name: "Acero SA" },
+      ...overrides,
+    });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (prisma.$transaction as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      (fn: unknown) => (fn as (t: unknown) => unknown)(tx)
+    );
+    tx.cargoItem.findUnique.mockResolvedValue(confirmada());
+    tx.cargoItem.update.mockImplementation(({ data }: { data: unknown }) => data);
+    tx.payment.updateMany.mockResolvedValue({ count: 1 });
+    tx.refundRequest = { create: vi.fn().mockResolvedValue({}) };
+    tx.trip.findUnique.mockResolvedValue(
+      baseTrip({ carrier: baseCarrier(), date: DIA_DEL_VIAJE, departureTime: "18:00" })
+    );
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** lo que quedó encolado (null = nada) y el fee congelado en la carga */
+  function resultado() {
+    const encolado = tx.refundRequest.create.mock.calls[0]?.[0] as
+      | { data: { targetAmount: Prisma.Decimal } }
+      | undefined;
+    const update = tx.cargoItem.update.mock.calls[0]?.[0] as {
+      data: { status: string; cancellationFeeAmount: Prisma.Decimal };
+    };
+    return {
+      estado: update.data.status,
+      devuelve: encolado ? Number(encolado.data.targetAmount) : null,
+      fee: Number(update.data.cancellationFeeAmount),
+    };
+  }
+
+  it.each([
+    ["más de 48 h: devuelve toda la seña", "2026-11-09T09:00:00.000Z", 100, 0],
+    ["entre 24 y 48 h: devuelve la mitad", "2026-11-10T15:00:00.000Z", 50, 50],
+    ["menos de 24 h: se retiene la seña entera", "2026-11-11T11:00:00.000Z", null, 100],
+  ] as const)("%s, igual que una PENDING", async (_tramo, ahora, devuelve, fee) => {
+    freezeClockAt(ahora);
+
+    await tripsService.cancelCargoItem("t1", "i1", "c1");
+
+    expect(resultado()).toEqual({ estado: "CANCELLED", devuelve, fee });
+  });
+
+  it("libera el lugar: si el viaje estaba FULL vuelve a OPEN en la misma TX", async () => {
+    freezeClockAt("2026-11-09T09:00:00.000Z");
+    tx.trip.findUnique.mockResolvedValue(
+      baseTrip({
+        carrier: baseCarrier(),
+        date: DIA_DEL_VIAJE,
+        departureTime: "18:00",
+        status: "FULL",
+        capacityTotal: 10,
+        cargoItems: [confirmada()],
+      })
+    );
+
+    await tripsService.cancelCargoItem("t1", "i1", "c1");
+
+    expect(tx.trip.update).toHaveBeenCalledWith({
+      where: { id: "t1" },
+      data: { status: "OPEN" },
+    });
+  });
+
+  it("con el viaje en camino: 409 TRIP_ALREADY_STARTED, sin tocar nada", async () => {
+    tx.trip.findUnique.mockResolvedValue(
+      baseTrip({ carrier: baseCarrier(), date: DIA_DEL_VIAJE, status: "IN_TRANSIT" })
+    );
+
+    await expect(tripsService.cancelCargoItem("t1", "i1", "c1")).rejects.toMatchObject({
+      statusCode: 409,
+      code: "TRIP_ALREADY_STARTED",
+    });
+    expect(tx.cargoItem.update).not.toHaveBeenCalled();
+    expect(tx.refundRequest.create).not.toHaveBeenCalled();
+  });
+
+  it("con un pago de saldo ya creado: 409 TRIP_ALREADY_STARTED, sin tocar nada", async () => {
+    // el saldo nace al pasar a IN_TRANSIT: una carga con saldo ya viajó, aunque
+    // el estado del viaje diga otra cosa. El outbox solo devuelve la seña.
+    tx.cargoItem.findUnique.mockResolvedValue(
+      confirmada({
+        payments: [
+          paidDeposit(),
+          paidDeposit({
+            id: "pay2",
+            type: "BALANCE",
+            amount: new Prisma.Decimal("400.00"),
+          }),
+        ],
+      })
+    );
+
+    await expect(tripsService.cancelCargoItem("t1", "i1", "c1")).rejects.toMatchObject({
+      statusCode: 409,
+      code: "TRIP_ALREADY_STARTED",
+    });
+    expect(tx.cargoItem.update).not.toHaveBeenCalled();
+    expect(tx.refundRequest.create).not.toHaveBeenCalled();
+  });
+
+  it("avisa al transportista igual que con una PENDING", async () => {
+    freezeClockAt("2026-11-09T09:00:00.000Z");
+
+    await tripsService.cancelCargoItem("t1", "i1", "c1");
+
+    expect(avisoA("u1").type).toBe("CARGO_CANCELLED");
+  });
+
+  // el retiro se corta a la hora de salida, no solo por el estado del viaje: si
+  // el fletero no sale, D6 devuelve la seña entera, y retirar tarde la haría
+  // perder. La salida es 18:00 ART del 11/11 = 21:00Z.
+  describe.each([["PENDING"], ["CONFIRMED"]] as const)(
+    "corte en la salida (%s)",
+    (status) => {
+      beforeEach(() => {
+        tx.cargoItem.findUnique.mockResolvedValue(confirmada({ status }));
+      });
+
+      it("un minuto antes de la salida: se retira, con la seña retenida entera", async () => {
+        freezeClockAt("2026-11-11T20:59:00.000Z");
+
+        await tripsService.cancelCargoItem("t1", "i1", "c1");
+
+        expect(resultado()).toEqual({ estado: "CANCELLED", devuelve: null, fee: 100 });
+      });
+
+      it("un minuto después de la salida: 409 TRIP_ALREADY_STARTED, sin tocar nada", async () => {
+        freezeClockAt("2026-11-11T21:01:00.000Z");
+
+        await expect(tripsService.cancelCargoItem("t1", "i1", "c1")).rejects.toMatchObject({
+          statusCode: 409,
+          code: "TRIP_ALREADY_STARTED",
+        });
+        expect(tx.cargoItem.update).not.toHaveBeenCalled();
+        expect(tx.payment.updateMany).not.toHaveBeenCalled();
+        expect(tx.refundRequest.create).not.toHaveBeenCalled();
+        expect(tx.trip.update).not.toHaveBeenCalled();
+      });
+    }
+  );
 });
 
 describe("cancelCargoItem: carrera con el webhook que aprueba la seña", () => {
@@ -928,6 +1379,141 @@ describe("cancelCargoItem: carrera con el webhook que aprueba la seña", () => {
       code: "PAYMENT_IN_FLIGHT",
     });
     expect(tx.cargoItem.update).not.toHaveBeenCalled();
+  });
+});
+
+describe("quoteCargoPrice", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (prisma.$transaction as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      (fn: unknown) => (fn as (t: unknown) => unknown)(tx)
+    );
+    tx.cargoItem.create.mockImplementation(({ data }: { data: unknown }) => ({
+      id: "i1",
+      ...(data as object),
+    }));
+    tx.payment.create.mockImplementation(({ data }: { data: unknown }) => ({
+      id: "p1",
+      ...(data as object),
+    }));
+  });
+
+  it("cotiza lo mismo que después cobra addCargoItem", async () => {
+    const viaje = baseTrip({
+      price: new Prisma.Decimal("1000.00"),
+      capacityTotal: 3,
+      depositPercent: 15,
+    });
+    vi.mocked(prisma.trip.findUnique).mockResolvedValue(viaje as never);
+    tx.trip.findUnique.mockResolvedValue(viaje);
+
+    const quote = await tripsService.quoteCargoPrice("t1", 1);
+    const reservada = await tripsService.addCargoItem("t1", "c1", {
+      description: "Maquinaria",
+      pickupAddress: "Córdoba, Córdoba",
+      volume: 1,
+    });
+
+    expect(quote).toEqual({
+      volume: 1,
+      depositPercent: 15,
+      priceShare: 333.33,
+      depositAmount: 50,
+      balanceAmount: 283.33,
+    });
+    expect(quote.priceShare).toBe(reservada.priceShare);
+    expect(quote.depositAmount).toBe(reservada.depositAmount);
+  });
+
+  it("404 si el viaje no existe", async () => {
+    vi.mocked(prisma.trip.findUnique).mockResolvedValue(null);
+
+    await expect(tripsService.quoteCargoPrice("nope", 1)).rejects.toBeInstanceOf(
+      TripNotFoundError
+    );
+  });
+});
+
+describe("addCargoItem: tope de reservas sin seña (U15)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (prisma.$transaction as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      (fn: unknown) => (fn as (t: unknown) => unknown)(tx)
+    );
+    tx.cargoItem.create.mockImplementation(({ data }: { data: unknown }) => ({
+      id: "i-nueva",
+      ...(data as object),
+    }));
+    tx.payment.create.mockImplementation(({ data }: { data: unknown }) => ({
+      id: "p-nueva",
+      ...(data as object),
+    }));
+    tx.cargoItem.findMany.mockResolvedValue([]);
+    tx.trip.findUnique.mockResolvedValue(baseTrip());
+  });
+
+  afterEach(() => {
+    tx.cargoItem.findMany.mockResolvedValue([]);
+  });
+
+  const reservar = () =>
+    tripsService.addCargoItem("t1", "c1", {
+      description: "Maquinaria",
+      pickupAddress: "Córdoba, Córdoba",
+      volume: 1,
+    });
+
+  it("la 4.ª reserva sin seña → 409 TOO_MANY_PENDING", async () => {
+    tx.cargoItem.findMany.mockResolvedValue([
+      { tripId: "t2" },
+      { tripId: "t3" },
+      { tripId: "t4" },
+    ]);
+
+    const err = await reservar().catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(AppError);
+    expect(err).toMatchObject({ statusCode: 409, code: "TOO_MANY_PENDING" });
+    expect(tx.cargoItem.create).not.toHaveBeenCalled();
+  });
+
+  it("con 2 reservas sin seña en otros viajes, la 3.ª entra", async () => {
+    tx.cargoItem.findMany.mockResolvedValue([{ tripId: "t2" }, { tripId: "t3" }]);
+
+    const result = await reservar();
+
+    expect(result.volume).toBe(1);
+  });
+
+  it("una 2.ª reserva sin seña en el mismo viaje → 409 TOO_MANY_PENDING", async () => {
+    tx.cargoItem.findMany.mockResolvedValue([{ tripId: "t1" }]);
+
+    const err = await reservar().catch((e: unknown) => e);
+
+    expect(err).toMatchObject({ statusCode: 409, code: "TOO_MANY_PENDING" });
+    expect(tx.cargoItem.create).not.toHaveBeenCalled();
+  });
+
+  it("cuenta dentro de la TX solo las PENDING de la empresa en viajes que no salieron, sin seña pagada ni por acreditarse", async () => {
+    await reservar();
+
+    expect(tx.cargoItem.findMany).toHaveBeenCalledWith({
+      where: {
+        companyId: "c1",
+        status: "PENDING",
+        trip: { status: { in: ["OPEN", "FULL"] } },
+        payments: {
+          none: {
+            type: "DEPOSIT",
+            OR: [
+              { status: "APPROVED" },
+              { status: "PENDING", mpPaymentId: { not: null } },
+            ],
+          },
+        },
+      },
+      select: { tripId: true },
+    });
   });
 });
 
@@ -1084,6 +1670,79 @@ describe("addCargoItem", () => {
     expect(result.balancePayment).toBeNull();
   });
 
+  it.each([
+    ["sin cuenta", { mpUserId: null, mpAccessToken: null }],
+    ["sin token", { mpUserId: "mp-u1", mpAccessToken: null }],
+    ["token vacío", { mpUserId: "mp-u1", mpAccessToken: "" }],
+    ["sin los campos", {}],
+  ])(
+    "409 MP_ACCOUNT_NOT_CONNECTED si el fletero no puede cobrar (%s)",
+    async (_caso, mp) => {
+      tx.trip.findUnique.mockResolvedValue(
+        baseTrip({ carrier: { id: "u1", isAvailableForRequests: true, ...mp } })
+      );
+
+      const err = await tripsService
+        .addCargoItem("t1", "c1", {
+          description: "Maquinaria",
+          pickupAddress: "Córdoba, Córdoba",
+          volume: 10,
+        })
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(AppError);
+      expect(err).toMatchObject({ statusCode: 409, code: "MP_ACCOUNT_NOT_CONNECTED" });
+      expect(tx.cargoItem.create).not.toHaveBeenCalled();
+      expect(tx.payment.create).not.toHaveBeenCalled();
+    }
+  );
+
+  it("lee la cuenta de MP del fletero dentro de la transacción", async () => {
+    tx.trip.findUnique.mockResolvedValue(baseTrip());
+
+    await tripsService.addCargoItem("t1", "c1", {
+      description: "Maquinaria",
+      pickupAddress: "Córdoba, Córdoba",
+      volume: 10,
+    });
+
+    expect(tx.trip.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({
+        include: expect.objectContaining({
+          carrier: { select: { mpUserId: true, mpAccessToken: true } },
+        }),
+      })
+    );
+  });
+
+  it("guarda el precio y la seña que da cargoPrice (lib/pricing.ts)", async () => {
+    // 1000 por 3 m³ con 15 % de seña: 333,33 y 50,00, los dos redondeados
+    const viaje = baseTrip({
+      price: new Prisma.Decimal("1000.00"),
+      capacityTotal: 3,
+      depositPercent: 15,
+    });
+    tx.trip.findUnique.mockResolvedValue(viaje);
+    const esperado = cargoPrice(viaje, 1);
+
+    await tripsService.addCargoItem("t1", "c1", {
+      description: "Maquinaria",
+      pickupAddress: "Córdoba, Córdoba",
+      volume: 1,
+    });
+
+    expect(tx.cargoItem.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          priceShare: esperado.priceShare,
+          depositAmount: esperado.depositAmount,
+        }),
+      })
+    );
+    expect(esperado.priceShare.toFixed(2)).toBe("333.33");
+    expect(esperado.depositAmount.toFixed(2)).toBe("50.00");
+  });
+
   it("respeta un porcentaje de seña distinto al 20%", async () => {
     tx.trip.findUnique.mockResolvedValue(baseTrip({ depositPercent: 50 }));
 
@@ -1188,6 +1847,19 @@ describe("addCargoItem", () => {
         volume: 1,
       })
     ).rejects.toBeInstanceOf(TripNotOpenError);
+    expect(tx.cargoItem.create).not.toHaveBeenCalled();
+  });
+
+  it("un viaje CANCELLED no acepta cargas (D6)", async () => {
+    tx.trip.findUnique.mockResolvedValue(baseTrip({ status: "CANCELLED" }));
+
+    await expect(
+      tripsService.addCargoItem("t1", "c1", {
+        description: "X",
+        pickupAddress: "Córdoba, Córdoba",
+        volume: 1,
+      })
+    ).rejects.toMatchObject({ statusCode: 409, code: "TRIP_NOT_OPEN" });
     expect(tx.cargoItem.create).not.toHaveBeenCalled();
   });
 
@@ -1388,205 +2060,317 @@ describe("addCargoItem", () => {
   });
 
   describe("reservas vencidas", () => {
+    // 24 h antes de AHORA: una reserva creada antes vence; creada justo ahí, no
+    const AHORA = new Date("2026-09-27T12:00:00Z");
+    const CORTE = new Date("2026-09-26T12:00:00Z");
+    const VIEJA = new Date("2026-09-26T11:59:59Z");
+
+    let errorSpy: ReturnType<typeof vi.spyOn>;
+
     beforeEach(() => {
       vi.clearAllMocks();
-      (
-        prisma.cargoItem.updateMany as unknown as ReturnType<typeof vi.fn>
-      ).mockResolvedValue({
-        count: 1,
-      });
-      (prisma.trip.update as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({});
       (prisma.$transaction as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-        (arg: unknown) => (Array.isArray(arg) ? Promise.all(arg) : undefined)
+        (fn: unknown) => (fn as (t: unknown) => unknown)(tx)
       );
-      vi.useFakeTimers();
-      vi.setSystemTime(new Date("2026-09-27T12:00:00Z"));
+      tx.cargoItem.update.mockResolvedValue({});
+      tx.trip.update.mockResolvedValue({});
+      tx.payment.updateMany.mockResolvedValue({ count: 1 });
+      tx.refundRequest.create = vi.fn().mockResolvedValue({});
+      errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     });
 
-    afterEach(() => {
-      vi.useRealTimers();
-    });
-
-    /** una carga vencida (la búsqueda ya no trae el snapshot del viaje) */
-    function expiredItem(overrides: Record<string, unknown> = {}) {
-      return { id: "i1", tripId: "t1", ...overrides };
+    /** la búsqueda devuelve los viajes con alguna reserva vencida */
+    function candidatos(...tripIds: string[]) {
+      (
+        prisma.cargoItem.findMany as unknown as ReturnType<typeof vi.fn>
+      ).mockResolvedValue(tripIds.map((tripId) => ({ tripId })));
     }
 
-    /**
-     * El liberador relee el viaje después de cancelar para calcular la capacidad
-     * con el estado real (y no con un snapshot que pudo quedar viejo si una seña
-     * se acreditó en el medio).
-     */
-    function mockTripState(state: {
-      status: "OPEN" | "FULL";
-      capacityTotal: number;
-      cargoItems: { id: string; volume: number; status: string }[];
-    }) {
-      (prisma.trip.findUnique as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(
-        state
+    /** lo que la TX lee del viaje (con cada carga y sus pagos) */
+    function viajeEnTx(...estados: Record<string, unknown>[]) {
+      for (const estado of estados) {
+        tx.trip.findUnique.mockResolvedValueOnce(baseTrip({ ...estado }));
+      }
+    }
+
+    function vencida(overrides: Record<string, unknown> = {}) {
+      return baseCargoItem({ createdAt: VIEJA, payments: [], ...overrides });
+    }
+
+    const canceladas = () =>
+      tx.cargoItem.update.mock.calls.map(
+        (call) => (call[0] as { where: { id: string } }).where.id
       );
-    }
 
     it("no hace nada si no hay reservas vencidas", async () => {
-      (
-        prisma.cargoItem.findMany as unknown as ReturnType<typeof vi.fn>
-      ).mockResolvedValue([]);
+      candidatos();
 
-      const released = await tripsService.releaseExpiredReservations();
-
-      expect(released).toBe(0);
-      expect(prisma.cargoItem.updateMany).not.toHaveBeenCalled();
+      expect(await tripsService.releaseExpiredReservations(AHORA)).toBe(0);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
     });
 
-    it("libera la carga que no pagó la seña dentro de las 24hs", async () => {
-      (
-        prisma.cargoItem.findMany as unknown as ReturnType<typeof vi.fn>
-      ).mockResolvedValue([expiredItem()]);
+    it("busca reservas vencidas sin seña aprobada ni por acreditarse, en viajes que no salieron", async () => {
+      candidatos();
 
-      const released = await tripsService.releaseExpiredReservations();
+      await tripsService.releaseExpiredReservations(AHORA);
 
-      expect(released).toBe(1);
-      expect(prisma.cargoItem.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: expect.objectContaining({
-            status: "PENDING",
-            // 24hs exactas: la reserva se rompe recién pasado el plazo
-            createdAt: { lt: new Date("2026-09-26T12:00:00Z") },
-            trip: { status: { in: ["OPEN", "FULL"] } },
-            payments: { none: { type: "DEPOSIT", status: "APPROVED" } },
-          }),
-        })
-      );
-      // el update revalida: si la seña entró entre la búsqueda y ahora, la
-      // reserva se mantiene (el filtro solo del findMany no alcanza).
-      expect(prisma.cargoItem.updateMany).toHaveBeenCalledWith({
+      expect(prisma.cargoItem.findMany).toHaveBeenCalledWith({
         where: {
-          id: { in: ["i1"] },
           status: "PENDING",
+          // 24 h exactas: la reserva se rompe recién pasado el plazo
+          createdAt: { lt: CORTE },
           trip: { status: { in: ["OPEN", "FULL"] } },
-          payments: { none: { type: "DEPOSIT", status: "APPROVED" } },
+          payments: {
+            none: {
+              type: "DEPOSIT",
+              OR: [
+                { status: "APPROVED" },
+                { status: "PENDING", mpPaymentId: { not: null } },
+              ],
+            },
+          },
         },
+        select: { tripId: true },
+        distinct: ["tripId"],
+      });
+    });
+
+    it("libera la reserva que no pagó la seña en 24 h, dentro de una TX Serializable y sin reembolso", async () => {
+      candidatos("t1");
+      viajeEnTx({ cargoItems: [vencida()] });
+
+      expect(await tripsService.releaseExpiredReservations(AHORA)).toBe(1);
+
+      expect(prisma.$transaction).toHaveBeenCalledWith(expect.any(Function), {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        maxWait: 5000,
+      });
+      expect(tx.cargoItem.update).toHaveBeenCalledWith({
+        where: { id: "i1" },
         data: {
           status: "CANCELLED",
-          cancelledAt: new Date("2026-09-27T12:00:00Z"),
-          // nunca se cobró nada, así que el costo de cancelacion es 0 (y no
-          // null, que en el mapper significa "la carga sigue viva").
+          cancelledAt: AHORA,
+          // nunca se cobró nada: el costo es 0 (y no null, que en el mapper
+          // significa "la carga sigue viva")
           cancellationFeeAmount: new Prisma.Decimal(0),
         },
       });
-    });
-
-    it("no libera la carga si la seña se acreditó entre la búsqueda y el update", async () => {
-      (
-        prisma.cargoItem.findMany as unknown as ReturnType<typeof vi.fn>
-      ).mockResolvedValue([expiredItem()]);
-      // el updateMany no encuentra la fila: el pago la rescató
-      (
-        prisma.cargoItem.updateMany as unknown as ReturnType<typeof vi.fn>
-      ).mockResolvedValue({
-        count: 0,
-      });
-      mockTripState({
-        status: "OPEN",
-        capacityTotal: 30,
-        cargoItems: [{ id: "i1", volume: 10, status: "PENDING" }],
-      });
-
-      expect(await tripsService.releaseExpiredReservations()).toBe(0);
-    });
-
-    it("reabre el viaje FULL que quedó con lugar libre", async () => {
-      (
-        prisma.cargoItem.findMany as unknown as ReturnType<typeof vi.fn>
-      ).mockResolvedValue([expiredItem()]);
-      // estado real ya liberated
-      mockTripState({
-        status: "FULL",
-        capacityTotal: 30,
-        cargoItems: [
-          { id: "i1", volume: 10, status: "CANCELLED" },
-          { id: "i2", volume: 20, status: "CONFIRMED" },
-        ],
-      });
-
-      await tripsService.releaseExpiredReservations();
-
-      // 30 - 10 (la vencida) = 20, y quedaban 20 ocupados: vuelve a haber lugar.
-      expect(prisma.trip.update).toHaveBeenCalledWith({
-        where: { id: "t1" },
-        data: { status: "OPEN" },
-      });
-    });
-
-    it("deja el viaje FULL si las reservas vencidas no liberan lugar", async () => {
-      (
-        prisma.cargoItem.findMany as unknown as ReturnType<typeof vi.fn>
-      ).mockResolvedValue([expiredItem()]);
-      mockTripState({
-        status: "FULL",
-        capacityTotal: 30,
-        cargoItems: [
-          { id: "i1", volume: 10, status: "CANCELLED" },
-          { id: "i2", volume: 30, status: "CONFIRMED" },
-        ],
-      });
-
-      await tripsService.releaseExpiredReservations();
-
+      expect(tx.refundRequest.create).not.toHaveBeenCalled();
+      // la consecuencia de no pagar no se avisa
+      expect(notifyUsers).not.toHaveBeenCalled();
+      // todo pasa en la TX: nada se escribe por fuera
+      expect(prisma.cargoItem.updateMany).not.toHaveBeenCalled();
       expect(prisma.trip.update).not.toHaveBeenCalled();
     });
 
-    it("libera todas las reservas vencidas de un mismo viaje de una vez", async () => {
-      (
-        prisma.cargoItem.findMany as unknown as ReturnType<typeof vi.fn>
-      ).mockResolvedValue([expiredItem(), expiredItem({ id: "i2" })]);
-      (
-        prisma.cargoItem.updateMany as unknown as ReturnType<typeof vi.fn>
-      ).mockResolvedValue({
-        count: 2,
-      });
-      mockTripState({
-        status: "OPEN",
-        capacityTotal: 30,
+    it("no libera una reserva con la seña aprobada ni con la seña por acreditarse", async () => {
+      candidatos("t1");
+      viajeEnTx({
         cargoItems: [
-          { id: "i1", volume: 10, status: "CANCELLED" },
-          { id: "i2", volume: 10, status: "CANCELLED" },
+          vencida({
+            id: "aprobada",
+            payments: [basePayment({ cargoItemId: "aprobada" })],
+          }),
+          vencida({
+            id: "por-acreditarse",
+            payments: [
+              basePayment({
+                cargoItemId: "por-acreditarse",
+                status: "PENDING",
+                mpPaymentId: "mp-9",
+              }),
+            ],
+          }),
         ],
       });
 
-      const released = await tripsService.releaseExpiredReservations();
-
-      expect(released).toBe(2);
-      expect(prisma.cargoItem.updateMany).toHaveBeenCalledTimes(1);
-      expect(prisma.cargoItem.updateMany).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: expect.objectContaining({ id: { in: ["i1", "i2"] } }),
-        })
-      );
+      expect(await tripsService.releaseExpiredReservations(AHORA)).toBe(0);
+      expect(tx.cargoItem.update).not.toHaveBeenCalled();
     });
 
-    it("listar viajes libera primero las reservas vencidas", async () => {
-      (
-        prisma.cargoItem.findMany as unknown as ReturnType<typeof vi.fn>
-      ).mockResolvedValue([expiredItem()]);
+    it("libera la reserva con la seña rechazada o con la preference creada pero sin pago en MP", async () => {
+      candidatos("t1");
+      viajeEnTx({
+        cargoItems: [
+          vencida({
+            id: "rechazada",
+            payments: [basePayment({ cargoItemId: "rechazada", status: "REJECTED" })],
+          }),
+          vencida({
+            id: "sin-pago",
+            payments: [
+              basePayment({
+                cargoItemId: "sin-pago",
+                status: "PENDING",
+                mpPaymentId: null,
+              }),
+            ],
+          }),
+        ],
+      });
+
+      expect(await tripsService.releaseExpiredReservations(AHORA)).toBe(2);
+      expect(canceladas()).toEqual(["rechazada", "sin-pago"]);
+      expect(tx.refundRequest.create).not.toHaveBeenCalled();
+    });
+
+    it("no toca reservas que no vencieron ni cargas confirmadas", async () => {
+      candidatos("t1");
+      viajeEnTx({
+        cargoItems: [
+          vencida({ id: "justo-24h", createdAt: CORTE }),
+          vencida({ id: "confirmada", status: "CONFIRMED" }),
+          vencida({ id: "vieja" }),
+        ],
+      });
+
+      expect(await tripsService.releaseExpiredReservations(AHORA)).toBe(1);
+      expect(canceladas()).toEqual(["vieja"]);
+    });
+
+    it("no libera nada si al releer el viaje ya salió o se canceló", async () => {
+      candidatos("t1", "t2");
+      viajeEnTx(
+        { id: "t1", status: "IN_TRANSIT", cargoItems: [vencida()] },
+        { id: "t2", status: "CANCELLED", cargoItems: [vencida()] }
+      );
+
+      expect(await tripsService.releaseExpiredReservations(AHORA)).toBe(0);
+      expect(tx.cargoItem.update).not.toHaveBeenCalled();
+    });
+
+    it("reabre dentro de la TX el viaje FULL que quedó con lugar libre", async () => {
+      candidatos("t1");
+      viajeEnTx({
+        status: "FULL",
+        capacityTotal: 30,
+        cargoItems: [
+          vencida({ id: "i1", volume: 10 }),
+          vencida({ id: "i2", volume: 20, status: "CONFIRMED" }),
+        ],
+      });
+
+      await tripsService.releaseExpiredReservations(AHORA);
+
+      expect(tx.trip.update).toHaveBeenCalledWith({
+        where: { id: "t1" },
+        data: { status: "OPEN" },
+      });
+      expect(prisma.trip.update).not.toHaveBeenCalled();
+    });
+
+    it("deja FULL el viaje si las reservas vencidas no liberan lugar", async () => {
+      candidatos("t1");
+      viajeEnTx({
+        status: "FULL",
+        capacityTotal: 30,
+        cargoItems: [
+          // la vencida se libera, pero lo confirmado ya ocupa todo
+          vencida({ id: "i1", volume: 10 }),
+          vencida({ id: "i2", volume: 30, status: "CONFIRMED" }),
+        ],
+      });
+
+      expect(await tripsService.releaseExpiredReservations(AHORA)).toBe(1);
+      expect(tx.trip.update).not.toHaveBeenCalled();
+    });
+
+    it("un viaje OPEN sigue OPEN (no se reescribe el estado)", async () => {
+      candidatos("t1");
+      viajeEnTx({ cargoItems: [vencida()] });
+
+      await tripsService.releaseExpiredReservations(AHORA);
+
+      expect(tx.trip.update).not.toHaveBeenCalled();
+    });
+
+    it("si la seña se aprobó en el medio, reintenta la TX y la reserva se mantiene", async () => {
+      candidatos("t1");
+      viajeEnTx(
+        {
+          cargoItems: [
+            vencida({
+              payments: [basePayment({ status: "PENDING", mpPaymentId: null })],
+            }),
+          ],
+        },
+        // al reintentar, el webhook ya la aprobó
+        { cargoItems: [vencida({ payments: [basePayment()] })] }
+      );
+      // el CAS sobre la seña no encuentra el estado leído
+      tx.payment.updateMany.mockResolvedValueOnce({ count: 0 });
+
+      expect(await tripsService.releaseExpiredReservations(AHORA)).toBe(0);
+
+      expect(prisma.$transaction).toHaveBeenCalledTimes(2);
+      expect(tx.payment.updateMany).toHaveBeenCalledWith({
+        where: { id: "pay1", status: "PENDING" },
+        data: { updatedAt: AHORA },
+      });
+      expect(tx.cargoItem.update).not.toHaveBeenCalled();
+    });
+
+    it("con un addCargoItem concurrente reintenta y decide el estado con lo que hay ahora", async () => {
+      candidatos("t1");
+      const conflicto = new Prisma.PrismaClientKnownRequestError("conflicto", {
+        code: "P2034",
+        clientVersion: "test",
+      });
+      (prisma.$transaction as unknown as ReturnType<typeof vi.fn>)
+        .mockRejectedValueOnce(conflicto)
+        .mockImplementation((fn: unknown) => (fn as (t: unknown) => unknown)(tx));
+      // ya con la carga nueva que llenó el lugar que liberaba la vencida
+      viajeEnTx({
+        status: "FULL",
+        capacityTotal: 30,
+        cargoItems: [
+          vencida({ id: "i1", volume: 10 }),
+          vencida({ id: "i2", volume: 20, status: "CONFIRMED" }),
+          baseCargoItem({ id: "nueva", volume: 10, createdAt: AHORA, payments: [] }),
+        ],
+      });
+
+      expect(await tripsService.releaseExpiredReservations(AHORA)).toBe(1);
+
+      expect(prisma.$transaction).toHaveBeenCalledTimes(2);
+      expect(canceladas()).toEqual(["i1"]);
+      // 20 confirmados + 10 de la nueva = 30: sigue FULL
+      expect(tx.trip.update).not.toHaveBeenCalled();
+    });
+
+    it("un viaje que falla no corta la corrida y el log no lleva el mensaje", async () => {
+      candidatos("t1", "t2");
+      tx.trip.findUnique
+        .mockRejectedValueOnce(new Error("detalle de la base con datos"))
+        .mockResolvedValueOnce(
+          baseTrip({ id: "t2", cargoItems: [vencida({ id: "i2" })] })
+        );
+
+      expect(await tripsService.releaseExpiredReservations(AHORA)).toBe(1);
+
+      expect(canceladas()).toEqual(["i2"]);
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(errorSpy.mock.calls[0])).not.toContain("datos");
+    });
+
+    it("listar viajes ya no libera reservas: lo hace el scheduler", async () => {
       (prisma.trip.findMany as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([]);
 
       await tripsService.listOpenTrips();
 
-      expect(prisma.cargoItem.updateMany).toHaveBeenCalled();
+      expect(prisma.cargoItem.findMany).not.toHaveBeenCalled();
+      expect(prisma.$transaction).not.toHaveBeenCalled();
     });
 
-    it("mirar un viaje también libera las reservas vencidas", async () => {
-      (
-        prisma.cargoItem.findMany as unknown as ReturnType<typeof vi.fn>
-      ).mockResolvedValue([expiredItem()]);
+    it("mirar un viaje tampoco libera reservas", async () => {
       (prisma.trip.findUnique as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(
         baseTrip({ carrier: { name: "Flete" }, reviews: [] })
       );
 
       await tripsService.getTripById("t1");
 
-      expect(prisma.cargoItem.updateMany).toHaveBeenCalled();
+      expect(prisma.cargoItem.findMany).not.toHaveBeenCalled();
+      expect(prisma.$transaction).not.toHaveBeenCalled();
     });
   });
 
@@ -1643,6 +2427,7 @@ describe("addCargoItem", () => {
         origin: "Córdoba",
         destination: "Rosario",
         date: new Date("2026-10-01T10:00:00.000Z"),
+        departureTime: "08:00",
         truckType: "Semi",
         capacityTotal: 30,
         price: 1500,
@@ -1672,6 +2457,7 @@ describe("addCargoItem", () => {
         origin: "Córdoba",
         destination: "Rosario",
         date: new Date("2026-10-01T10:00:00.000Z"),
+        departureTime: "08:00",
         truckType: "Semi",
         capacityTotal: 30,
         price: 1500,
@@ -1767,6 +2553,7 @@ describe("addCargoItem", () => {
                 email: "u@e.com",
                 emailNotifications: true,
               },
+              payments: [],
             }),
           ],
         })
@@ -1953,6 +2740,30 @@ describe("addCargoItem", () => {
       expect(tx.trip.update).not.toHaveBeenCalled();
     });
 
+    it("un saldo con contracargo bloquea el COMPLETED (409 BALANCE_CHARGED_BACK)", async () => {
+      // MP revirtió el saldo: no es un saldo "por pagar" (la empresa no puede
+      // volver a pagarlo), lo resuelve un admin
+      tx.trip.findUnique.mockResolvedValue(
+        baseTrip({
+          status: "IN_TRANSIT",
+          cargoItems: [
+            confirmedWithDeposit({
+              payments: [
+                basePayment({ type: "DEPOSIT" }),
+                basePayment({ id: "pay2", type: "BALANCE", status: "CHARGED_BACK" }),
+              ],
+            }),
+          ],
+        })
+      );
+
+      await expect(tripsService.updateTripStatus("t1", "u1", "COMPLETED")).rejects.toMatchObject({
+        statusCode: 409,
+        code: "BALANCE_CHARGED_BACK",
+      });
+      expect(tx.trip.update).not.toHaveBeenCalled();
+    });
+
     it("completa igual si lo que queda es una carga retirada", async () => {
       tx.trip.findUnique.mockResolvedValue(
         baseTrip({
@@ -2082,6 +2893,742 @@ describe("addCargoItem", () => {
         expect.any(Object)
       );
     });
+
+    // D3 (= a): al salir el viaje, lo que no se confirmó no viaja. Las cargas
+    // PENDING se cancelan en la misma TX; la seña cobrada vuelve entera por el
+    // outbox (la cancelación no es de la empresa, no hay penalidad).
+    describe("IN_TRANSIT cancela las cargas PENDING (D3)", () => {
+      const empresa = (id: string) => ({
+        id,
+        name: `Empresa ${id}`,
+        email: `${id}@empresa.com`,
+        emailNotifications: true,
+      });
+
+      /** pendiente con la seña acreditada (el fletero no llegó a confirmarla) */
+      const pendienteConSeña = () =>
+        baseCargoItem({
+          id: "i2",
+          companyId: "c2",
+          description: "Acero",
+          company: empresa("c2"),
+          payments: [
+            basePayment({
+              id: "pay2",
+              cargoItemId: "i2",
+              amount: new Prisma.Decimal("100.00"),
+              mpPaymentId: "mp-2",
+            }),
+          ],
+        });
+
+      /** pendiente sin pago: reservó y nunca pagó la seña */
+      const pendienteSinSeña = () =>
+        baseCargoItem({
+          id: "i3",
+          companyId: "c3",
+          description: "Vidrio",
+          company: empresa("c3"),
+          payments: [],
+        });
+
+      const viajeConLasTres = () =>
+        baseTrip({
+          status: "FULL",
+          origin: "Córdoba",
+          destination: "Rosario",
+          cargoItems: [confirmedWithDeposit(), pendienteConSeña(), pendienteSinSeña()],
+        });
+
+      beforeEach(() => {
+        tx.trip.findUnique.mockResolvedValue(viajeConLasTres());
+        tx.cargoItem.update.mockImplementation(
+          async ({ where, data }: { where: { id: string }; data: object }) => ({
+            id: where.id,
+            ...data,
+          })
+        );
+        tx.payment.updateMany.mockResolvedValue({ count: 1 });
+        tx.refundRequest.create = vi.fn().mockResolvedValue({});
+      });
+
+      /** las cargas que quedaron CANCELLED, con lo que se asentó */
+      const canceladas = () =>
+        tx.cargoItem.update.mock.calls.map((call) => {
+          const arg = call[0] as { where: { id: string }; data: Record<string, unknown> };
+          return {
+            id: arg.where.id,
+            status: arg.data.status,
+            fee: Number(arg.data.cancellationFeeAmount),
+          };
+        });
+
+      it("1 CONFIRMED + 1 PENDING con seña + 1 sin seña: saldo solo para la confirmada, 100 % a la segunda, ninguna queda PENDING", async () => {
+        await tripsService.updateTripStatus("t1", "u1", "IN_TRANSIT");
+
+        // el saldo, solo para la confirmada
+        expect(tx.payment.upsert).toHaveBeenCalledTimes(1);
+        expect(tx.payment.upsert).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: { cargoItemId_type: { cargoItemId: "i1", type: "BALANCE" } },
+          })
+        );
+        // las dos pendientes, canceladas sin penalidad
+        expect(canceladas()).toEqual([
+          { id: "i2", status: "CANCELLED", fee: 0 },
+          { id: "i3", status: "CANCELLED", fee: 0 },
+        ]);
+        // la seña cobrada vuelve entera por el outbox; sin seña no hay nada
+        expect(tx.refundRequest.create).toHaveBeenCalledTimes(1);
+        expect(tx.refundRequest.create).toHaveBeenCalledWith({
+          data: {
+            cargoItemId: "i2",
+            targetAmount: new Prisma.Decimal("100.00"),
+            status: "PENDING",
+          },
+        });
+        // todo en la misma TX que el cambio de estado
+        expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+        expect(tx.trip.update).toHaveBeenCalledWith(
+          expect.objectContaining({ data: { status: "IN_TRANSIT" } })
+        );
+      });
+
+      it("después de la TX procesa la devolución (best-effort)", async () => {
+        await tripsService.updateTripStatus("t1", "u1", "IN_TRANSIT");
+
+        expect(prisma.refundRequest.findUnique).toHaveBeenCalledWith({
+          where: { cargoItemId: "i2" },
+        });
+        expect(prisma.refundRequest.findUnique).not.toHaveBeenCalledWith({
+          where: { cargoItemId: "i3" },
+        });
+      });
+
+      it("seña por acreditarse: se cancela sin devolución y fija la fila de la seña (CAS)", async () => {
+        // si MP la aprueba después, el webhook ve la carga CANCELLED con fee 0 y
+        // la devuelve entera (refundIfCancelled)
+        tx.trip.findUnique.mockResolvedValue(
+          baseTrip({
+            status: "FULL",
+            cargoItems: [
+              baseCargoItem({
+                company: empresa("c1"),
+                payments: [basePayment({ status: "PENDING", mpPaymentId: null })],
+              }),
+            ],
+          })
+        );
+
+        await tripsService.updateTripStatus("t1", "u1", "IN_TRANSIT");
+
+        expect(tx.payment.updateMany).toHaveBeenCalledWith({
+          where: { id: "pay1", status: "PENDING" },
+          data: { updatedAt: expect.any(Date) },
+        });
+        expect(canceladas()).toEqual([{ id: "i1", status: "CANCELLED", fee: 0 }]);
+        expect(tx.refundRequest.create).not.toHaveBeenCalled();
+      });
+
+      it("si el webhook aprobó la seña en el medio, reintenta y la devuelve entera", async () => {
+        const conSeñaPendiente = baseTrip({
+          status: "FULL",
+          cargoItems: [
+            baseCargoItem({
+              company: empresa("c1"),
+              payments: [
+                basePayment({ status: "PENDING", amount: new Prisma.Decimal("100.00") }),
+              ],
+            }),
+          ],
+        });
+        const conSeñaAprobada = baseTrip({
+          status: "FULL",
+          cargoItems: [
+            baseCargoItem({
+              company: empresa("c1"),
+              payments: [basePayment({ amount: new Prisma.Decimal("100.00") })],
+            }),
+          ],
+        });
+        tx.trip.findUnique
+          .mockResolvedValueOnce(conSeñaPendiente)
+          .mockResolvedValue(conSeñaAprobada);
+        // el CAS sobre la seña leída PENDING no encuentra la fila: ya está APPROVED
+        tx.payment.updateMany
+          .mockResolvedValueOnce({ count: 0 })
+          .mockResolvedValue({ count: 1 });
+
+        await tripsService.updateTripStatus("t1", "u1", "IN_TRANSIT");
+
+        expect(prisma.$transaction).toHaveBeenCalledTimes(2);
+        expect(tx.refundRequest.create).toHaveBeenCalledTimes(1);
+        expect(tx.refundRequest.create).toHaveBeenCalledWith({
+          data: {
+            cargoItemId: "i1",
+            targetAmount: new Prisma.Decimal("100.00"),
+            status: "PENDING",
+          },
+        });
+      });
+
+      it("reintenta ante un conflicto de serialización (P2034)", async () => {
+        const conflicto = new Prisma.PrismaClientKnownRequestError("conflicto", {
+          code: "P2034",
+          clientVersion: "test",
+        });
+        (prisma.$transaction as unknown as ReturnType<typeof vi.fn>)
+          .mockRejectedValueOnce(conflicto)
+          .mockImplementation((fn: unknown) => (fn as (t: unknown) => unknown)(tx));
+
+        const result = await tripsService.updateTripStatus("t1", "u1", "IN_TRANSIT");
+
+        expect(prisma.$transaction).toHaveBeenCalledTimes(2);
+        expect(result.status).toBe("IN_TRANSIT");
+      });
+
+      it("si la seña sigue moviéndose en cada intento: 409 PAYMENT_IN_FLIGHT, sin avisos", async () => {
+        tx.payment.updateMany.mockResolvedValue({ count: 0 });
+
+        await expect(
+          tripsService.updateTripStatus("t1", "u1", "IN_TRANSIT")
+        ).rejects.toMatchObject({ statusCode: 409, code: "PAYMENT_IN_FLIGHT" });
+        expect(notifyUsers).not.toHaveBeenCalled();
+      });
+
+      it("«va en camino» solo a las cargas activas; a las canceladas, CARGO_CANCELLED con la devolución", async () => {
+        await tripsService.updateTripStatus("t1", "u1", "IN_TRANSIT");
+
+        // el aviso de estado se arma solo con las cargas que viajan
+        expect(prisma.cargoItem.findMany).toHaveBeenCalledWith(
+          expect.objectContaining({ where: { tripId: "t1", status: "CONFIRMED" } })
+        );
+
+        const cancelaciones = vi
+          .mocked(notifyUsers)
+          .mock.calls.filter(([, data]) => data.type === "CARGO_CANCELLED");
+        expect(cancelaciones.map(([ids]) => ids)).toEqual([["c2"], ["c3"]]);
+
+        const conSeña = avisoA("c2");
+        expect(conSeña.tripId).toBe("t1");
+        expect(conSeña.title).toBe("tu carga se canceló: Córdoba → Rosario");
+        expect(conSeña.body).toContain("acero");
+        expect(conSeña.body).toContain("te devolvemos la seña entera ($100)");
+
+        const sinSeña = avisoA("c3");
+        expect(sinSeña.body).toContain("vidrio");
+        expect(sinSeña.body).not.toContain("$");
+      });
+
+      it("COMPLETED no cancela nada", async () => {
+        tx.trip.findUnique.mockResolvedValue(
+          baseTrip({
+            status: "IN_TRANSIT",
+            cargoItems: [
+              confirmedWithDeposit({
+                payments: [
+                  basePayment({ type: "DEPOSIT" }),
+                  basePayment({ id: "pay2", type: "BALANCE", status: "APPROVED" }),
+                ],
+              }),
+            ],
+          })
+        );
+
+        await tripsService.updateTripStatus("t1", "u1", "COMPLETED");
+
+        expect(tx.cargoItem.update).not.toHaveBeenCalled();
+        expect(tx.refundRequest.create).not.toHaveBeenCalled();
+      });
+    });
+
+    // D6 (= a): el fletero cancela un viaje que todavía no salió. Las cargas
+    // activas se cancelan con la seña cobrada devuelta entera (cancelCargoForTrip,
+    // el mismo camino que D3). La auto-cancelación (b) es del scheduler (Tanda 2).
+    describe("CANCELLED: el fletero cancela el viaje (D6)", () => {
+      const empresa = (id: string) => ({
+        id,
+        name: `Empresa ${id}`,
+        email: `${id}@empresa.com`,
+        emailNotifications: true,
+      });
+
+      const seña = (id: string, cargoItemId: string, overrides = {}) =>
+        basePayment({
+          id,
+          cargoItemId,
+          amount: new Prisma.Decimal("100.00"),
+          mpPaymentId: `mp-${id}`,
+          ...overrides,
+        });
+
+      /** confirmada con seña, pendiente con seña y pendiente sin pagar */
+      const cargas = () => [
+        baseCargoItem({
+          id: "i1",
+          status: "CONFIRMED",
+          companyId: "c1",
+          description: "Maquinaria",
+          company: empresa("c1"),
+          payments: [seña("pay1", "i1")],
+        }),
+        baseCargoItem({
+          id: "i2",
+          companyId: "c2",
+          description: "Acero",
+          company: empresa("c2"),
+          payments: [seña("pay2", "i2")],
+        }),
+        baseCargoItem({
+          id: "i3",
+          companyId: "c3",
+          description: "Vidrio",
+          company: empresa("c3"),
+          payments: [],
+        }),
+        // la que la empresa ya había retirado no se toca de nuevo
+        baseCargoItem({
+          id: "i4",
+          status: "CANCELLED",
+          companyId: "c4",
+          company: empresa("c4"),
+          payments: [],
+        }),
+      ];
+
+      const viaje = (status: string) =>
+        baseTrip({
+          status,
+          origin: "Córdoba",
+          destination: "Rosario",
+          cargoItems: cargas(),
+        });
+
+      beforeEach(() => {
+        tx.cargoItem.update.mockImplementation(
+          async ({ where, data }: { where: { id: string }; data: object }) => ({
+            id: where.id,
+            ...data,
+          })
+        );
+        tx.payment.updateMany.mockResolvedValue({ count: 1 });
+        tx.refundRequest.create = vi.fn().mockResolvedValue({});
+      });
+
+      const canceladas = () =>
+        tx.cargoItem.update.mock.calls.map((call) => {
+          const arg = call[0] as { where: { id: string }; data: Record<string, unknown> };
+          return {
+            id: arg.where.id,
+            status: arg.data.status,
+            fee: Number(arg.data.cancellationFeeAmount),
+          };
+        });
+
+      it.each([["OPEN"], ["FULL"]])(
+        "desde %s cancela las cargas activas y devuelve entera cada seña cobrada",
+        async (desde) => {
+          tx.trip.findUnique.mockResolvedValue(viaje(desde));
+
+          const result = await tripsService.updateTripStatus("t1", "u1", "CANCELLED");
+
+          expect(result.status).toBe("CANCELLED");
+          expect(tx.trip.update).toHaveBeenCalledWith(
+            expect.objectContaining({ data: { status: "CANCELLED" } })
+          );
+          // confirmadas y pendientes, sin penalidad; la ya retirada no se toca
+          expect(canceladas()).toEqual([
+            { id: "i1", status: "CANCELLED", fee: 0 },
+            { id: "i2", status: "CANCELLED", fee: 0 },
+            { id: "i3", status: "CANCELLED", fee: 0 },
+          ]);
+          expect(tx.refundRequest.create.mock.calls.map(([arg]) => arg)).toEqual([
+            {
+              data: {
+                cargoItemId: "i1",
+                targetAmount: new Prisma.Decimal("100.00"),
+                status: "PENDING",
+              },
+            },
+            {
+              data: {
+                cargoItemId: "i2",
+                targetAmount: new Prisma.Decimal("100.00"),
+                status: "PENDING",
+              },
+            },
+          ]);
+          // un viaje cancelado no cobra saldos
+          expect(tx.payment.upsert).not.toHaveBeenCalled();
+          expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+        }
+      );
+
+      it.each([["IN_TRANSIT"], ["COMPLETED"], ["CANCELLED"]])(
+        "desde %s no se cancela (409 INVALID_STATUS_TRANSITION)",
+        async (desde) => {
+          tx.trip.findUnique.mockResolvedValue(viaje(desde));
+
+          await expect(
+            tripsService.updateTripStatus("t1", "u1", "CANCELLED")
+          ).rejects.toMatchObject({ statusCode: 409, code: "INVALID_STATUS_TRANSITION" });
+          expect(tx.trip.update).not.toHaveBeenCalled();
+          expect(tx.cargoItem.update).not.toHaveBeenCalled();
+          expect(tx.refundRequest.create).not.toHaveBeenCalled();
+        }
+      );
+
+      it("solo el transportista del viaje lo cancela (403)", async () => {
+        tx.trip.findUnique.mockResolvedValue(viaje("OPEN"));
+
+        await expect(
+          tripsService.updateTripStatus("t1", "otro-fletero", "CANCELLED")
+        ).rejects.toMatchObject({ statusCode: 403, code: "FORBIDDEN" });
+        expect(tx.trip.update).not.toHaveBeenCalled();
+        expect(tx.cargoItem.update).not.toHaveBeenCalled();
+      });
+
+      it("después de la TX procesa cada devolución (best-effort)", async () => {
+        tx.trip.findUnique.mockResolvedValue(viaje("OPEN"));
+
+        await tripsService.updateTripStatus("t1", "u1", "CANCELLED");
+
+        for (const id of ["i1", "i2"]) {
+          expect(prisma.refundRequest.findUnique).toHaveBeenCalledWith({
+            where: { cargoItemId: id },
+          });
+        }
+        expect(prisma.refundRequest.findUnique).not.toHaveBeenCalledWith({
+          where: { cargoItemId: "i3" },
+        });
+      });
+
+      it("avisa a cada empresa con carga activa qué se le devuelve; no manda «va en camino»", async () => {
+        tx.trip.findUnique.mockResolvedValue(viaje("OPEN"));
+
+        await tripsService.updateTripStatus("t1", "u1", "CANCELLED");
+
+        const tipos = vi.mocked(notifyUsers).mock.calls.map(([, data]) => data.type);
+        expect(tipos).not.toContain("TRIP_STATUS_CHANGED");
+        const cancelaciones = vi
+          .mocked(notifyUsers)
+          .mock.calls.filter(([, data]) => data.type === "CARGO_CANCELLED");
+        expect(cancelaciones.map(([ids]) => ids)).toEqual([["c1"], ["c2"], ["c3"]]);
+
+        const conSeña = avisoA("c1");
+        expect(conSeña.tripId).toBe("t1");
+        expect(conSeña.title).toBe("se canceló el viaje: Córdoba → Rosario");
+        expect(conSeña.body).toContain("canceló el viaje");
+        expect(conSeña.body).toContain("maquinaria");
+        expect(conSeña.body).toContain("te devolvemos la seña entera ($100)");
+
+        const sinSeña = avisoA("c3");
+        expect(sinSeña.body).toContain("vidrio");
+        expect(sinSeña.body).not.toContain("$");
+      });
+    });
+
+    describe("auto-cancelación: el viaje no salió 24 h después de la salida (D6)", () => {
+      // 12/11 09:00 ART
+      const AHORA = new Date("2026-11-12T12:00:00.000Z");
+
+      let errorSpy: ReturnType<typeof vi.spyOn>;
+
+      beforeEach(() => {
+        // los viajes que lee la TX se encolan por test: un valor que un test no
+        // consumió (porque no llegó a la TX) no puede pasar al siguiente
+        tx.trip.findUnique.mockReset();
+        tx.cargoItem.update.mockResolvedValue({});
+        tx.payment.updateMany.mockReset().mockResolvedValue({ count: 1 });
+        tx.refundRequest.create = vi.fn().mockResolvedValue({});
+        errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      });
+
+      afterEach(() => {
+        tx.trip.findUnique.mockReset();
+        tx.payment.updateMany.mockReset().mockResolvedValue({ count: 1 });
+      });
+
+      const empresa = (id: string) => ({
+        id,
+        name: `Empresa ${id}`,
+        email: `${id}@empresa.com`,
+        emailNotifications: true,
+      });
+
+      /** confirmada con seña, pendiente con seña y pendiente sin pagar */
+      const cargas = () => [
+        baseCargoItem({
+          id: "i1",
+          status: "CONFIRMED",
+          companyId: "c1",
+          description: "Maquinaria",
+          company: empresa("c1"),
+          payments: [basePayment({ id: "pay1", cargoItemId: "i1", mpPaymentId: "mp-1" })],
+        }),
+        baseCargoItem({
+          id: "i2",
+          companyId: "c2",
+          description: "Acero",
+          company: empresa("c2"),
+          payments: [basePayment({ id: "pay2", cargoItemId: "i2", mpPaymentId: "mp-2" })],
+        }),
+        baseCargoItem({
+          id: "i3",
+          companyId: "c3",
+          description: "Vidrio",
+          company: empresa("c3"),
+          payments: [],
+        }),
+      ];
+
+      /** la búsqueda devuelve estos viajes; la TX lee el mismo viaje completo */
+      type Viaje = ReturnType<typeof baseTrip> & { departureTime: string | null };
+
+      function viajes(...trips: Viaje[]) {
+        (prisma.trip.findMany as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(
+          trips.map((t) => ({ id: t.id, date: t.date, departureTime: t.departureTime }))
+        );
+        for (const t of trips) tx.trip.findUnique.mockResolvedValueOnce(t);
+      }
+
+      function viaje(overrides: Record<string, unknown> = {}) {
+        return baseTrip({
+          origin: "Córdoba",
+          destination: "Rosario",
+          ...salidaEn(-24, AHORA.getTime()),
+          cargoItems: cargas(),
+          ...overrides,
+        }) as Viaje;
+      }
+
+      const avisos = (type: string) =>
+        vi.mocked(notifyUsers).mock.calls.filter(([, data]) => data.type === type);
+
+      it("busca los viajes OPEN/FULL cuya fecha ya pasó, los más viejos primero", async () => {
+        viajes();
+
+        expect(await tripsService.autoCancelUndepartedTrips(AHORA)).toBe(0);
+
+        expect(prisma.trip.findMany).toHaveBeenCalledWith({
+          // el plazo vence 24 h después de la salida, y la salida nunca es más
+          // de un día antes de `date`: con `date` en el futuro no hay nada que ver
+          where: { status: { in: ["OPEN", "FULL"] }, date: { lte: AHORA } },
+          select: { id: true, date: true, departureTime: true },
+          orderBy: { date: "asc" },
+          take: 100,
+        });
+        expect(prisma.$transaction).not.toHaveBeenCalled();
+      });
+
+      it.each([["OPEN"], ["FULL"]])(
+        "cancela el viaje %s a las 24 h exactas de la salida y devuelve entera cada seña cobrada",
+        async (status) => {
+          viajes(viaje({ status }));
+
+          expect(await tripsService.autoCancelUndepartedTrips(AHORA)).toBe(1);
+
+          expect(tx.trip.update).toHaveBeenCalledWith(
+            expect.objectContaining({
+              where: { id: "t1" },
+              data: { status: "CANCELLED" },
+            })
+          );
+          expect(tx.cargoItem.update.mock.calls.map(([arg]) => arg.where.id)).toEqual([
+            "i1",
+            "i2",
+            "i3",
+          ]);
+          expect(tx.refundRequest.create.mock.calls.map(([arg]) => arg.data)).toEqual([
+            {
+              cargoItemId: "i1",
+              targetAmount: new Prisma.Decimal("100.00"),
+              status: "PENDING",
+            },
+            {
+              cargoItemId: "i2",
+              targetAmount: new Prisma.Decimal("100.00"),
+              status: "PENDING",
+            },
+          ]);
+          // y después de la TX las procesa por el outbox
+          for (const id of ["i1", "i2"]) {
+            expect(prisma.refundRequest.findUnique).toHaveBeenCalledWith({
+              where: { cargoItemId: id },
+            });
+          }
+        }
+      );
+
+      it("a 23:59 h de la salida todavía no lo cancela", async () => {
+        viajes(viaje(salidaEn(-24 + 1 / 60, AHORA.getTime())));
+
+        expect(await tripsService.autoCancelUndepartedTrips(AHORA)).toBe(0);
+        expect(prisma.$transaction).not.toHaveBeenCalled();
+      });
+
+      it("un viaje viejo sin hora de salida cuenta desde las 23:59 ART de su día", async () => {
+        // 10/11 (mediodía del navegador): salida 10/11 23:59 ART = 11/11 02:59Z
+        const sinHora = () =>
+          viaje({ date: new Date("2026-11-10T15:00:00.000Z"), departureTime: null });
+
+        viajes(sinHora());
+        expect(
+          await tripsService.autoCancelUndepartedTrips(
+            new Date("2026-11-12T02:58:00.000Z")
+          )
+        ).toBe(0);
+
+        viajes(sinHora());
+        expect(
+          await tripsService.autoCancelUndepartedTrips(
+            new Date("2026-11-12T02:59:00.000Z")
+          )
+        ).toBe(1);
+      });
+
+      it("avisa a cada empresa que el viaje no salió y qué se le devuelve", async () => {
+        viajes(viaje());
+
+        await tripsService.autoCancelUndepartedTrips(AHORA);
+
+        const cancelaciones = avisos("CARGO_CANCELLED");
+        expect(cancelaciones.map(([ids]) => ids)).toEqual([["c1"], ["c2"], ["c3"]]);
+        const [, conSeña] = cancelaciones[0]!;
+        expect(conSeña.title).toBe("se canceló el viaje: Córdoba → Rosario");
+        expect(conSeña.body).toContain("no salió");
+        expect(conSeña.body).toContain("maquinaria");
+        expect(conSeña.body).toContain("te devolvemos la seña entera ($100)");
+        expect(conSeña.body).not.toContain("canceló el viaje");
+        const [, sinSeña] = cancelaciones[2]!;
+        expect(sinSeña.body).not.toContain("$");
+      });
+
+      it("avisa al fletero solo in-app que se le canceló el viaje", async () => {
+        viajes(viaje());
+
+        await tripsService.autoCancelUndepartedTrips(AHORA);
+
+        const alFletero = avisos("TRIP_STATUS_CHANGED");
+        expect(alFletero).toHaveLength(1);
+        const [ids, data] = alFletero[0]!;
+        expect(ids).toEqual(["u1"]);
+        expect(data).toMatchObject({
+          title: "se canceló tu viaje: Córdoba → Rosario",
+          tripId: "t1",
+          email: false,
+        });
+        expect(data.body).toContain("24 h");
+        expect(data.body).toContain("3 cargas");
+      });
+
+      it("también cancela un viaje sin cargas", async () => {
+        viajes(viaje({ cargoItems: [] }));
+
+        expect(await tripsService.autoCancelUndepartedTrips(AHORA)).toBe(1);
+
+        expect(tx.trip.update).toHaveBeenCalledWith(
+          expect.objectContaining({ data: { status: "CANCELLED" } })
+        );
+        expect(tx.refundRequest.create).not.toHaveBeenCalled();
+        expect(avisos("CARGO_CANCELLED")).toHaveLength(0);
+        const [, data] = avisos("TRIP_STATUS_CHANGED")[0]!;
+        expect(data.body).toContain("no tenía cargas");
+      });
+
+      it.each([["IN_TRANSIT"], ["COMPLETED"], ["CANCELLED"]])(
+        "si al releer el viaje está %s, no lo toca ni avisa",
+        async (status) => {
+          viajes(viaje({ status }));
+
+          expect(await tripsService.autoCancelUndepartedTrips(AHORA)).toBe(0);
+
+          expect(tx.trip.update).not.toHaveBeenCalled();
+          expect(tx.cargoItem.update).not.toHaveBeenCalled();
+          expect(notifyUsers).not.toHaveBeenCalled();
+        }
+      );
+
+      it("relee el plazo dentro de la TX: si la salida cambió, no lo cancela", async () => {
+        const original = viaje();
+        (prisma.trip.findMany as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([
+          { id: "t1", date: original.date, departureTime: original.departureTime },
+        ]);
+        tx.trip.findUnique.mockResolvedValueOnce(viaje(salidaEn(-2, AHORA.getTime())));
+
+        expect(await tripsService.autoCancelUndepartedTrips(AHORA)).toBe(0);
+        expect(tx.trip.update).not.toHaveBeenCalled();
+      });
+
+      it("no exige que lo pida el fletero: lo cancela el sistema", async () => {
+        viajes(viaje({ carrierId: "otro-fletero" }));
+
+        expect(await tripsService.autoCancelUndepartedTrips(AHORA)).toBe(1);
+        const [ids] = avisos("TRIP_STATUS_CHANGED")[0]!;
+        expect(ids).toEqual(["otro-fletero"]);
+      });
+
+      it("si una seña se aprueba en el medio reintenta y la devuelve entera", async () => {
+        const conSeñaPorAcreditarse = () =>
+          viaje({
+            cargoItems: [
+              baseCargoItem({
+                id: "i1",
+                company: empresa("c1"),
+                payments: [basePayment({ status: "PENDING", mpPaymentId: "mp-1" })],
+              }),
+            ],
+          });
+        viajes(conSeñaPorAcreditarse());
+        tx.trip.findUnique.mockResolvedValueOnce(
+          viaje({
+            cargoItems: [
+              baseCargoItem({
+                id: "i1",
+                company: empresa("c1"),
+                payments: [basePayment()],
+              }),
+            ],
+          })
+        );
+        tx.payment.updateMany.mockResolvedValueOnce({ count: 0 });
+
+        expect(await tripsService.autoCancelUndepartedTrips(AHORA)).toBe(1);
+
+        expect(prisma.$transaction).toHaveBeenCalledTimes(2);
+        expect(tx.refundRequest.create).toHaveBeenCalledTimes(1);
+      });
+
+      it("un viaje que falla no corta la corrida y el log no lleva el mensaje", async () => {
+        const roto = viaje({ id: "t-roto" });
+        const sano = viaje({ id: "t2", cargoItems: [] });
+        (prisma.trip.findMany as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(
+          [roto, sano].map((t) => ({
+            id: t.id,
+            date: t.date,
+            departureTime: t.departureTime,
+          }))
+        );
+        tx.trip.findUnique
+          .mockRejectedValueOnce(new Error("detalle de la base con datos"))
+          .mockResolvedValueOnce(sano);
+
+        expect(await tripsService.autoCancelUndepartedTrips(AHORA)).toBe(1);
+
+        expect(errorSpy).toHaveBeenCalledTimes(1);
+        expect(JSON.stringify(errorSpy.mock.calls[0])).not.toContain("datos");
+      });
+
+      it("la cancelación manual del fletero sigue avisando que la canceló él", async () => {
+        tx.trip.findUnique.mockResolvedValue(viaje({ date: futureTripDate(3) }));
+
+        await tripsService.updateTripStatus("t1", "u1", "CANCELLED");
+
+        const [, data] = avisos("CARGO_CANCELLED")[0]!;
+        expect(data.body).toContain("canceló el viaje");
+        expect(avisos("TRIP_STATUS_CHANGED")).toHaveLength(0);
+      });
+    });
   });
 
   describe("confirmCargoItem", () => {
@@ -2103,7 +3650,7 @@ describe("addCargoItem", () => {
       const result = await tripsService.confirmCargoItem("t1", "i1", "u1");
 
       expect(prisma.cargoItem.update).toHaveBeenCalledWith({
-        where: { id: "i1" },
+        where: { id: "i1", status: "PENDING" },
         data: { status: "CONFIRMED" },
         include: { payments: true },
       });
@@ -2138,6 +3685,50 @@ describe("addCargoItem", () => {
       expect(aviso.tripId).toBe("t1");
       expect(aviso.body).toContain("confirmamos maquinaria (10 m³)");
       expect(aviso.email?.subject).toBe("tu carga está confirmada: Córdoba → Rosario");
+    });
+
+    it("una carga retirada no se confirma: 409 CARGO_ITEM_CANCELLED", async () => {
+      (
+        prisma.cargoItem.findUnique as unknown as ReturnType<typeof vi.fn>
+      ).mockResolvedValue(basePaidCargoItem({ status: "CANCELLED" }));
+      (prisma.trip.findUnique as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+        carrierId: "u1",
+      });
+
+      await expect(tripsService.confirmCargoItem("t1", "i1", "u1")).rejects.toMatchObject({
+        statusCode: 409,
+        code: "CARGO_ITEM_CANCELLED",
+      });
+      expect(prisma.cargoItem.update).not.toHaveBeenCalled();
+      expect(notifyUsers).not.toHaveBeenCalled();
+    });
+
+    it("si la empresa la retiró entre la lectura y la confirmación: 409, no la revive", async () => {
+      // el retiro commiteó después de que leímos la carga PENDING
+      (prisma.cargoItem.findUnique as unknown as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce(basePaidCargoItem())
+        .mockResolvedValueOnce(basePaidCargoItem({ status: "CANCELLED" }));
+      (prisma.trip.findUnique as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+        carrierId: "u1",
+      });
+      (prisma.cargoItem.update as unknown as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError("Record to update not found", {
+          code: "P2025",
+          clientVersion: "test",
+        })
+      );
+
+      await expect(tripsService.confirmCargoItem("t1", "i1", "u1")).rejects.toMatchObject({
+        statusCode: 409,
+        code: "CARGO_ITEM_CANCELLED",
+      });
+      // CAS: la confirmación solo pisa una carga que sigue PENDING
+      expect(prisma.cargoItem.update).toHaveBeenCalledWith({
+        where: { id: "i1", status: "PENDING" },
+        data: { status: "CONFIRMED" },
+        include: { payments: true },
+      });
+      expect(notifyUsers).not.toHaveBeenCalled();
     });
 
     it("confirma la carga aunque el aviso falle", async () => {
@@ -2421,6 +4012,7 @@ describe("addCargoItem", () => {
       origin: "A",
       destination: "B",
       date: new Date(),
+      departureTime: "08:00",
       truckType: "Semi",
       capacityTotal: 10,
       price: 1000,
@@ -2686,6 +4278,7 @@ describe("addCargoItem", () => {
       origin: "Rosario",
       destination: "Córdoba",
       date: new Date("2026-11-01T10:00:00.000Z"),
+      departureTime: "08:00",
       truckType: "Semi",
       capacityTotal: 20,
       price: 186_500,
@@ -2707,7 +4300,7 @@ describe("addCargoItem", () => {
       expect(geocode).toHaveBeenCalledWith("Córdoba");
       expect(prisma.trip.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          data: expect.objectContaining({ departureTime: null }),
+          data: expect.objectContaining({ departureTime: "08:00" }),
         })
       );
       expect(prisma.trip.create).toHaveBeenCalledWith(
@@ -3098,6 +4691,7 @@ describe("addCargoItem", () => {
       origin: "Rosario",
       destination: "Córdoba",
       date: new Date("2026-11-01T10:00:00.000Z"),
+      departureTime: "08:00",
       truckType: "Semi",
       capacityTotal: 20,
       price: 1000,
@@ -3120,14 +4714,16 @@ describe("addCargoItem", () => {
       expect(trip.departureTime).toBe("05:45");
     });
 
-    it("no inventa hora si el fletero no la carga", async () => {
-      vi.mocked(prisma.trip.create).mockResolvedValue(
-        baseTrip({ id: "t1", departureTime: null }) as never
-      );
+    // un viaje nuevo sin hora lo rechaza el schema (tests/app.test.ts, U11); los
+    // viejos sin hora siguen saliendo con null
+    it("un viaje viejo sin hora sale con null en el resumen", async () => {
+      vi.mocked(prisma.trip.findMany).mockResolvedValue([
+        baseTrip({ id: "t1", departureTime: null }),
+      ] as never);
 
-      const trip = await tripsService.createTrip("u1", base);
+      const [trip] = await tripsService.listOpenTrips();
 
-      expect(trip.departureTime).toBeNull();
+      expect(trip?.departureTime).toBeNull();
     });
 
     it("la lista de viajes también la trae", async () => {
@@ -3168,7 +4764,7 @@ describe("processRefundRequest (outbox processor)", () => {
     expect(prisma.refundRequest.findUnique).toHaveBeenCalledWith({
       where: { cargoItemId: "i1" },
     });
-    expect(prisma.refundRequest.update).not.toHaveBeenCalled();
+    expect(prisma.refundRequest.updateMany).not.toHaveBeenCalled();
   });
 
   it("si la RefundRequest no es PENDING, no hace nada", async () => {
@@ -3181,7 +4777,7 @@ describe("processRefundRequest (outbox processor)", () => {
 
     await processRefundRequest("i1");
 
-    expect(prisma.refundRequest.update).not.toHaveBeenCalled();
+    expect(prisma.refundRequest.updateMany).not.toHaveBeenCalled();
   });
 
   it("si no hay pago DEPOSIT aprobado con mpPaymentId, marca COMPLETED sin llamar a MP", async () => {
@@ -3205,9 +4801,10 @@ describe("processRefundRequest (outbox processor)", () => {
     await processRefundRequest("i1");
 
     expect(refundPayment).not.toHaveBeenCalled();
-    expect(prisma.refundRequest.update).toHaveBeenCalledWith({
-      where: { id: "rr1" },
-      data: { status: "COMPLETED" },
+    // cierre con CAS sobre PROCESSING (el worker pudo retomarla en el medio)
+    expect(prisma.refundRequest.updateMany).toHaveBeenCalledWith({
+      where: { id: "rr1", status: "PROCESSING" },
+      data: { status: "COMPLETED", carrierDisconnectedAt: null },
     });
   });
 
@@ -3245,9 +4842,10 @@ describe("processRefundRequest (outbox processor)", () => {
       where: { id: "pay1" },
       data: { status: "REFUNDED", refundedAmount: 100 },
     });
-    expect(prisma.refundRequest.update).toHaveBeenCalledWith({
-      where: { id: "rr1" },
-      data: { status: "COMPLETED" },
+    // cierre con CAS sobre PROCESSING (el worker pudo retomarla en el medio)
+    expect(prisma.refundRequest.updateMany).toHaveBeenCalledWith({
+      where: { id: "rr1", status: "PROCESSING" },
+      data: { status: "COMPLETED", carrierDisconnectedAt: null },
     });
   });
 
@@ -3283,9 +4881,10 @@ describe("processRefundRequest (outbox processor)", () => {
     expect(prisma.payment.update).not.toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ status: "REFUNDED" }) })
     );
-    expect(prisma.refundRequest.update).toHaveBeenCalledWith({
-      where: { id: "rr1" },
-      data: { status: "COMPLETED" },
+    // cierre con CAS sobre PROCESSING (el worker pudo retomarla en el medio)
+    expect(prisma.refundRequest.updateMany).toHaveBeenCalledWith({
+      where: { id: "rr1", status: "PROCESSING" },
+      data: { status: "COMPLETED", carrierDisconnectedAt: null },
     });
   });
 
@@ -3316,13 +4915,14 @@ describe("processRefundRequest (outbox processor)", () => {
     expect(refundPayment).toHaveBeenCalledWith("mp-77", 100, OUTBOX_TOKEN_PLAIN, {
       idempotencyKey: "refund-rr1-0",
     });
-    // el reclamo fue un CAS (updateMany); update solo devuelve la request a PENDING
-    expect(prisma.refundRequest.update).toHaveBeenLastCalledWith({
-      where: { id: "rr1" },
+    // el cierre es un CAS sobre PROCESSING; lastError guarda el código, no el
+    // mensaje (un error que no es de MP: su nombre)
+    expect(prisma.refundRequest.updateMany).toHaveBeenLastCalledWith({
+      where: { id: "rr1", status: "PROCESSING" },
       data: expect.objectContaining({
         status: "PENDING",
-        attempts: { increment: 1 },
-        lastError: "network timeout",
+        attempts: 1,
+        lastError: "Error",
       }),
     });
     expect(prisma.payment.update).not.toHaveBeenCalled();
@@ -3352,13 +4952,13 @@ describe("processRefundRequest (outbox processor)", () => {
 
     await processRefundRequest("i1");
 
-    // el reclamo fue un CAS (updateMany); update solo devuelve la request a PENDING
-    expect(prisma.refundRequest.update).toHaveBeenLastCalledWith({
-      where: { id: "rr1" },
+    // el cierre es un CAS sobre PROCESSING; lastError guarda el código, no el mensaje
+    expect(prisma.refundRequest.updateMany).toHaveBeenLastCalledWith({
+      where: { id: "rr1", status: "PROCESSING" },
       data: expect.objectContaining({
         status: "PENDING",
-        attempts: { increment: 1 },
-        lastError: "MP rechazó el reembolso",
+        attempts: 1,
+        lastError: "MP_ERROR",
       }),
     });
   });
@@ -3393,9 +4993,10 @@ describe("processRefundRequest (outbox processor)", () => {
       where: { id: "pay1" },
       data: { status: "REFUNDED", refundedAmount: 100 },
     });
-    expect(prisma.refundRequest.update).toHaveBeenCalledWith({
-      where: { id: "rr1" },
-      data: { status: "COMPLETED" },
+    // cierre con CAS sobre PROCESSING (el worker pudo retomarla en el medio)
+    expect(prisma.refundRequest.updateMany).toHaveBeenCalledWith({
+      where: { id: "rr1", status: "PROCESSING" },
+      data: { status: "COMPLETED", carrierDisconnectedAt: null },
     });
   });
 
@@ -3428,7 +5029,8 @@ describe("processRefundRequest (outbox processor)", () => {
     expect(outcome).toEqual({ kind: "none" });
     expect(refundPayment).not.toHaveBeenCalled();
     expect(prisma.payment.update).not.toHaveBeenCalled();
-    expect(prisma.refundRequest.update).not.toHaveBeenCalled();
+    // solo el reclamo que perdió: ningún cierre
+    expect(prisma.refundRequest.updateMany).toHaveBeenCalledTimes(1);
   });
 
   it("dos processors a la vez: refundPayment una sola vez", async () => {
@@ -3481,5 +5083,135 @@ describe("processRefundRequest (outbox processor)", () => {
     );
 
     expect(await processRefundRequest("i1")).toEqual({ kind: "failed" });
+  });
+});
+
+// D2 = b: se pueden reordenar las paradas con el viaje en camino, avisando a
+// las empresas cuya parada cambió de lugar.
+describe("reorderTripStops (D2)", () => {
+  /** tres paradas sin coordenadas: el orden es el manual y después el de creación */
+  const paradas = [
+    { id: "A", companyId: "c1", pickupAddress: "Pilar 100" },
+    { id: "B", companyId: "c2", pickupAddress: "Escobar 200" },
+    { id: "C", companyId: "c3", pickupAddress: "Zárate 300" },
+  ].map((p) =>
+    baseCargoItem({
+      ...p,
+      status: "CONFIRMED",
+      stopOrder: null,
+      company: { id: p.companyId, name: `Empresa ${p.companyId}` },
+    })
+  );
+
+  function viaje(status: string) {
+    const trip = baseTrip({
+      status,
+      origin: "CABA",
+      destination: "Rosario",
+      carrier: { id: "u1", name: "Flete" },
+      cargoItems: paradas,
+    });
+    vi.mocked(prisma.trip.findUnique).mockResolvedValue(trip as never);
+    vi.mocked(prisma.cargoItem.findMany).mockResolvedValue(paradas as never);
+    tx.cargoItem.findMany.mockResolvedValue(paradas);
+    return trip;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (prisma.$transaction as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      (fn: unknown) =>
+        typeof fn === "function" ? (fn as (t: unknown) => unknown)(tx) : Promise.all(fn as [])
+    );
+    tx.cargoItem.update.mockResolvedValue({});
+  });
+
+  afterEach(() => {
+    tx.cargoItem.findMany.mockResolvedValue([]);
+  });
+
+  // B pasa a la 1, A a la 2; C sigue 3.ª
+  const intercambio = [
+    { cargoItemId: "A", order: 2 },
+    { cargoItemId: "B", order: 1 },
+  ];
+
+  it("en tránsito avisa solo a las empresas cuya parada cambió de lugar", async () => {
+    viaje("IN_TRANSIT");
+
+    await tripsService.reorderTripStops("t1", "u1", intercambio);
+
+    const avisados = vi.mocked(notifyUsers).mock.calls.map(([ids]) => ids).flat();
+    expect(avisados.sort()).toEqual(["c1", "c2"]);
+    const aC1 = vi.mocked(notifyUsers).mock.calls.find(([ids]) => ids.includes("c1"))?.[1];
+    expect(aC1?.type).toBe("STOPS_REORDERED");
+    expect(aC1?.tripId).toBe("t1");
+    expect(aC1?.body).toContain("Pilar 100");
+    expect(aC1?.body).toContain("parada 2 de 3");
+    expect(tx.cargoItem.update).toHaveBeenCalledWith({
+      where: { id: "A" },
+      data: { stopOrder: 2 },
+    });
+  });
+
+  it("si el orden no cambia, no avisa a nadie", async () => {
+    viaje("IN_TRANSIT");
+
+    await tripsService.reorderTripStops("t1", "u1", [
+      { cargoItemId: "A", order: 1 },
+      { cargoItemId: "B", order: 2 },
+    ]);
+
+    expect(notifyUsers).not.toHaveBeenCalled();
+  });
+
+  it("antes de salir reordena sin avisar", async () => {
+    viaje("OPEN");
+
+    await tripsService.reorderTripStops("t1", "u1", intercambio);
+
+    expect(tx.cargoItem.update).toHaveBeenCalledTimes(2);
+    expect(notifyUsers).not.toHaveBeenCalled();
+  });
+
+  it.each(["COMPLETED", "CANCELLED"])(
+    "un viaje %s no se reordena: 409 INVALID_STATUS_TRANSITION",
+    async (status) => {
+      viaje(status);
+
+      await expect(
+        tripsService.reorderTripStops("t1", "u1", intercambio)
+      ).rejects.toMatchObject({ statusCode: 409, code: "INVALID_STATUS_TRANSITION" });
+      expect(tx.cargoItem.update).not.toHaveBeenCalled();
+      expect(notifyUsers).not.toHaveBeenCalled();
+    }
+  );
+
+  it("400 INVALID_CARGO_ITEMS si una carga no es del viaje", async () => {
+    viaje("IN_TRANSIT");
+
+    await expect(
+      tripsService.reorderTripStops("t1", "u1", [{ cargoItemId: "Z", order: 1 }])
+    ).rejects.toMatchObject({ statusCode: 400, code: "INVALID_CARGO_ITEMS" });
+    expect(tx.cargoItem.update).not.toHaveBeenCalled();
+  });
+
+  it("403 si no es el fletero del viaje", async () => {
+    viaje("IN_TRANSIT");
+
+    await expect(
+      tripsService.reorderTripStops("t1", "otro", intercambio)
+    ).rejects.toMatchObject({ statusCode: 403, code: "FORBIDDEN" });
+  });
+
+  it("reordena aunque el aviso falle", async () => {
+    viaje("IN_TRANSIT");
+    vi.mocked(notifyUsers).mockRejectedValue(new Error("la base de avisos cayó"));
+
+    await expect(
+      tripsService.reorderTripStops("t1", "u1", intercambio)
+    ).resolves.toBeDefined();
+    expect(tx.cargoItem.update).toHaveBeenCalledTimes(2);
+    vi.mocked(notifyUsers).mockResolvedValue(1);
   });
 });

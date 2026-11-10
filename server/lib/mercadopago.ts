@@ -6,12 +6,13 @@ import {
   PaymentRefund,
   Preference,
 } from "mercadopago";
-import { AppError } from "./errors.js";
+import { AppError, MpApiError } from "./errors.js";
 import { isLocalUrl } from "./urls.js";
 import { mpCheckoutSandbox } from "./env.js";
 import { decryptSecret } from "./crypto.js";
 
-export type MpPaymentState = "PENDING" | "APPROVED" | "REJECTED" | "REFUNDED";
+export type MpPaymentState =
+  "PENDING" | "APPROVED" | "REJECTED" | "REFUNDED" | "CHARGED_BACK";
 
 const STATUS_BY_MP_STATE: Record<string, MpPaymentState> = {
   approved: "APPROVED",
@@ -21,7 +22,7 @@ const STATUS_BY_MP_STATE: Record<string, MpPaymentState> = {
   requires_action: "PENDING",
   rejected: "REJECTED",
   cancelled: "REJECTED",
-  charged_back: "REJECTED",
+  charged_back: "CHARGED_BACK",
   refunded: "REFUNDED",
 };
 
@@ -361,6 +362,11 @@ export async function fetchPaymentState(
   accessToken: string
 ): Promise<{
   state: MpPaymentState | null;
+  /**
+   * `in_mediation`: quien pagó abrió un reclamo. No mueve el estado (la plata
+   * sigue cobrada mientras MP decide); el webhook solo avisa a los admins.
+   */
+  inMediation: boolean;
   externalReference: string | null;
   /** `transaction_amount`: lo que MP cobró, para compararlo con el pago local */
   amount: number | null;
@@ -388,11 +394,96 @@ export async function fetchPaymentState(
   }
   return {
     state: mapMpStatus(payment.status),
+    inMediation: payment.status?.toLowerCase() === "in_mediation",
     externalReference: payment.external_reference ?? null,
     amount:
       typeof payment.transaction_amount === "number" ? payment.transaction_amount : null,
     currencyId: payment.currency_id ?? null,
   };
+}
+
+/** un pago de MP encontrado por su `external_reference` */
+export type MpPaymentSummary = {
+  id: string;
+  state: MpPaymentState | null;
+  externalReference: string;
+};
+
+/**
+ * Los pagos de MP de un pago local, buscados por `external_reference` (el
+ * `Payment.id` interno que mandamos en la preference), del más viejo al más
+ * nuevo. Los usa la conciliación cuando se perdió un webhook: el primer aviso
+ * es el que deja asentado el `mpPaymentId`, así que sin él la única forma de
+ * encontrar el pago de MP es esta búsqueda. Trae también los reintentos con
+ * otra tarjeta, que en MP son pagos distintos.
+ *
+ * Va con el token del transportista (el pago vive en su cuenta) y con el
+ * timeout de los reembolsos. Errores saneados, como en el resto del archivo: el
+ * error crudo del SDK puede traer los headers con el token.
+ *
+ * Sin verificar contra MP: la búsqueda con el token de OAuth de un fletero y
+ * la forma de la respuesta (ver el gate en docs/review/04-launch.md).
+ */
+export async function searchPaymentsByExternalReference(
+  externalReference: string,
+  accessToken: string
+): Promise<MpPaymentSummary[]> {
+  let response;
+  try {
+    response = await new Payment(refundClientConfig(accessToken)).search({
+      options: {
+        external_reference: externalReference,
+        sort: "date_created",
+        criteria: "asc",
+      },
+    });
+  } catch (err) {
+    if (err instanceof AppError) throw err;
+    console.warn("[mercadopago] searchPaymentsByExternalReference falló", {
+      status: mpErrorStatus(err),
+    });
+    throw new MpApiError("no pudimos buscar los pagos en Mercado Pago", mpErrorCode(err));
+  }
+
+  const results = (response as { results?: unknown } | undefined)?.results;
+  if (!Array.isArray(results)) {
+    throw new AppError(
+      "Mercado Pago no devolvió una búsqueda de pagos utilizable",
+      502,
+      "MP_INVALID_RESPONSE"
+    );
+  }
+
+  return (
+    (
+      results as {
+        id?: unknown;
+        status?: string;
+        external_reference?: unknown;
+        date_created?: unknown;
+      }[]
+    )
+      .filter(
+        (payment) =>
+          (typeof payment.id === "number" || typeof payment.id === "string") &&
+          // el filtro es de MP; acá se vuelve a exigir, no se confía en la búsqueda
+          payment.external_reference === externalReference
+      )
+      .map((payment) => ({
+        payment,
+        created:
+          typeof payment.date_created === "string"
+            ? Date.parse(payment.date_created)
+            : NaN,
+      }))
+      // del más viejo al más nuevo aunque MP no respete el orden pedido
+      .sort((a, b) => (a.created || 0) - (b.created || 0))
+      .map(({ payment }) => ({
+        id: String(payment.id),
+        state: mapMpStatus(payment.status),
+        externalReference,
+      }))
+  );
 }
 
 /**
@@ -568,6 +659,44 @@ export async function getPaymentDetails(mpPaymentId: string): Promise<MpPaymentD
  *
  * Devuelve cuánto lleva reembolsado ese pago en total, para dejarlo asentado.
  */
+/**
+ * Timeout de los pedidos a MP del reembolso. Sin él, un intento colgado podría
+ * seguir en vuelo cuando el worker del outbox lo da por vencido (10 min) y lo
+ * retoma; con él, para entonces ya terminó seguro.
+ */
+const MP_REFUND_TIMEOUT_MS = 20_000;
+
+function refundClientConfig(accessToken: string) {
+  return new MercadoPagoConfig({
+    accessToken,
+    options: { timeout: MP_REFUND_TIMEOUT_MS },
+  });
+}
+
+/**
+ * El código de un error de MP, para guardarlo (`lastError` del outbox): el
+ * status HTTP y la primera causa (`cause[0].code`) o el `error` del body de
+ * error de la API. Se limpia a letras, números y `_.-`, y se corta: nunca el
+ * mensaje, que puede traer datos del pedido. null si no hay nada de eso (un
+ * error de red, por ejemplo).
+ */
+export function mpErrorCode(err: unknown): string | null {
+  const status = mpErrorStatus(err);
+  const body = (err ?? {}) as { cause?: unknown; error?: unknown };
+  const cause = Array.isArray(body.cause)
+    ? (body.cause[0] as { code?: unknown } | undefined)?.code
+    : undefined;
+  const raw = cause ?? body.error;
+  const detail =
+    typeof raw === "string" || typeof raw === "number"
+      ? String(raw)
+          .replace(/[^A-Za-z0-9_.-]/g, "")
+          .slice(0, 40)
+      : "";
+  if (status === null) return detail || null;
+  return detail ? `${status}:${detail}` : String(status);
+}
+
 export async function refundPayment(
   mpPaymentId: string,
   amount: number,
@@ -579,13 +708,12 @@ export async function refundPayment(
   let already: number;
   try {
     already = await refundedAmount(mpPaymentId, accessToken);
-  } catch {
+  } catch (err) {
     // a ciegas no se devuelve plata: si no se puede leer el estado, se corta y
     // la empresa reintenta, en vez de arriesgar un reembolso duplicado
-    throw new AppError(
+    throw new MpApiError(
       "no pudimos verificar con Mercado Pago cuánto se devolvió de este pago: no se devuelve nada hasta confirmar el estado",
-      502,
-      "MP_ERROR"
+      mpErrorCode(err)
     );
   }
 
@@ -594,7 +722,7 @@ export async function refundPayment(
   if (pending < CENT) return already;
 
   try {
-    await new PaymentRefund(new MercadoPagoConfig({ accessToken })).create({
+    await new PaymentRefund(refundClientConfig(accessToken)).create({
       payment_id: mpPaymentId,
       body: { amount: pending },
       // con la misma clave MP no repite el reembolso aunque llegue dos veces
@@ -607,7 +735,10 @@ export async function refundPayment(
     const refunded = await refundedAmount(mpPaymentId, accessToken).catch(() => 0);
     if (refunded + CENT >= amount) return refunded;
     if (err instanceof AppError) throw err;
-    throw new AppError("no pudimos devolver el dinero con Mercado Pago", 502, "MP_ERROR");
+    throw new MpApiError(
+      "no pudimos devolver el dinero con Mercado Pago",
+      mpErrorCode(err)
+    );
   }
   try {
     return await refundedAmount(mpPaymentId, accessToken);
@@ -618,10 +749,9 @@ export async function refundPayment(
     console.warn("[mercadopago] refundedAmount falló tras reembolsar", {
       status: mpErrorStatus(err),
     });
-    throw new AppError(
+    throw new MpApiError(
       "pedimos la devolución a Mercado Pago pero no pudimos confirmar el monto",
-      502,
-      "MP_ERROR"
+      mpErrorCode(err)
     );
   }
 }
@@ -649,7 +779,7 @@ export async function refundedAmount(
   mpPaymentId: string,
   accessToken: string
 ): Promise<number> {
-  const payment = await new Payment(new MercadoPagoConfig({ accessToken })).get({
+  const payment = await new Payment(refundClientConfig(accessToken)).get({
     id: mpPaymentId,
   });
   const refunded = (payment as { transaction_amount_refunded?: unknown })

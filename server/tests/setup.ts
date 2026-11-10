@@ -42,6 +42,7 @@ const BORRADAS = [
   "TRUST_PROXY",
   "AUTH_RATE_LIMIT_MAX",
   "MAX_STOP_DISTANCE_FROM_ROUTE_KM",
+  "JOBS_ENABLED",
 ];
 
 for (const [nombre, valor] of Object.entries(FIJAS)) process.env[nombre] = valor;

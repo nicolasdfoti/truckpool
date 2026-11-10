@@ -15,11 +15,13 @@ import {
   BalanceNotDueError,
   CargoItemNotFoundError,
   NothingToPayError,
+  PaymentChargedBackError,
   PaymentNotFoundError,
 } from "../../lib/errors.js";
 import { activeVolume } from "../../lib/mappers.js";
 import { notifyUsers } from "../../lib/notifications.js";
 import { processRefundRequest } from "./refunds.service.js";
+import { alertAdmins } from "./alerts.service.js";
 
 export type PaymentPreferenceResult = {
   paymentId: string;
@@ -118,6 +120,8 @@ export async function createPaymentPreference(
   if (existing?.status === "APPROVED" || existing?.status === "REFUNDED") {
     throw new NothingToPayError();
   }
+  // un contracargo es final: volver a cobrarlo lo decide un admin, no la empresa
+  if (existing?.status === "CHARGED_BACK") throw new PaymentChargedBackError();
 
   // la seña se paga al reservar; el saldo recién cuando el viaje salió, así que
   // una carga retirada o sin confirmar no tiene nada que cobrar.
@@ -145,6 +149,8 @@ export async function createPaymentPreference(
   let payment;
   if (existing) {
     const swapped = await prisma.payment.updateMany({
+      // el CAS también deja afuera un contracargo que llegó entre la lectura y
+      // el reset (el status leído ya no coincide)
       where: { id: existing.id, status: existing.status },
       data: { amount, status: "PENDING", mpPaymentId: null, refundedAmount: null },
     });
@@ -212,15 +218,17 @@ export async function createPaymentPreference(
  * Transiciones válidas de un pago por webhook. REJECTED→APPROVED existe porque
  * dentro del mismo checkout la empresa puede reintentar con otra tarjeta; el
  * reintento desde nuestra app pasa en cambio por el CAS de
- * `createPaymentPreference`, que vuelve el pago a PENDING. `charged_back` mapea
- * a REJECTED, así que un contracargo sobre un pago aprobado queda bloqueado y
- * logueado (ver L4 en docs/review/04-launch.md).
+ * `createPaymentPreference`, que vuelve el pago a PENDING.
+ *
+ * CHARGED_BACK (contracargo) solo sale de APPROVED y es final: lo que MP diga
+ * después se ignora y se avisa a los admins, que lo resuelven a mano.
  */
 const ALLOWED_TRANSITIONS: Record<PaymentStatus, readonly PaymentStatus[]> = {
   PENDING: ["APPROVED", "REJECTED"],
   REJECTED: ["APPROVED"],
-  APPROVED: ["REFUNDED"],
+  APPROVED: ["REFUNDED", "CHARGED_BACK"],
   REFUNDED: [],
+  CHARGED_BACK: [],
 };
 
 /** el mismo estado cuenta como válido: el webhook se repite y es un no-op */
@@ -287,6 +295,17 @@ export async function handlePaymentNotification(input: PaymentNotificationInput)
     return { updated: false, status: payment.status };
   }
 
+  // un reclamo abierto no mueve el estado: la plata sigue cobrada mientras MP
+  // decide. Se avisa una vez, por si termina en contracargo
+  if (consulta.inMediation) {
+    await alertAdmins(`IN_MEDIATION:${payment.id}:${mpPaymentId}`, {
+      tripId: payment.cargoItem.tripId,
+      title: "reclamo abierto en Mercado Pago",
+      body: `quien pagó abrió un reclamo sobre el pago ${mpPaymentId} (pago ${payment.id}). el pago no cambia mientras MP decide; si termina en contracargo llega otro aviso.`,
+    });
+    return { updated: false, status: payment.status };
+  }
+
   if (!state) return { updated: false, status: payment.status };
 
   if (!canTransition(payment.status, state)) {
@@ -295,6 +314,7 @@ export async function handlePaymentNotification(input: PaymentNotificationInput)
     console.warn(
       `[payments] transición ignorada ${payment.status}→${state} payment=${payment.id}`
     );
+    await alertIgnoredChargeback(payment, mpPaymentId, state);
     return { updated: false, status: payment.status };
   }
 
@@ -376,6 +396,17 @@ export async function handlePaymentNotification(input: PaymentNotificationInput)
     );
   }
 
+  // Contracargo: la plata ya volvió a quien pagó (no se devuelve nada más; el
+  // outbox no devuelve un pago que no está APPROVED). Nada se mueve solo: ni la
+  // carga ni el viaje. Avisa solo el webhook que ganó el CAS.
+  if (state === "CHARGED_BACK") {
+    await alertAdmins(`CHARGED_BACK:${payment.id}:${mpPaymentId}`, {
+      tripId: payment.cargoItem.tripId,
+      title: "contracargo en Mercado Pago",
+      body: `MP informó un contracargo del pago ${mpPaymentId} (${payment.type === "DEPOSIT" ? "seña" : "saldo"} ${payment.id}, carga ${payment.cargoItemId}). el pago quedó en CHARGED_BACK y no se mueve más solo: revisalo en Mercado Pago y resolvelo a mano.`,
+    });
+  }
+
   // Solo avisa el webhook que ganó la transición a APPROVED: MP repite la
   // notificación y no puede ser motivo de tres campanas.
   if (state === "APPROVED") {
@@ -406,48 +437,31 @@ export async function handlePaymentNotification(input: PaymentNotificationInput)
 }
 
 /**
- * Aviso a los admins por plata cobrada que el sistema no pudo asentar.
- *
- * Idempotente por evento: `key` es tipo:pago:pago de MP, y MP repite el mismo
- * webhook varias veces. La clave se reserva antes de avisar (la PK de
- * PaymentAlert la hace atómica aunque dos repeticiones lleguen a la vez); si
- * ya estaba, el aviso ya salió. Si el aviso falla, la clave se libera para que
- * el próximo reintento de MP lo mande.
- *
- * Best-effort: un aviso que falla no puede tumbar el webhook (MP reintentaría
- * algo que ya se decidió). Sin datos de la empresa: solo ids.
+ * Una transición ignorada que involucra un contracargo también es plata que se
+ * movió sin que la app la asiente:
+ * - el pago ya tiene contracargo y MP informa otro estado (CHARGED_BACK es
+ *   final; p. ej. MP falló a favor del vendedor)
+ * - MP informa un contracargo de un pago que acá no estaba aprobado (se perdió
+ *   el aviso de la aprobación, o el monto no coincidía)
+ * Un aviso por evento: MP repite el webhook.
  */
-async function alertAdmins(
-  key: string,
-  aviso: { tripId: string; title: string; body: string }
+async function alertIgnoredChargeback(
+  payment: { id: string; status: PaymentStatus; cargoItem: { tripId: string } },
+  mpPaymentId: string,
+  state: PaymentStatus
 ) {
-  try {
-    await prisma.paymentAlert.create({ data: { key } });
-  } catch (err) {
-    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
-      return; // este evento ya se avisó
-    }
-    console.error("[payments] no se pudo reservar el aviso a los admins", {
-      name: err instanceof Error ? err.name : typeof err,
+  if (payment.status === "CHARGED_BACK") {
+    await alertAdmins(`CHARGED_BACK_TRANSITION:${payment.id}:${mpPaymentId}:${state}`, {
+      tripId: payment.cargoItem.tripId,
+      title: "cambio sobre un pago con contracargo",
+      body: `MP informa el pago ${mpPaymentId} como ${state} y el pago ${payment.id} tiene un contracargo. no se movió: revisalo en Mercado Pago y resolvelo a mano.`,
     });
-    return;
-  }
-
-  try {
-    const admins = await prisma.user.findMany({
-      where: { role: "ADMIN" },
-      select: { id: true },
+  } else if (state === "CHARGED_BACK") {
+    await alertAdmins(`CHARGED_BACK:${payment.id}:${mpPaymentId}`, {
+      tripId: payment.cargoItem.tripId,
+      title: "contracargo sobre un pago no acreditado",
+      body: `MP informó un contracargo del pago ${mpPaymentId} y el pago ${payment.id} figuraba ${payment.status}. no se movió: revisalo en Mercado Pago y resolvelo a mano.`,
     });
-    if (admins.length === 0) return;
-    await notifyUsers(
-      admins.map((a) => a.id),
-      { type: "PAYMENT_ALERT", ...aviso }
-    );
-  } catch (err) {
-    console.error("[payments] falló el aviso a los admins", {
-      name: err instanceof Error ? err.name : typeof err,
-    });
-    await prisma.paymentAlert.delete({ where: { key } }).catch(() => {});
   }
 }
 

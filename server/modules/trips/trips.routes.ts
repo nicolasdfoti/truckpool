@@ -4,6 +4,7 @@ import { validateBody, validateQuery } from "../../lib/validate.js";
 import * as tripsController from "./trips.controller.js";
 import {
   cancellationQuoteQuerySchema,
+  cargoQuoteQuerySchema,
   createCargoItemSchema,
   createMessageSchema,
   createReviewSchema,
@@ -35,6 +36,12 @@ tripsRouter.get(
   "/cancellation-quote",
   validateQuery(cancellationQuoteQuerySchema),
   tripsController.getCancellationQuote
+);
+// cotización de una carga por volumen, antes de reservar (pública)
+tripsRouter.get(
+  "/:id/cargo-quote",
+  validateQuery(cargoQuoteQuerySchema),
+  tripsController.getCargoQuote
 );
 tripsRouter.get("/:id/manifest.pdf", requireAuth, tripsController.getTripManifestPdf);
 tripsRouter.get(
@@ -71,6 +78,13 @@ tripsRouter.patch(
   requireRole("CARRIER"),
   validateBody(updateTripStatusSchema),
   tripsController.patchTripStatus
+);
+// U21: la cotización del retiro de una carga, con lo que la empresa pagó
+tripsRouter.get(
+  "/:tripId/cargo-items/:cargoItemId/cancellation-quote",
+  requireAuth,
+  requireRole("COMPANY"),
+  tripsController.getCargoCancellationQuote
 );
 tripsRouter.delete(
   "/:tripId/cargo-items/:cargoItemId",

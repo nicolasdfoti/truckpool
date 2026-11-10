@@ -7,7 +7,9 @@ export type NotificationType =
   | "TRIP_STATUS_CHANGED"
   | "PAYMENT_APPROVED"
   | "BALANCE_DUE"
-  | "PAYMENT_ALERT";
+  | "PAYMENT_ALERT"
+  // la parada de la empresa cambió de lugar con el viaje en camino (D2)
+  | "STOPS_REORDERED";
 
 export type Notification = {
   id: string;

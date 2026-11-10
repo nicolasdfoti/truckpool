@@ -3,29 +3,64 @@
  * tiene una copia (client/src/lib/cancellation.ts) solo para mostrar la
  * estimación antes de confirmar, y nunca decide el resultado real.
  *
- * Todo se mide contra la fecha del viaje, no contra cuándo se creó la carga:
+ * Todo se mide contra la salida del viaje, no contra cuándo se creó la carga:
  * lo que importa al transportista es cuánto le falta para salir.
  */
+import { argentinaTimeOnDay } from "./dates.js";
+
 export const FULL_REFUND_HOURS = 48;
 export const PARTIAL_REFUND_HOURS = 24;
 /** entre 24 y 48 horas se devuelve la mitad de la seña */
 export const PARTIAL_REFUND_RATIO = 0.5;
 
-export type CancellationWindow = "FULL_REFUND" | "PARTIAL_REFUND" | "NO_REFUND";
+/**
+ * CLOSED: el viaje ya salió (o sale en este minuto) y la carga no se puede
+ * retirar. Si el fletero no sale, D6 cancela el viaje y devuelve la seña
+ * entera: retirar tarde haría perderla.
+ */
+export type CancellationWindow =
+  "FULL_REFUND" | "PARTIAL_REFUND" | "NO_REFUND" | "CLOSED";
 
 export function hoursUntilTrip(tripDate: Date | string, now: Date = new Date()): number {
   return (new Date(tripDate).getTime() - now.getTime()) / 3_600_000;
 }
 
 /**
+ * Hora de salida de los viajes publicados antes de que fuera obligatoria: el
+ * final del día, para no acortarle a la empresa el plazo que tenía.
+ */
+export const DEFAULT_DEPARTURE_TIME = "23:59";
+
+/**
+ * La salida que ve la empresa: el día calendario argentino de `Trip.date` (que
+ * guarda el mediodía del navegador del fletero, no la salida) a la hora de
+ * `departureTime`, en hora argentina. Sin hora, las 23:59 de ese día.
+ */
+export function departureInstant(
+  tripDate: Date | string,
+  departureTime: string | null | undefined
+): Date {
+  return argentinaTimeOnDay(new Date(tripDate), departureTime ?? DEFAULT_DEPARTURE_TIME);
+}
+
+/** horas que faltan para la salida del viaje (negativas si ya pasó) */
+export function hoursUntilDeparture(
+  trip: { date: Date | string; departureTime: string | null | undefined },
+  now: Date = new Date()
+): number {
+  return hoursUntilTrip(departureInstant(trip.date, trip.departureTime), now);
+}
+
+/**
  * > 48h: se devuelve toda la seña.
  * 24-48h: se devuelve la mitad.
  * < 24h: no se devuelve nada, la seña queda como costo de cancelación.
+ * Desde la salida no hay ventana: el retiro está cerrado (ver quoteCancellation).
  *
  * Los bordes caen en la ventana más estricta a propósito: justo en 48h todavía
  * hay margen de gestión, justo en 24h ya no.
  */
-export function cancellationWindow(hours: number): CancellationWindow {
+export function cancellationWindow(hours: number): Exclude<CancellationWindow, "CLOSED"> {
   if (hours > FULL_REFUND_HOURS) return "FULL_REFUND";
   if (hours >= PARTIAL_REFUND_HOURS) return "PARTIAL_REFUND";
   return "NO_REFUND";
@@ -33,6 +68,8 @@ export function cancellationWindow(hours: number): CancellationWindow {
 
 export type CancellationQuote = {
   window: CancellationWindow;
+  /** false desde la hora de salida: el retiro responde 409 TRIP_ALREADY_STARTED */
+  cancellable: boolean;
   /** cuánto se devuelve de la seña */
   refundAmount: number;
   /** cuánto se queda la plataforma (fee) */
@@ -44,15 +81,23 @@ export function quoteCancellation(
   depositAmount: number,
   hours: number
 ): CancellationQuote {
+  if (hours <= 0) {
+    return { window: "CLOSED", cancellable: false, refundAmount: 0, feeAmount: 0 };
+  }
   const window = cancellationWindow(hours);
   if (window === "FULL_REFUND") {
-    return { window, refundAmount: depositAmount, feeAmount: 0 };
+    return { window, cancellable: true, refundAmount: depositAmount, feeAmount: 0 };
   }
   if (window === "PARTIAL_REFUND") {
     const refundAmount = round2(depositAmount * PARTIAL_REFUND_RATIO);
-    return { window, refundAmount, feeAmount: round2(depositAmount - refundAmount) };
+    return {
+      window,
+      cancellable: true,
+      refundAmount,
+      feeAmount: round2(depositAmount - refundAmount),
+    };
   }
-  return { window, refundAmount: 0, feeAmount: depositAmount };
+  return { window, cancellable: true, refundAmount: 0, feeAmount: depositAmount };
 }
 
 function round2(value: number): number {

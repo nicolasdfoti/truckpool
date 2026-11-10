@@ -7,6 +7,7 @@ export type AdminStats = {
     FULL: number;
     IN_TRANSIT: number;
     COMPLETED: number;
+    CANCELLED: number;
   };
   totalTrips: number;
   volumeTransported: number;

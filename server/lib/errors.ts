@@ -27,6 +27,16 @@ export class TripNotOpenError extends AppError {
   }
 }
 
+/**
+ * U15: una empresa no puede acaparar lugar con reservas que no paga. Hay un
+ * tope en total y otro por viaje; el código es el mismo y el mensaje dice cuál.
+ */
+export class TooManyPendingError extends AppError {
+  constructor(message: string) {
+    super(message, 409, "TOO_MANY_PENDING");
+  }
+}
+
 export class InvalidTransitionError extends AppError {
   constructor() {
     super(
@@ -43,15 +53,20 @@ export class CargoItemNotFoundError extends AppError {
   }
 }
 
+/**
+ * Retirar una carga ya retirada. Una CONFIRMED se puede retirar hasta la salida
+ * (D4), así que `CARGO_ITEM_CONFIRMED` ya no sale del retiro.
+ */
 export class CargoItemNotCancellableError extends AppError {
-  constructor(status: "CONFIRMED" | "CANCELLED") {
-    super(
-      status === "CONFIRMED"
-        ? "esta carga ya está confirmada, no se puede retirar"
-        : "esta carga ya la habías retirado",
-      409,
-      status === "CONFIRMED" ? "CARGO_ITEM_CONFIRMED" : "CARGO_ITEM_CANCELLED"
-    );
+  constructor() {
+    super("esta carga ya la habías retirado", 409, "CARGO_ITEM_CANCELLED");
+  }
+}
+
+/** confirmar una carga que la empresa ya retiró */
+export class CargoItemCancelledError extends AppError {
+  constructor() {
+    super("esta carga fue retirada, no se puede confirmar", 409, "CARGO_ITEM_CANCELLED");
   }
 }
 
@@ -169,12 +184,10 @@ export class PaymentRequiredError extends AppError {
  * vuelve a intentar en unos segundos.
  */
 export class PaymentInFlightError extends AppError {
-  constructor() {
-    super(
-      "la seña se está acreditando en este momento: probá retirar la carga de nuevo en unos segundos",
-      409,
-      "PAYMENT_IN_FLIGHT"
-    );
+  constructor(
+    message = "la seña se está acreditando en este momento: probá retirar la carga de nuevo en unos segundos"
+  ) {
+    super(message, 409, "PAYMENT_IN_FLIGHT");
   }
 }
 
@@ -196,6 +209,33 @@ export class BalancePendingError extends AppError {
   }
 }
 
+/** un pago con contracargo no se vuelve a cobrar: lo resuelve un admin */
+export class PaymentChargedBackError extends AppError {
+  constructor() {
+    super(
+      "ese pago tiene un contracargo en Mercado Pago: lo resuelve un admin",
+      409,
+      "PAYMENT_CHARGED_BACK"
+    );
+  }
+}
+
+/**
+ * Un saldo con contracargo no es un saldo "por pagar" (no se puede volver a
+ * cobrar): el viaje no se completa hasta que un admin lo resuelva.
+ */
+export class BalanceChargedBackError extends AppError {
+  constructor(count: number) {
+    super(
+      count === 1
+        ? "el saldo de 1 carga tiene un contracargo: lo resuelve un admin antes de completar el viaje"
+        : `los saldos de ${count} cargas tienen un contracargo: lo resuelve un admin antes de completar el viaje`,
+      409,
+      "BALANCE_CHARGED_BACK"
+    );
+  }
+}
+
 export class NothingToPayError extends AppError {
   constructor() {
     super("ese pago ya está abonado", 409, "PAYMENT_ALREADY_SETTLED");
@@ -209,5 +249,21 @@ export class BalanceNotDueError extends AppError {
       409,
       "BALANCE_NOT_DUE"
     );
+  }
+}
+
+/**
+ * Un pedido a Mercado Pago falló. Sale como `MP_ERROR` (el código estable que ve
+ * el cliente) y además lleva `mpCode`: el status HTTP y la causa que informó MP
+ * (p. ej. "400:2063"), ya limpios. Es lo que el outbox de reembolsos guarda en
+ * `lastError`; el mensaje crudo de MP no se guarda ni se loguea porque puede
+ * traer datos del pedido.
+ */
+export class MpApiError extends AppError {
+  constructor(
+    message: string,
+    public readonly mpCode: string | null
+  ) {
+    super(message, 502, "MP_ERROR");
   }
 }

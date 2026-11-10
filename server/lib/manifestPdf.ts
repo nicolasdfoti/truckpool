@@ -31,7 +31,7 @@ export type ManifestTrip = {
   truckType: string;
   capacityTotal: number;
   price: number;
-  status: "OPEN" | "FULL" | "IN_TRANSIT" | "COMPLETED";
+  status: "OPEN" | "FULL" | "IN_TRANSIT" | "COMPLETED" | "CANCELLED";
   carrierName: string;
   cargoItems: {
     description: string;
@@ -46,6 +46,7 @@ const STATUS_LABELS: Record<ManifestTrip["status"], string> = {
   FULL: "completo",
   IN_TRANSIT: "en viaje",
   COMPLETED: "completado",
+  CANCELLED: "cancelado",
 };
 
 /** código corto y estable derivado del id del viaje: TP-A1B2C3 */

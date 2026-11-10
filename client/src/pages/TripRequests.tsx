@@ -69,10 +69,11 @@ function RespondForm({
         setFormError("la seña va entre 10% y 50%.");
         return;
       }
-      if (
-        tripDetails.departureTime &&
-        !/^([01]\d|2[0-3]):[0-5]\d$/.test(tripDetails.departureTime)
-      ) {
+      if (!tripDetails.departureTime) {
+        setFormError("ingresá la hora de salida.");
+        return;
+      }
+      if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(tripDetails.departureTime)) {
         setFormError("la hora de salida tiene que tener formato HH:mm.");
         return;
       }
@@ -91,7 +92,7 @@ function RespondForm({
                 price: Number(tripDetails.price),
                 depositPercent: Number(tripDetails.depositPercent),
                 features: tripDetails.features,
-                departureTime: tripDetails.departureTime || null,
+                departureTime: tripDetails.departureTime,
               }
             : undefined,
         },
@@ -188,9 +189,12 @@ function RespondForm({
               onChange={(e) =>
                 setTripDetails({ ...tripDetails, departureTime: e.target.value })
               }
+              required
               className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm outline-none placeholder:text-ink-muted focus:border-brand"
             />
-            <p className="mt-1 text-xs text-ink-muted">opcional</p>
+            <p className="mt-1 text-xs text-ink-muted">
+              los plazos para retirar una carga se cuentan desde esta hora.
+            </p>
           </div>
         </div>
 

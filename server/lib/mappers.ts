@@ -1,5 +1,7 @@
+import { Prisma } from "@prisma/client";
 import type { CargoItem, CargoItemStatus, Payment, Trip } from "@prisma/client";
 import { isTripDateAvailable } from "./dates.js";
+import type { CargoPrice } from "./pricing.js";
 
 /**
  * Una carga retirada (CANCELLED) queda en el historial pero no cuenta: ni para
@@ -30,6 +32,25 @@ export type TripWithCargo = Trip & {
  */
 export function tripAcceptsCargo(trip: { status: Trip["status"]; date: Date }) {
   return trip.status === "OPEN" && isTripDateAvailable(trip.date);
+}
+
+/**
+ * Filtro de Prisma para el fletero que puede cobrar: con cuenta de Mercado Pago
+ * conectada y su token (lo mismo que exige `resolveCarrierMpToken`). Un viaje de
+ * un fletero sin MP no se lista ni se reserva: la empresa recién se enteraba al
+ * pagar la seña, con el lugar tomado 24 h (03/Pagar seña#1).
+ */
+export const CARRIER_CAN_CHARGE = {
+  mpUserId: { not: null },
+  mpAccessToken: { not: null },
+} satisfies Prisma.UserWhereInput;
+
+/** el mismo chequeo en memoria (vacío o ausente también es no conectado) */
+export function carrierCanCharge(carrier: {
+  mpUserId?: string | null;
+  mpAccessToken?: string | null;
+}): boolean {
+  return Boolean(carrier.mpUserId && carrier.mpAccessToken);
 }
 
 export function toTripSummary(trip: TripWithCargo) {
@@ -73,6 +94,48 @@ export type CargoItemWithPayments = CargoItem & {
   company?: { name: string } | null;
 };
 
+/**
+ * D7 (c): el reparto neto de un pago, después de lo devuelto. La comisión es
+ * solo sobre lo efectivamente cobrado, y MP devuelve la comisión en proporción
+ * a lo reembolsado (verificado con pago real, ver D7 en docs/review/04-launch.md).
+ * Se deriva acá y no se guarda: `platformFeeAmount` y `carrierAmount` siguen
+ * siendo lo pactado en la preference.
+ *
+ * - comisión neta = comisión × (cobrado − devuelto) / cobrado, a centavos
+ * - neto del fletero = lo que quedó cobrado − comisión neta (suman lo cobrado)
+ * - REFUNDED sin `refundedAmount` asentado cuenta como devuelto entero
+ * - CHARGED_BACK: null, porque no sabemos qué hace MP con la comisión
+ * - sin reparto asentado: null
+ *
+ * El redondeo de MP no está verificado: puede diferir en un centavo del suyo.
+ * Antes de facturar la comisión esto pasa a (b) o (d) (ver D7 en L4).
+ */
+function netSplit(payment: Payment): {
+  netPlatformFeeAmount: number | null;
+  netCarrierAmount: number | null;
+} {
+  const none = { netPlatformFeeAmount: null, netCarrierAmount: null };
+  // `== null`: también cubre un pago armado sin esos campos (en la base son null)
+  if (payment.platformFeeAmount == null || payment.carrierAmount == null) return none;
+  if (payment.status === "CHARGED_BACK") return none;
+
+  const amount = new Prisma.Decimal(payment.amount);
+  if (amount.lte(0)) return none;
+  const refunded =
+    payment.status === "REFUNDED" && payment.refundedAmount === null
+      ? amount
+      : new Prisma.Decimal(payment.refundedAmount ?? 0);
+  const kept = Prisma.Decimal.max(amount.minus(refunded), 0);
+  const fee = new Prisma.Decimal(payment.platformFeeAmount)
+    .times(kept)
+    .dividedBy(amount)
+    .toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
+  return {
+    netPlatformFeeAmount: fee.toNumber(),
+    netCarrierAmount: kept.minus(fee).toNumber(),
+  };
+}
+
 function toPaymentResponse(payment: Payment) {
   return {
     id: payment.id,
@@ -87,6 +150,8 @@ function toPaymentResponse(payment: Payment) {
     platformFeeAmount:
       payment.platformFeeAmount === null ? null : Number(payment.platformFeeAmount),
     carrierAmount: payment.carrierAmount === null ? null : Number(payment.carrierAmount),
+    // lo mismo después de lo devuelto (D7 c, ver netSplit)
+    ...netSplit(payment),
   };
 }
 
@@ -112,5 +177,19 @@ export function toCargoItemResponse(item: CargoItemWithPayments) {
     pickupLng: item.pickupLng,
     trackingCode: item.trackingCode,
     stopOrder: item.stopOrder,
+  };
+}
+
+/** cotización de una carga antes de reservar: los montos de `cargoPrice` en pesos */
+export function toCargoQuoteResponse(
+  quote: CargoPrice,
+  input: { volume: number; depositPercent: number }
+) {
+  return {
+    volume: input.volume,
+    depositPercent: input.depositPercent,
+    priceShare: Number(quote.priceShare),
+    depositAmount: Number(quote.depositAmount),
+    balanceAmount: Number(quote.balanceAmount),
   };
 }

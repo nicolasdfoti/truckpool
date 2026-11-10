@@ -12,7 +12,9 @@ import { geocode } from "../lib/geocode.js";
 import { createTrip } from "../modules/trips/trips.service.js";
 import { calculateSuggestedPrice } from "../lib/pricing.js";
 import { AppError } from "../lib/errors.js";
-import { quoteCancellation, hoursUntilTrip } from "../lib/cancellation.js";
+import { quoteCancellation, hoursUntilDeparture } from "../lib/cancellation.js";
+import { salidaEn } from "./helpers/salida.js";
+import { CARRIER_CAN_CHARGE } from "../lib/mappers.js";
 
 // el token del transportista llega a la base cifrado (ver OAuth), así que los
 // mocks usan un sobre real y no un string suelto
@@ -101,6 +103,7 @@ vi.mock("../lib/prisma", () => ({
       create: vi.fn(),
       update: vi.fn(),
     },
+    paymentAlert: { create: vi.fn(), delete: vi.fn() },
     $transaction: vi.fn(),
   },
 }));
@@ -180,6 +183,7 @@ describe("POST /api/trips", () => {
     origin: "Córdoba",
     destination: "Rosario",
     date: "2026-10-01T10:00:00.000Z",
+    departureTime: "08:00",
     truckType: "Semi",
     capacityTotal: 30,
     price: 1500,
@@ -254,38 +258,32 @@ describe("POST /api/trips", () => {
     expect(res.body.departureTime).toBe("06:30");
   });
 
-  it("publica sin hora de salida cuando el fletero no la carga (201)", async () => {
-    const createdTrip = {
-      id: "t-sin-hora",
-      origin: "Córdoba",
-      destination: "Rosario",
-      date: new Date("2026-10-01T10:00:00.000Z"),
-      departureTime: null,
-      truckType: "Semi",
-      capacityTotal: 30,
-      price: new Prisma.Decimal("1500"),
-      status: "OPEN",
-      createdAt: new Date(),
-      carrierId: "u1",
-      features: [],
-      cargoItems: [],
-    } as unknown as Trip;
-    vi.mocked(prisma.trip.create).mockResolvedValue(createdTrip);
+  // U11: la ventana de retiro se mide contra la salida, así que un viaje nuevo
+  // no se publica sin hora (los viejos sin hora salen a las 23:59 ART)
+  it("rechaza un viaje sin hora de salida (400)", async () => {
+    vi.mocked(prisma.trip.create).mockClear();
+    const { departureTime: _sinHora, ...sinHora } = validBody;
+    for (const body of [sinHora, { ...validBody, departureTime: null }]) {
+      const res = await request(app)
+        .post("/api/trips")
+        .set("Authorization", `Bearer ${carrierToken}`)
+        .send(body);
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe("VALIDATION_ERROR");
+    }
+    expect(prisma.trip.create).not.toHaveBeenCalled();
+  });
 
+  it("rechaza aceptar una solicitud de viaje sin hora de salida (400)", async () => {
     const res = await request(app)
-      .post("/api/trips")
+      .patch("/api/users/trip-requests/r1/respond")
       .set("Authorization", `Bearer ${carrierToken}`)
-      .send(validBody);
-
-    expect(res.status).toBe(201);
-    // null y no "" ni undefined: la columna es nullable y el cliente decide
-    // si mostrar la hora o no
-    expect(prisma.trip.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({ departureTime: null }),
-      })
-    );
-    expect(res.body.departureTime).toBeNull();
+      .send({
+        accept: true,
+        tripDetails: { truckType: "Semi", capacityTotal: 30, price: 250_000 },
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("VALIDATION_ERROR");
   });
 
   it("rechaza features fuera del set permitido (400)", async () => {
@@ -377,6 +375,7 @@ describe("GET /api/trips con filtros", () => {
       expect.objectContaining({
         where: {
           status: "OPEN",
+          carrier: CARRIER_CAN_CHARGE,
           origin: { contains: "rosario", mode: "insensitive" },
           features: { hasEvery: ["seguro", "expreso"] },
           date: { gt: expect.any(Date) },
@@ -393,7 +392,7 @@ describe("GET /api/trips con filtros", () => {
     expect(res.status).toBe(200);
     expect(prisma.trip.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { status: "OPEN", date: { gt: expect.any(Date) } },
+        where: { status: "OPEN", carrier: CARRIER_CAN_CHARGE, date: { gt: expect.any(Date) } },
       })
     );
   });
@@ -406,7 +405,7 @@ describe("GET /api/trips con filtros", () => {
     expect(res.status).toBe(200);
     expect(prisma.trip.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { status: "OPEN", date: { gt: expect.any(Date) } },
+        where: { status: "OPEN", carrier: CARRIER_CAN_CHARGE, date: { gt: expect.any(Date) } },
       })
     );
   });
@@ -423,6 +422,7 @@ describe("GET /api/trips con filtros", () => {
       expect.objectContaining({
         where: {
           status: "OPEN",
+          carrier: CARRIER_CAN_CHARGE,
           date: {
             gt: expect.any(Date),
             gte: new Date("2026-10-01T00:00:00.000Z"),
@@ -463,7 +463,7 @@ describe("POST /api/trips/:id/cargo-items y la fecha del viaje", () => {
       status: "OPEN",
       createdAt: new Date(),
       carrierId: "u1",
-      carrier: { id: "u1", name: "Flete" },
+      carrier: { id: "u1", name: "Flete", mpUserId: "mp-u1", mpAccessToken: MP_TOKEN_STORED },
       features: [],
       cargoItems: [],
       originLat: null,
@@ -474,13 +474,16 @@ describe("POST /api/trips/:id/cargo-items y la fecha del viaje", () => {
   }
 
   /** La transacción de addCargoItem, con el viaje que cada test necesita. */
-  function mockTx(trip: unknown) {
+  function mockTx(trip: unknown, pendientes: { tripId: string }[] = []) {
     const tx = {
       trip: {
         findUnique: vi.fn().mockResolvedValue(trip),
         update: vi.fn().mockResolvedValue(undefined),
       },
-      cargoItem: { create: vi.fn().mockResolvedValue({ id: "i1" }) },
+      cargoItem: {
+        create: vi.fn().mockResolvedValue({ id: "i1" }),
+        findMany: vi.fn().mockResolvedValue(pendientes),
+      },
       payment: { create: vi.fn().mockResolvedValue({ id: "p1" }) },
       user: {
         findUnique: vi.fn().mockResolvedValue({
@@ -538,6 +541,34 @@ describe("POST /api/trips/:id/cargo-items y la fecha del viaje", () => {
     expect(res.status).toBe(201);
     expect(tx.cargoItem.create).toHaveBeenCalled();
   });
+
+  it("409 TOO_MANY_PENDING con 3 reservas sin seña", async () => {
+    const tx = mockTx(viajeAbierto(new Date(Date.now() + 2 * 24 * 60 * 60 * 1000)), [
+      { tripId: "t2" },
+      { tripId: "t3" },
+      { tripId: "t4" },
+    ]);
+
+    const res = await agregar();
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("TOO_MANY_PENDING");
+    expect(tx.cargoItem.create).not.toHaveBeenCalled();
+  });
+
+  it("409 MP_ACCOUNT_NOT_CONNECTED si el fletero del viaje no tiene MP conectado", async () => {
+    const viaje = viajeAbierto(new Date(Date.now() + 2 * 24 * 60 * 60 * 1000));
+    const tx = mockTx({
+      ...viaje,
+      carrier: { ...viaje.carrier, mpUserId: null, mpAccessToken: null },
+    });
+
+    const res = await agregar();
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("MP_ACCOUNT_NOT_CONNECTED");
+    expect(tx.cargoItem.create).not.toHaveBeenCalled();
+  });
 });
 
 function signedWebhook(dataId: string, secret: string, requestId = "req-1") {
@@ -567,6 +598,7 @@ describe("DELETE /api/trips/:tripId/cargo-items/:id", () => {
   const openTrip = {
     id: "t1",
     status: "OPEN",
+    ...salidaEn(72),
     capacityTotal: 30,
     cargoItems: [cargoItem],
     platformFeePercent: 10,
@@ -637,15 +669,26 @@ describe("DELETE /api/trips/:tripId/cargo-items/:id", () => {
     expect(res.body).toMatchObject({ id: "i1", status: "CANCELLED" });
   });
 
-  it("rechaza una carga ya confirmada (409)", async () => {
+  it("retira una carga ya confirmada antes de la salida (D4, 200)", async () => {
     mockTx({ ...cargoItem, status: "CONFIRMED" });
 
     const res = await request(app)
       .delete("/api/trips/t1/cargo-items/i1")
       .set("Authorization", `Bearer ${companyToken}`);
 
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: "i1", status: "CANCELLED" });
+  });
+
+  it("rechaza retirar una carga ya retirada (409)", async () => {
+    mockTx({ ...cargoItem, status: "CANCELLED" });
+
+    const res = await request(app)
+      .delete("/api/trips/t1/cargo-items/i1")
+      .set("Authorization", `Bearer ${companyToken}`);
+
     expect(res.status).toBe(409);
-    expect(res.body.code).toBe("CARGO_ITEM_CONFIRMED");
+    expect(res.body.code).toBe("CARGO_ITEM_CANCELLED");
   });
 
   it("rechaza retirar carga con el viaje en tránsito (409)", async () => {
@@ -722,7 +765,7 @@ describe("DELETE /api/trips/:tripId/cargo-items/:id", () => {
     };
     const tx = mockTx(paid, {
       ...openTrip,
-      date: new Date(Date.now() + 10 * 3_600_000),
+      ...salidaEn(10),
     });
 
     const res = await request(app)
@@ -1059,6 +1102,7 @@ describe("POST /api/payments/webhook", () => {
     vi.mocked(prisma.payment.findFirst).mockResolvedValue(pagoLocal() as never);
     vi.mocked(mp.fetchPaymentState).mockResolvedValue({
       state: "PENDING",
+      inMediation: false,
       externalReference: "pay1",
       amount: 500,
       currencyId: "ARS",
@@ -1086,6 +1130,7 @@ describe("POST /api/payments/webhook", () => {
   it("actualiza el status a APPROVED con la firma válida (200)", async () => {
     vi.mocked(mp.fetchPaymentState).mockResolvedValue({
       state: "APPROVED",
+      inMediation: false,
       externalReference: "pay1",
       amount: 500,
       currencyId: "ARS",
@@ -1126,6 +1171,45 @@ describe("POST /api/payments/webhook", () => {
     expect(prisma.payment.updateMany).toHaveBeenCalledWith({
       where: { id: "pay1", status: "PENDING" },
       data: { status: "APPROVED", mpPaymentId: "mp-77" },
+    });
+  });
+
+  it("charged_back sobre un pago aprobado: CHARGED_BACK y aviso a los admins (200)", async () => {
+    // el body es el mismo payment.updated de siempre: el contracargo solo se
+    // ve al consultar el pago en MP
+    vi.mocked(prisma.payment.findFirst).mockResolvedValue({
+      ...pagoLocal(),
+      status: "APPROVED",
+      mpPaymentId: "mp-77",
+    } as never);
+    vi.mocked(mp.fetchPaymentState).mockResolvedValue({
+      state: "CHARGED_BACK",
+      inMediation: false,
+      externalReference: "pay1",
+      amount: 500,
+      currencyId: "ARS",
+    });
+    vi.mocked(prisma.payment.updateMany).mockResolvedValue({ count: 1 } as never);
+    vi.mocked(prisma.paymentAlert.create).mockResolvedValue({} as never);
+    vi.mocked(prisma.user.findMany).mockResolvedValue([{ id: "admin1" }] as never);
+
+    const res = await request(app)
+      .post("/api/payments/webhook?payment_id=pay1&data.id=mp-77&type=payment")
+      .set(signedWebhook("mp-77", secret))
+      .send(payload);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      received: true,
+      updated: true,
+      status: "CHARGED_BACK",
+    });
+    expect(prisma.payment.updateMany).toHaveBeenCalledWith({
+      where: { id: "pay1", status: "APPROVED", mpPaymentId: "mp-77" },
+      data: { status: "CHARGED_BACK", mpPaymentId: "mp-77" },
+    });
+    expect(prisma.paymentAlert.create).toHaveBeenCalledWith({
+      data: { key: "CHARGED_BACK:pay1:mp-77" },
     });
   });
 
@@ -1192,6 +1276,7 @@ describe("POST /api/payments/webhook", () => {
     vi.mocked(prisma.payment.findFirst).mockResolvedValue(pagoLocal() as never);
     vi.mocked(mp.fetchPaymentState).mockResolvedValue({
       state: "PENDING",
+      inMediation: false,
       externalReference: "pay1",
       amount: 500,
       currencyId: "ARS",
@@ -1401,6 +1486,64 @@ describe("transiciones y confirmación de carga", () => {
       .patch("/api/trips/t1/status")
       .send({ status: "IN_TRANSIT" });
     expect(res.status).toBe(401);
+  });
+
+  describe("PATCH /:id/status a CANCELLED (D6)", () => {
+    const viajeAbierto = {
+      id: "t1",
+      origin: "Córdoba",
+      destination: "Rosario",
+      date: new Date("2026-11-20T15:00:00.000Z"),
+      departureTime: "08:00",
+      truckType: "Semi",
+      capacityTotal: 30,
+      price: new Prisma.Decimal("1500.00"),
+      depositPercent: 20,
+      status: "OPEN",
+      carrierId: "u1",
+      features: [],
+      cargoItems: [],
+      carrier: { name: "Transportes Flete" },
+    };
+
+    beforeEach(() => {
+      const tx = {
+        trip: {
+          findUnique: vi.fn().mockResolvedValue(viajeAbierto),
+          update: vi.fn().mockImplementation(({ data }: { data: object }) => ({
+            ...viajeAbierto,
+            ...data,
+          })),
+        },
+      };
+      vi.mocked(prisma.$transaction).mockImplementation(
+        (fn: unknown) => (fn as (c: unknown) => unknown)(tx) as never
+      );
+      vi.mocked(prisma.cargoItem.findMany).mockResolvedValue([]);
+    });
+
+    it("el transportista dueño cancela su viaje OPEN (200)", async () => {
+      const res = await request(app)
+        .patch("/api/trips/t1/status")
+        .set("Authorization", `Bearer ${carrierToken}`)
+        .send({ status: "CANCELLED" });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({
+        id: "t1",
+        status: "CANCELLED",
+        acceptsCargo: false,
+      });
+    });
+
+    it("una empresa no puede cancelar un viaje (403)", async () => {
+      const res = await request(app)
+        .patch("/api/trips/t1/status")
+        .set("Authorization", `Bearer ${companyToken}`)
+        .send({ status: "CANCELLED" });
+
+      expect(res.status).toBe(403);
+    });
   });
 
   it("PATCH cargo-items/:id requiere token (401)", async () => {
@@ -2252,7 +2395,7 @@ describe("GET /api/admin/stats", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.stats).toMatchObject({
-      tripsByStatus: { OPEN: 2, FULL: 0, IN_TRANSIT: 0, COMPLETED: 1 },
+      tripsByStatus: { OPEN: 2, FULL: 0, IN_TRANSIT: 0, COMPLETED: 1, CANCELLED: 0 },
       totalTrips: 3,
       volumeTransported: 10.5,
       billedAmount: 1200.5,
@@ -2435,6 +2578,50 @@ describe("GET /api/trips/geocode", () => {
   });
 });
 
+describe("GET /api/trips/:id/cargo-quote", () => {
+  beforeEach(() => {
+    vi.mocked(prisma.trip.findUnique).mockReset();
+  });
+
+  it("es pública y cotiza precio, seña y saldo de la carga por volumen", async () => {
+    vi.mocked(prisma.trip.findUnique).mockResolvedValue({
+      price: new Prisma.Decimal("1500.00"),
+      capacityTotal: 30,
+      depositPercent: 20,
+    } as never);
+
+    const res = await request(app).get("/api/trips/t1/cargo-quote?volume=10");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      volume: 10,
+      depositPercent: 20,
+      priceShare: 500,
+      depositAmount: 100,
+      balanceAmount: 400,
+    });
+  });
+
+  it("400 si el volumen no es un número positivo", async () => {
+    for (const volume of ["0", "-3", "abc"]) {
+      const res = await request(app).get(`/api/trips/t1/cargo-quote?volume=${volume}`);
+      expect(res.status).toBe(400);
+    }
+    const sinVolumen = await request(app).get("/api/trips/t1/cargo-quote");
+    expect(sinVolumen.status).toBe(400);
+    expect(prisma.trip.findUnique).not.toHaveBeenCalled();
+  });
+
+  it("404 TRIP_NOT_FOUND si el viaje no existe", async () => {
+    vi.mocked(prisma.trip.findUnique).mockResolvedValue(null);
+
+    const res = await request(app).get("/api/trips/nope/cargo-quote?volume=5");
+
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe("TRIP_NOT_FOUND");
+  });
+});
+
 describe("GET /api/trips/price-estimate", () => {
   const rosario = { lat: -32.9442, lng: -60.6505 };
   const cordoba = { lat: -31.4201, lng: -64.1888 };
@@ -2511,6 +2698,7 @@ describe("GET /api/trips/price-estimate", () => {
           origin: "Rosario",
           destination: "Córdoba",
           date: new Date("2026-11-01T10:00:00.000Z"),
+          departureTime: "08:00",
           truckType: "Semi",
           capacityTotal: 20,
           price,
@@ -3051,13 +3239,88 @@ describe("logout con revocación real", () => {
   });
 });
 
+describe("GET /api/trips/:tripId/cargo-items/:cargoItemId/cancellation-quote (U21)", () => {
+  const url = "/api/trips/t1/cargo-items/i1/cancellation-quote";
+
+  beforeEach(() => {
+    vi.mocked(prisma.cargoItem.findUnique).mockReset();
+    vi.mocked(prisma.trip.findUnique).mockReset();
+  });
+
+  it("401 sin sesión", async () => {
+    const res = await request(app).get(url);
+    expect(res.status).toBe(401);
+  });
+
+  it("403 para un fletero: es la cotización de la empresa", async () => {
+    const res = await request(app).get(url).set("Authorization", `Bearer ${carrierToken}`);
+    expect(res.status).toBe(403);
+  });
+
+  it("seña sin pagar → $ 0 para la empresa dueña", async () => {
+    const { date, departureTime } = salidaEn(10);
+    vi.mocked(prisma.cargoItem.findUnique).mockResolvedValue({
+      id: "i1",
+      tripId: "t1",
+      companyId: "u2",
+      status: "PENDING",
+      depositAmount: new Prisma.Decimal("100.00"),
+      payments: [{ type: "DEPOSIT", status: "PENDING", mpPaymentId: null }],
+    } as never);
+    vi.mocked(prisma.trip.findUnique).mockResolvedValue({
+      status: "OPEN",
+      date,
+      departureTime,
+    } as never);
+
+    const res = await request(app).get(url).set("Authorization", `Bearer ${companyToken}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      window: "NO_REFUND",
+      cancellable: true,
+      refundAmount: 0,
+      feeAmount: 0,
+    });
+  });
+
+  it("403 FORBIDDEN para otra empresa", async () => {
+    vi.mocked(prisma.cargoItem.findUnique).mockResolvedValue({
+      id: "i1",
+      tripId: "t1",
+      companyId: "u2",
+      status: "PENDING",
+      depositAmount: new Prisma.Decimal("100.00"),
+      payments: [],
+    } as never);
+
+    const res = await request(app).get(url).set("Authorization", `Bearer ${strangerToken}`);
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("FORBIDDEN");
+  });
+});
+
 describe("GET /api/trips/cancellation-quote", () => {
-  /** fecha del viaje a X horas desde ahora, para cruzar cada ventana */
-  const inHours = (h: number) => new Date(Date.now() + h * 3_600_000).toISOString();
-  const ask = (depositAmount: number, tripDate: string) =>
-    request(app).get(
-      `/api/trips/cancellation-quote?depositAmount=${depositAmount}&tripDate=${encodeURIComponent(tripDate)}`
+  /**
+   * salida del viaje a X horas desde ahora, para cruzar cada ventana. La
+   * ventana se mide contra día + hora (U11): se manda la hora de ese instante.
+   */
+  const inHours = (h: number) => {
+    const { date, departureTime } = salidaEn(h);
+    return { tripDate: date.toISOString(), departureTime };
+  };
+  const ask = (
+    depositAmount: number,
+    salida: { tripDate: string; departureTime?: string } | string
+  ) => {
+    const { tripDate, departureTime } =
+      typeof salida === "string" ? { tripDate: salida, departureTime: undefined } : salida;
+    return request(app).get(
+      `/api/trips/cancellation-quote?depositAmount=${depositAmount}&tripDate=${encodeURIComponent(tripDate)}` +
+        (departureTime ? `&departureTime=${departureTime}` : "")
     );
+  };
 
   it("es pública: el confirm de retiro se muestra sin sesión", async () => {
     const res = await ask(100_000, inHours(72));
@@ -3074,6 +3337,7 @@ describe("GET /api/trips/cancellation-quote", () => {
     const res = await ask(100_000, inHours(72));
     expect(res.body).toEqual({
       window: "FULL_REFUND",
+      cancellable: true,
       refundAmount: 100_000,
       feeAmount: 0,
     });
@@ -3083,6 +3347,7 @@ describe("GET /api/trips/cancellation-quote", () => {
     const res = await ask(100_000, inHours(36));
     expect(res.body).toEqual({
       window: "PARTIAL_REFUND",
+      cancellable: true,
       refundAmount: 50_000,
       feeAmount: 50_000,
     });
@@ -3092,6 +3357,7 @@ describe("GET /api/trips/cancellation-quote", () => {
     const res = await ask(100_000, inHours(2));
     expect(res.body).toEqual({
       window: "NO_REFUND",
+      cancellable: true,
       refundAmount: 0,
       feeAmount: 100_000,
     });
@@ -3112,9 +3378,12 @@ describe("GET /api/trips/cancellation-quote", () => {
     vi.setSystemTime(new Date("2026-11-03T12:00:00.000Z"));
     try {
       for (const hours of [72, 36, 2, 48, 24]) {
-        const tripDate = inHours(hours);
-        const res = await ask(87_000, tripDate);
-        const real = quoteCancellation(87_000, hoursUntilTrip(tripDate));
+        const salida = inHours(hours);
+        const res = await ask(87_000, salida);
+        const real = quoteCancellation(
+          87_000,
+          hoursUntilDeparture({ date: salida.tripDate, departureTime: salida.departureTime })
+        );
         expect(res.body).toEqual(real);
       }
     } finally {
@@ -3136,7 +3405,7 @@ describe("GET /api/trips/cancellation-quote", () => {
 
   it("rechaza una seña que no es número", async () => {
     const res = await request(app).get(
-      `/api/trips/cancellation-quote?depositAmount=abc&tripDate=${encodeURIComponent(inHours(72))}`
+      `/api/trips/cancellation-quote?depositAmount=abc&tripDate=${encodeURIComponent(inHours(72).tripDate)}`
     );
     expect(res.status).toBe(400);
   });
@@ -3144,5 +3413,68 @@ describe("GET /api/trips/cancellation-quote", () => {
   it("rechaza una fecha de viaje que no existe", async () => {
     const res = await ask(100_000, "no-es-fecha");
     expect(res.status).toBe(400);
+  });
+
+  // U11: los bordes se miden contra la salida (día + hora en ART), no contra el
+  // instante de `tripDate`. Viaje del 11/11 guardado a las 12:00 ART, sale 18:00
+  // ART (21:00Z). Reloj congelado: solo Date, supertest sigue con timers reales.
+  describe("bordes contra la hora de salida (U11)", () => {
+    const DIA = "2026-11-11T15:00:00.000Z";
+    const askSalida = (departureTime?: string) =>
+      request(app).get(
+        `/api/trips/cancellation-quote?depositAmount=100&tripDate=${encodeURIComponent(DIA)}` +
+          (departureTime ? `&departureTime=${departureTime}` : "")
+      );
+    const at = async (iso: string, departureTime?: string) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(iso));
+      try {
+        const res = await askSalida(departureTime);
+        expect(res.status).toBe(200);
+        return res.body.window as string;
+      } finally {
+        vi.useRealTimers();
+      }
+    };
+
+    it("48 h exactas antes de la salida: la mitad; un minuto antes, todo", async () => {
+      expect(await at("2026-11-09T21:00:00.000Z", "18:00")).toBe("PARTIAL_REFUND");
+      expect(await at("2026-11-09T20:59:00.000Z", "18:00")).toBe("FULL_REFUND");
+    });
+
+    it("24 h exactas antes de la salida: la mitad; un minuto después, nada", async () => {
+      expect(await at("2026-11-10T21:00:00.000Z", "18:00")).toBe("PARTIAL_REFUND");
+      expect(await at("2026-11-10T21:01:00.000Z", "18:00")).toBe("NO_REFUND");
+    });
+
+    it("sin hora (viaje viejo) mide contra las 23:59 ART", async () => {
+      // 48 h antes de las 23:59 ART del 11/11 (02:59Z del 12/11)
+      expect(await at("2026-11-10T02:59:00.000Z")).toBe("PARTIAL_REFUND");
+      expect(await at("2026-11-10T02:58:00.000Z")).toBe("FULL_REFUND");
+    });
+
+    it("un minuto antes de la salida se puede retirar; un minuto después, no", async () => {
+      expect(await at("2026-11-11T20:59:00.000Z", "18:00")).toBe("NO_REFUND");
+      expect(await at("2026-11-11T21:01:00.000Z", "18:00")).toBe("CLOSED");
+
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-11-11T21:01:00.000Z"));
+      try {
+        const res = await askSalida("18:00");
+        expect(res.body).toEqual({
+          window: "CLOSED",
+          cancellable: false,
+          refundAmount: 0,
+          feeAmount: 0,
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("rechaza una hora de salida inválida (400)", async () => {
+      const res = await askSalida("25:00");
+      expect(res.status).toBe(400);
+    });
   });
 });

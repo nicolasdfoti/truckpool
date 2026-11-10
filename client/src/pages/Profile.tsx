@@ -69,10 +69,14 @@ function moneyLine(item: MyCargoItem) {
   const parts = [
     item.depositPayment?.status === "APPROVED"
       ? `seña de ${currency(item.depositAmount)} pagada`
-      : `seña de ${currency(item.depositAmount)} pendiente`,
+      : item.depositPayment?.status === "CHARGED_BACK"
+        ? `seña de ${currency(item.depositAmount)} con contracargo`
+        : `seña de ${currency(item.depositAmount)} pendiente`,
   ];
   if (item.balancePayment?.status === "APPROVED") {
     parts.push("saldo pagado");
+  } else if (item.balancePayment?.status === "CHARGED_BACK") {
+    parts.push("saldo con contracargo");
   } else if (item.balancePayment) {
     parts.push(`saldo de ${currency(item.balancePayment.amount)} pendiente`);
   }

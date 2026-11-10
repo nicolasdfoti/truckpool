@@ -45,13 +45,14 @@ const CARGO_STATUS_STYLES: Record<CargoItemStatus, string> = {
 
 /**
  * Cuánto se lleva el transportista por una carga: la parte neta de la seña más
- * la del saldo. El reparto vive en cada Payment, no en el CargoItem, así que
- * se suma. `null` mientras no haya ningún pago con reparto asentado, para no
- * mostrar un $0 que parece un cobro real.
+ * la del saldo, después de lo devuelto (una seña devuelta a medias deja la
+ * mitad). El reparto vive en cada Payment, no en el CargoItem, así que se suma.
+ * `null` mientras no haya ningún pago con reparto asentado, para no mostrar un
+ * $0 que parece un cobro real.
  */
 function carrierNetOf(item: CargoItem): number | null {
   const nets = [item.depositPayment, item.balancePayment]
-    .map((payment) => payment?.carrierAmount)
+    .map((payment) => payment?.netCarrierAmount)
     .filter((value): value is number => typeof value === "number");
   if (nets.length === 0) return null;
   return nets.reduce((sum, value) => sum + value, 0);
@@ -93,8 +94,16 @@ function cancellationMessage(quote: CancellationQuote | null) {
 }
 
 /** Pide la quote y abre el confirm. Devuelve false si el usuario cancela. */
-async function confirmCancellation(item: CargoItem, tripDate: string) {
-  const quote = await fetchCancellationQuote(item.depositAmount, tripDate);
+async function confirmCancellation(item: CargoItem, trip: { id: string }) {
+  const quote = await fetchCancellationQuote(trip.id, item.id);
+  // desde la salida no se retira: si el viaje no sale, se cancela solo y la
+  // seña vuelve entera
+  if (quote && !quote.cancellable) {
+    window.alert(
+      "el viaje ya salió: la carga no se puede retirar. si el viaje no sale, se cancela y te devolvemos lo que pagaste de seña."
+    );
+    return false;
+  }
   return window.confirm(cancellationMessage(quote));
 }
 
@@ -475,7 +484,23 @@ export default function TripDetail() {
               variant="dark"
               size="md"
               disabled={updateStatus.isPending}
-              onClick={() => updateStatus.mutate(nextAction.status)}
+              onClick={() => {
+                // al salir, las cargas sin confirmar se cancelan (no viajan) y la
+                // seña cobrada vuelve entera: no tiene vuelta atrás
+                const sinConfirmar = trip.cargoItems.filter(
+                  (item) => item.status === "PENDING"
+                ).length;
+                if (
+                  nextAction.status === "IN_TRANSIT" &&
+                  sinConfirmar > 0 &&
+                  !window.confirm(
+                    `${sinConfirmar === 1 ? "hay 1 carga sin confirmar" : `hay ${sinConfirmar} cargas sin confirmar`}: al marcar el viaje en tránsito se cancelan y a cada empresa le devolvemos la seña que haya pagado. ¿seguir?`
+                  )
+                ) {
+                  return;
+                }
+                updateStatus.mutate(nextAction.status);
+              }}
             >
               {updateStatus.isPending ? "marcando…" : nextAction.label}
             </Button>
@@ -520,6 +545,9 @@ export default function TripDetail() {
               const isCancelled = item.status === "CANCELLED";
               const isCompany = user?.id === item.companyId;
               const depositApproved = deposit?.status === "APPROVED";
+              // un contracargo no se vuelve a pagar: lo resuelve un admin
+              const chargedBack =
+                deposit?.status === "CHARGED_BACK" || balance?.status === "CHARGED_BACK";
               // el saldo solo existe con el viaje en camino y la carga
               // confirmada: antes de eso todavía no hay nada que cobrar.
               const balanceDue =
@@ -530,14 +558,21 @@ export default function TripDetail() {
                 isCompany &&
                 !isCancelled &&
                 item.status === "PENDING" &&
-                !depositApproved;
+                !depositApproved &&
+                !chargedBack;
               const showBalancePayButton =
-                isCompany && balanceDue && balance?.status !== "APPROVED";
+                isCompany &&
+                balanceDue &&
+                balance?.status !== "APPROVED" &&
+                balance?.status !== "CHARGED_BACK";
               const showPayButton = showDepositPayButton || showBalancePayButton;
-              // solo se puede retirar lo que sigue pendiente y con el viaje sin
-              // arrancar: el botón vive al lado de las otras acciones.
+              // se retira lo pendiente o confirmado (hasta la salida, con la misma
+              // penalidad) mientras el viaje no arrancó: el botón vive al lado
+              // de las otras acciones.
               const showCancelButton =
-                isCompany && item.status === "PENDING" && canCancelTrip;
+                isCompany &&
+                (item.status === "PENDING" || item.status === "CONFIRMED") &&
+                canCancelTrip;
               return (
                 <li
                   key={item.id}
@@ -591,9 +626,17 @@ export default function TripDetail() {
                           quedan {currency(balanceAmount)} al salir
                         </p>
                       )}
-                      {balanceDue && balance?.status !== "APPROVED" && (
+                      {balanceDue &&
+                        balance?.status !== "APPROVED" &&
+                        balance?.status !== "CHARGED_BACK" && (
+                          <p className="text-[13px] text-ink-muted">
+                            saldo de {currency(balanceAmount)} pendiente
+                          </p>
+                        )}
+                      {chargedBack && (
                         <p className="text-[13px] text-ink-muted">
-                          saldo de {currency(balanceAmount)} pendiente
+                          el pago tiene un contracargo en Mercado Pago: lo revisa un
+                          admin.
                         </p>
                       )}
                       {showDepositPayButton && deposit?.status === "REJECTED" && (
@@ -616,7 +659,7 @@ export default function TripDetail() {
                           size="sm"
                           disabled={cancelCargoItem.isPending}
                           onClick={async () => {
-                            if (await confirmCancellation(item, trip.date)) {
+                            if (await confirmCancellation(item, trip)) {
                               cancelCargoItem.mutate(item.id);
                             }
                           }}

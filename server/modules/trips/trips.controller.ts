@@ -5,6 +5,7 @@ import type {
   LocationQuery,
   PriceEstimateQuery,
   CancellationQuoteQuery,
+  CargoQuoteQuery,
 } from "./trips.schemas.js";
 import { AppError } from "../../lib/errors.js";
 import { geocode } from "../../lib/geocode.js";
@@ -39,6 +40,34 @@ export async function getPriceEstimate(_req: Request, res: Response) {
 }
 
 /**
+ * GET /api/trips/:id/cargo-quote?volume=N — precio, seña y saldo de una carga
+ * de N m³ antes de reservar. Pública como el detalle del viaje: el precio ya es
+ * público.
+ */
+export async function getCargoQuote(req: Request, res: Response) {
+  const query = (res.locals.query ?? {}) as CargoQuoteQuery;
+  const quote = await tripsService.quoteCargoPrice(getParam(req, "id"), query.volume);
+  res.json(quote);
+}
+
+/**
+ * GET /api/trips/:tripId/cargo-items/:cargoItemId/cancellation-quote — U21:
+ * cuánto le devolverían a la empresa si retirara esta carga ahora, con lo que
+ * de verdad pagó de seña ($ 0 si no la pagó).
+ */
+export async function getCargoCancellationQuote(req: Request, res: Response) {
+  if (!req.user) {
+    throw new AppError("no autenticado", 401, "UNAUTHORIZED");
+  }
+  const quote = await tripsService.getCargoCancellationQuote(
+    getParam(req, "tripId"),
+    getParam(req, "cargoItemId"),
+    req.user.id
+  );
+  res.json(quote);
+}
+
+/**
  * Simulación del retiro: cuánto se devolvería de la seña ahora. Va sin auth
  * porque no lee nada de la base ni de la sesión, solo corre la política de
  * cancelación con los números que le mande el front.
@@ -48,6 +77,7 @@ export async function getCancellationQuote(_req: Request, res: Response) {
   const quote = await tripsService.estimateCancellation({
     depositAmount: query.depositAmount,
     tripDate: query.tripDate,
+    departureTime: query.departureTime,
   });
   res.json(quote);
 }

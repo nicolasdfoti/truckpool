@@ -1,6 +1,9 @@
-export type TripStatus = "OPEN" | "FULL" | "IN_TRANSIT" | "COMPLETED";
+/** CANCELLED: el fletero lo canceló antes de salir; las cargas activas se cancelan */
+export type TripStatus = "OPEN" | "FULL" | "IN_TRANSIT" | "COMPLETED" | "CANCELLED";
 export type CargoItemStatus = "PENDING" | "CONFIRMED" | "CANCELLED";
-export type PaymentStatus = "PENDING" | "APPROVED" | "REJECTED" | "REFUNDED";
+/** CHARGED_BACK: contracargo en Mercado Pago; no se vuelve a pagar, lo resuelve un admin. */
+export type PaymentStatus =
+  "PENDING" | "APPROVED" | "REJECTED" | "REFUNDED" | "CHARGED_BACK";
 /** DEPOSIT es la seña que reserva espacio; BALANCE, lo que falta al salir el viaje. */
 export type PaymentType = "DEPOSIT" | "BALANCE";
 
@@ -19,6 +22,7 @@ export const TRIP_STATUS_LABELS: Record<TripStatus, string> = {
   FULL: "completo",
   IN_TRANSIT: "en viaje",
   COMPLETED: "completado",
+  CANCELLED: "cancelado",
 };
 
 export type Trip = {
@@ -56,8 +60,8 @@ export type TripInput = {
   origin: string;
   destination: string;
   date: string;
-  /** "HH:mm" en 24h; opcional (undefined = el viaje se publica sin hora) */
-  departureTime?: string;
+  /** "HH:mm" en 24h; obligatoria: la ventana de retiro se mide contra la salida */
+  departureTime: string;
   /** punto exacto de salida (depósito/galpón); opcional */
   departureAddress?: string;
   truckType: string;
@@ -110,6 +114,12 @@ export type CargoItemPayment = {
   platformFeeAmount: number | null;
   /** lo que queda para el transportista en este pago */
   carrierAmount: number | null;
+  /**
+   * lo mismo después de lo devuelto (la comisión es solo sobre lo cobrado). null
+   * sin reparto asentado o con contracargo.
+   */
+  netPlatformFeeAmount: number | null;
+  netCarrierAmount: number | null;
 };
 
 export type CargoItem = {
@@ -262,6 +272,6 @@ export type RespondTripRequestInput = {
     price: number;
     depositPercent?: number;
     features?: string[];
-    departureTime?: string | null;
+    departureTime: string;
   };
 };

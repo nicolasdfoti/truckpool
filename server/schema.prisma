@@ -63,6 +63,9 @@ enum TripStatus {
   FULL
   IN_TRANSIT
   COMPLETED
+  // el fletero lo canceló antes de salir (desde OPEN o FULL). Las cargas
+  // activas se cancelan con la seña cobrada devuelta entera. Es final.
+  CANCELLED
 }
 
 model Trip {
@@ -232,6 +235,9 @@ enum PaymentStatus {
   APPROVED
   REJECTED
   REFUNDED
+  // contracargo: quien pagó desconoció el cobro y MP le devolvió la plata.
+  // es final (el webhook no lo mueve más) y lo resuelve un admin
+  CHARGED_BACK
 }
 
 // una carga tiene hasta dos pagos: la seña que reserva el espacio y el saldo
@@ -314,6 +320,9 @@ enum NotificationType {
   // para los admins: plata cobrada en MP que el sistema no pudo asentar
   // (cobro duplicado, monto o moneda distintos)
   PAYMENT_ALERT
+  // a la empresa: el fletero reordenó las paradas con el viaje en camino y la
+  // suya cambió de lugar (D2)
+  STOPS_REORDERED
 }
 
 // aviso in-app. el email es un canal opcional del mismo aviso (se manda solo si
@@ -379,7 +388,12 @@ model RefundRequest {
   targetAmount    Decimal      @db.Decimal(12, 2)
   status          RefundStatus @default(PENDING)
   attempts        Int          @default(0)
+  // código del último error (de MP: "MP_ERROR:<status>:<causa>"), nunca el
+  // mensaje crudo
   lastError       String?
+  // desde cuándo el transportista no tiene MP conectado. Mientras tanto los
+  // intentos no cuentan; a las 24 h la request pasa a FAILED con alerta.
+  carrierDisconnectedAt DateTime?
   createdAt       DateTime     @default(now())
   updatedAt       DateTime     @updatedAt
 

@@ -31,6 +31,7 @@
  * cambia la tolerancia, PRICE_TOLERANCE).
  * ---------------------------------------------------------------------------
  */
+import { Prisma } from "@prisma/client";
 
 export type Rate = {
   /** piso del viaje: salir a la calle, esperar la carga, papeles */
@@ -138,4 +139,36 @@ export function isPriceInRange(price: number, range: PriceRange): boolean {
 /** $1.234.567 — el mensaje de error va crudo a la pantalla, así que va formateado. */
 export function formatPesos(value: number): string {
   return `$${Math.round(value).toLocaleString("es-AR")}`;
+}
+
+export type CargoPrice = {
+  /** lo que paga la empresa por su carga: su parte del precio del viaje */
+  priceShare: Prisma.Decimal;
+  /** la seña, que se congela al reservar */
+  depositAmount: Prisma.Decimal;
+  /** lo que queda para pagar al salir: priceShare − seña */
+  balanceAmount: Prisma.Decimal;
+};
+
+/**
+ * Cuánto cuesta una carga de `volume` m³ en un viaje: el precio del camión
+ * prorrateado por volumen, y la seña como porcentaje de esa parte (no del
+ * viaje entero). Es la única fórmula: la usan la reserva (`addCargoItem`) y la
+ * cotización que ve la empresa antes de reservar, así no pueden diferir.
+ * Todo en Decimal y a centavos, como `Decimal(12,2)` en la base.
+ */
+export function cargoPrice(
+  trip: {
+    price: Prisma.Decimal | number | string;
+    capacityTotal: number;
+    depositPercent: number;
+  },
+  volume: number
+): CargoPrice {
+  const priceShare = new Prisma.Decimal(trip.price)
+    .mul(volume)
+    .div(trip.capacityTotal)
+    .toDecimalPlaces(2);
+  const depositAmount = priceShare.mul(trip.depositPercent).div(100).toDecimalPlaces(2);
+  return { priceShare, depositAmount, balanceAmount: priceShare.minus(depositAmount) };
 }

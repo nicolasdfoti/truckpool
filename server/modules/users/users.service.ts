@@ -7,7 +7,11 @@ import {
   VerificationNotPendingError,
   VerificationNoteRequiredError,
 } from "../../lib/errors.js";
-import { toCargoItemResponse, toTripSummary } from "../../lib/mappers.js";
+import {
+  CARRIER_CAN_CHARGE,
+  toCargoItemResponse,
+  toTripSummary,
+} from "../../lib/mappers.js";
 import { endOfArgentinaDay } from "../../lib/dates.js";
 import { encryptSecret } from "../../lib/crypto.js";
 import { signOAuthState } from "../../lib/auth.js";
@@ -133,7 +137,12 @@ export async function listCarriers() {
         name: true,
         bio: true,
         isAvailableNow: true,
-        _count: { select: { tripsAsCarrier: { where: { status: "OPEN" } } } },
+        // como el listado: sin MP sus viajes no se ofrecen
+        _count: {
+          select: {
+            tripsAsCarrier: { where: { status: "OPEN", carrier: CARRIER_CAN_CHARGE } },
+          },
+        },
       },
       orderBy: { name: "asc" },
     }),
@@ -171,8 +180,13 @@ export async function getCarrierProfile(id: string) {
           // Esta vista es la de "viajes abiertos" del transportista: es donde una
           // empresa busca un viaje para sumarle carga. Por eso
           // comparte la regla de disponibilidad del listado público (status
-          // OPEN + fecha de un día posterior a hoy en Argentina).
-          where: { status: "OPEN", date: { gt: endOfArgentinaDay() } },
+          // OPEN + fecha de un día posterior a hoy en Argentina + fletero que
+          // puede cobrar por MP).
+          where: {
+            status: "OPEN",
+            date: { gt: endOfArgentinaDay() },
+            carrier: CARRIER_CAN_CHARGE,
+          },
           include: { cargoItems: true, carrier: { select: { name: true } } },
           orderBy: { date: "asc" },
         },
@@ -288,7 +302,10 @@ export async function reviewVerification(userId: string, input: ReviewVerificati
  * honesta de estimarlo.
  */
 export type AdminStats = {
-  tripsByStatus: Record<"OPEN" | "FULL" | "IN_TRANSIT" | "COMPLETED", number>;
+  tripsByStatus: Record<
+    "OPEN" | "FULL" | "IN_TRANSIT" | "COMPLETED" | "CANCELLED",
+    number
+  >;
   totalTrips: number;
   volumeTransported: number;
   billedAmount: number | null;
@@ -300,7 +317,7 @@ export type AdminStats = {
   notes: string[];
 };
 
-const TRIP_STATUSES = ["OPEN", "FULL", "IN_TRANSIT", "COMPLETED"] as const;
+const TRIP_STATUSES = ["OPEN", "FULL", "IN_TRANSIT", "COMPLETED", "CANCELLED"] as const;
 
 export async function getAdminStats(): Promise<AdminStats> {
   const notes: string[] = [];
@@ -590,7 +607,7 @@ export async function respondTripRequest(
         origin: request.origin,
         destination: request.destination,
         date: request.desiredDate,
-        departureTime: input.tripDetails.departureTime ?? null,
+        departureTime: input.tripDetails.departureTime,
         truckType: input.tripDetails.truckType,
         capacityTotal: input.tripDetails.capacityTotal,
         price: input.tripDetails.price,
