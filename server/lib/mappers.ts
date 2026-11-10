@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import type { CargoItem, CargoItemStatus, Payment, Trip } from "@prisma/client";
 import { isTripDateAvailable } from "./dates.js";
 
@@ -73,6 +74,48 @@ export type CargoItemWithPayments = CargoItem & {
   company?: { name: string } | null;
 };
 
+/**
+ * D7 (c): el reparto neto de un pago, después de lo devuelto. La comisión es
+ * solo sobre lo efectivamente cobrado, y MP devuelve la comisión en proporción
+ * a lo reembolsado (verificado con pago real, ver D7 en docs/review/04-launch.md).
+ * Se deriva acá y no se guarda: `platformFeeAmount` y `carrierAmount` siguen
+ * siendo lo pactado en la preference.
+ *
+ * - comisión neta = comisión × (cobrado − devuelto) / cobrado, a centavos
+ * - neto del fletero = lo que quedó cobrado − comisión neta (suman lo cobrado)
+ * - REFUNDED sin `refundedAmount` asentado cuenta como devuelto entero
+ * - CHARGED_BACK: null, porque no sabemos qué hace MP con la comisión
+ * - sin reparto asentado: null
+ *
+ * El redondeo de MP no está verificado: puede diferir en un centavo del suyo.
+ * Antes de facturar la comisión esto pasa a (b) o (d) (ver D7 en L4).
+ */
+function netSplit(payment: Payment): {
+  netPlatformFeeAmount: number | null;
+  netCarrierAmount: number | null;
+} {
+  const none = { netPlatformFeeAmount: null, netCarrierAmount: null };
+  // `== null`: también cubre un pago armado sin esos campos (en la base son null)
+  if (payment.platformFeeAmount == null || payment.carrierAmount == null) return none;
+  if (payment.status === "CHARGED_BACK") return none;
+
+  const amount = new Prisma.Decimal(payment.amount);
+  if (amount.lte(0)) return none;
+  const refunded =
+    payment.status === "REFUNDED" && payment.refundedAmount === null
+      ? amount
+      : new Prisma.Decimal(payment.refundedAmount ?? 0);
+  const kept = Prisma.Decimal.max(amount.minus(refunded), 0);
+  const fee = new Prisma.Decimal(payment.platformFeeAmount)
+    .times(kept)
+    .dividedBy(amount)
+    .toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
+  return {
+    netPlatformFeeAmount: fee.toNumber(),
+    netCarrierAmount: kept.minus(fee).toNumber(),
+  };
+}
+
 function toPaymentResponse(payment: Payment) {
   return {
     id: payment.id,
@@ -87,6 +130,8 @@ function toPaymentResponse(payment: Payment) {
     platformFeeAmount:
       payment.platformFeeAmount === null ? null : Number(payment.platformFeeAmount),
     carrierAmount: payment.carrierAmount === null ? null : Number(payment.carrierAmount),
+    // lo mismo después de lo devuelto (D7 c, ver netSplit)
+    ...netSplit(payment),
   };
 }
 

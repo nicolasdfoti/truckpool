@@ -45,13 +45,14 @@ const CARGO_STATUS_STYLES: Record<CargoItemStatus, string> = {
 
 /**
  * Cuánto se lleva el transportista por una carga: la parte neta de la seña más
- * la del saldo. El reparto vive en cada Payment, no en el CargoItem, así que
- * se suma. `null` mientras no haya ningún pago con reparto asentado, para no
- * mostrar un $0 que parece un cobro real.
+ * la del saldo, después de lo devuelto (una seña devuelta a medias deja la
+ * mitad). El reparto vive en cada Payment, no en el CargoItem, así que se suma.
+ * `null` mientras no haya ningún pago con reparto asentado, para no mostrar un
+ * $0 que parece un cobro real.
  */
 function carrierNetOf(item: CargoItem): number | null {
   const nets = [item.depositPayment, item.balancePayment]
-    .map((payment) => payment?.carrierAmount)
+    .map((payment) => payment?.netCarrierAmount)
     .filter((value): value is number => typeof value === "number");
   if (nets.length === 0) return null;
   return nets.reduce((sum, value) => sum + value, 0);

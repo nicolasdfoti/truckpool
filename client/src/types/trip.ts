@@ -114,6 +114,12 @@ export type CargoItemPayment = {
   platformFeeAmount: number | null;
   /** lo que queda para el transportista en este pago */
   carrierAmount: number | null;
+  /**
+   * lo mismo después de lo devuelto (la comisión es solo sobre lo cobrado). null
+   * sin reparto asentado o con contracargo.
+   */
+  netPlatformFeeAmount: number | null;
+  netCarrierAmount: number | null;
 };
 
 export type CargoItem = {
