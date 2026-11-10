@@ -490,7 +490,23 @@ export default function TripDetail() {
               variant="dark"
               size="md"
               disabled={updateStatus.isPending}
-              onClick={() => updateStatus.mutate(nextAction.status)}
+              onClick={() => {
+                // al salir, las cargas sin confirmar se cancelan (no viajan) y la
+                // seña cobrada vuelve entera: no tiene vuelta atrás
+                const sinConfirmar = trip.cargoItems.filter(
+                  (item) => item.status === "PENDING"
+                ).length;
+                if (
+                  nextAction.status === "IN_TRANSIT" &&
+                  sinConfirmar > 0 &&
+                  !window.confirm(
+                    `${sinConfirmar === 1 ? "hay 1 carga sin confirmar" : `hay ${sinConfirmar} cargas sin confirmar`}: al marcar el viaje en tránsito se cancelan y a cada empresa le devolvemos la seña que haya pagado. ¿seguir?`
+                  )
+                ) {
+                  return;
+                }
+                updateStatus.mutate(nextAction.status);
+              }}
             >
               {updateStatus.isPending ? "marcando…" : nextAction.label}
             </Button>

@@ -1,6 +1,6 @@
 import { prisma } from "../../lib/prisma.js";
 import { Prisma } from "@prisma/client";
-import type { Role, Trip } from "@prisma/client";
+import type { PaymentStatus, Role, Trip } from "@prisma/client";
 import {
   activeVolume,
   isActiveCargo,
@@ -65,6 +65,28 @@ import type {
 import type { CreateCargoItemInput } from "./trips.schemas.js";
 
 const MAX_RETRIES = 3;
+
+/**
+ * Corre una transacción Serializable y la reintenta ante un conflicto de
+ * serialización (P2034) o una seña que se movió en el medio
+ * (PaymentInFlightError). Si no se resuelve en MAX_RETRIES, sube el último error.
+ */
+async function retryOnConflict<T>(run: () => Promise<T>): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    try {
+      return await run();
+    } catch (err) {
+      lastError = err;
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2034") {
+        continue;
+      }
+      if (err instanceof PaymentInFlightError) continue;
+      throw err;
+    }
+  }
+  throw lastError;
+}
 
 /**
  * Una reserva de espacio vale 24hs: si en ese plazo la empresa no abonó la
@@ -473,7 +495,94 @@ type BalanceDue = {
 type StatusChangeResult = {
   trip: ReturnType<typeof toTripSummary>;
   balancesDue: BalanceDue[];
+  cancelled: CancelledByTrip[];
 };
+
+/** una carga que cancela el viaje (no la empresa), con lo que se le devuelve */
+type CancelledByTrip = {
+  cargoItemId: string;
+  companyId: string;
+  description: string;
+  /** la seña cobrada que vuelve entera por el outbox; 0 si no había seña cobrada */
+  refundAmount: number;
+};
+
+type CargoForTripCancellation = {
+  id: string;
+  companyId: string;
+  description: string;
+  depositAmount: Prisma.Decimal;
+  payments: {
+    id: string;
+    type: string;
+    status: PaymentStatus;
+    mpPaymentId: string | null;
+  }[];
+};
+
+/**
+ * Cancela, dentro de la TX del viaje, cargas que la empresa no retiró: las
+ * PENDING al salir el viaje (D3) y, en D6, las activas de un viaje cancelado.
+ * La cancelación no es de la empresa, así que no hay penalidad: la seña cobrada
+ * vuelve entera por el outbox (RefundRequest por `depositAmount`, congelado al
+ * reservar) y el fee queda en 0.
+ *
+ * Igual que `cancelCargoItem`, escribe la fila de la seña con un CAS sobre el
+ * estado leído: si el webhook la aprobó en el medio, PaymentInFlightError y el
+ * llamador reintenta la TX, que ve la seña APPROVED y encola la devolución. Una
+ * seña todavía por acreditarse no se devuelve acá: si MP la aprueba después, el
+ * webhook ve la carga CANCELLED con fee 0 y la devuelve entera
+ * (`refundIfCancelled`).
+ */
+async function cancelCargoForTrip(
+  tx: Prisma.TransactionClient,
+  items: CargoForTripCancellation[],
+  now: Date
+): Promise<CancelledByTrip[]> {
+  const cancelled: CancelledByTrip[] = [];
+  for (const item of items) {
+    const deposit = item.payments.find((p) => p.type === "DEPOSIT");
+    if (deposit) {
+      const held = await tx.payment.updateMany({
+        where: { id: deposit.id, status: deposit.status },
+        data: { updatedAt: now },
+      });
+      if (held.count === 0) {
+        throw new PaymentInFlightError(
+          "una seña se está acreditando en este momento: probá de nuevo en unos segundos"
+        );
+      }
+    }
+
+    const paid = deposit?.status === "APPROVED" && deposit.mpPaymentId !== null;
+    if (paid) {
+      await tx.refundRequest.create({
+        data: {
+          cargoItemId: item.id,
+          targetAmount: new Prisma.Decimal(item.depositAmount),
+          status: "PENDING",
+        },
+      });
+    }
+
+    await tx.cargoItem.update({
+      where: { id: item.id },
+      data: {
+        status: "CANCELLED",
+        cancelledAt: now,
+        cancellationFeeAmount: new Prisma.Decimal(0),
+      },
+    });
+
+    cancelled.push({
+      cargoItemId: item.id,
+      companyId: item.companyId,
+      description: item.description,
+      refundAmount: paid ? Number(item.depositAmount) : 0,
+    });
+  }
+  return cancelled;
+}
 
 export async function updateTripStatus(
   tripId: string,
@@ -482,99 +591,121 @@ export async function updateTripStatus(
 ): Promise<ReturnType<typeof toTripSummary>> {
   // El cambio de estado y los saldos a cobrar se escriben juntos: si el viaje
   // quedara IN_TRANSIT sin sus pagos BALANCE, nadie podría cobrarlos y el
-  // balance de la carga quedaría trucho.
-  const result = await prisma.$transaction(
-    async (tx): Promise<StatusChangeResult> => {
-      const trip = await tx.trip.findUnique({
-        where: { id: tripId },
-        include: {
-          cargoItems: {
-            include: {
-              payments: true,
-              company: { select: { id: true } },
+  // balance de la carga quedaría trucho. Lo mismo con las cargas PENDING que se
+  // cancelan al salir (D3). Serializable con reintento: la seña de una carga
+  // PENDING se puede estar acreditando en el mismo momento.
+  const now = new Date();
+  const result = await retryOnConflict(() =>
+    prisma.$transaction(
+      async (tx): Promise<StatusChangeResult> => {
+        const trip = await tx.trip.findUnique({
+          where: { id: tripId },
+          include: {
+            cargoItems: {
+              include: {
+                payments: true,
+                company: { select: { id: true } },
+              },
             },
+            carrier: { select: { name: true } },
           },
-          carrier: { select: { name: true } },
-        },
-      });
-      if (!trip) throw new TripNotFoundError();
-      if (trip.carrierId !== carrierId) {
-        throw new AppError(
-          "solo el transportista del viaje puede actualizar su estado",
-          403,
-          "FORBIDDEN"
-        );
-      }
-      if (!ALLOWED_TRANSITIONS[status].includes(trip.status)) {
-        throw new InvalidTransitionError();
-      }
-
-      // completar el viaje es cerrar la cuenta: no se puede hasta que todas
-      // las cargas confirmadas tenga su saldo abonado.
-      if (status === "COMPLETED") {
-        // un saldo con contracargo no se puede volver a cobrar: no es "por
-        // pagar", lo resuelve un admin (no hay herramienta todavía, ver L9)
-        const chargedBack = trip.cargoItems.filter(
-          (item) =>
-            item.status === "CONFIRMED" &&
-            item.payments.some((p) => p.type === "BALANCE" && p.status === "CHARGED_BACK")
-        );
-        if (chargedBack.length > 0) throw new BalanceChargedBackError(chargedBack.length);
-
-        const pending = trip.cargoItems.filter(
-          (item) => item.status === "CONFIRMED" && !isBalanceSettled(item)
-        );
-        if (pending.length > 0) throw new BalancePendingError(pending.length);
-      }
-
-      const updated = await tx.trip.update({
-        where: { id: tripId },
-        data: { status },
-        include: { cargoItems: true, carrier: { select: { name: true } } },
-      });
-
-      const balancesDue: BalanceDue[] = [];
-      if (status === "IN_TRANSIT") {
-        for (const item of trip.cargoItems) {
-          // solo las cargas confirmadas: una reserva sin pagar no viaja.
-          if (item.status !== "CONFIRMED") continue;
-          const amount = Number(balanceOf(item));
-          if (amount <= 0) continue;
-
-          const already = item.payments.find(
-            (p) =>
-              p.type === "BALANCE" && (p.status === "APPROVED" || p.status === "REFUNDED")
+        });
+        if (!trip) throw new TripNotFoundError();
+        if (trip.carrierId !== carrierId) {
+          throw new AppError(
+            "solo el transportista del viaje puede actualizar su estado",
+            403,
+            "FORBIDDEN"
           );
-          if (already) continue;
-
-          await tx.payment.upsert({
-            where: { cargoItemId_type: { cargoItemId: item.id, type: "BALANCE" } },
-            create: { cargoItemId: item.id, amount, type: "BALANCE" },
-            // si ya había un saldo pendiente no lo reiniciamos: puede ser que la
-            // empresa ya tenga el link de pago de este mismo monto.
-            update: {},
-          });
-          balancesDue.push({
-            company: item.company,
-            description: item.description,
-            amount,
-            priceShare: Number(item.priceShare),
-            depositAmount: Number(item.depositAmount),
-          });
         }
-      }
+        if (!ALLOWED_TRANSITIONS[status].includes(trip.status)) {
+          throw new InvalidTransitionError();
+        }
 
-      return { trip: toTripSummary(updated), balancesDue };
-    },
-    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, maxWait: 5000 }
+        // completar el viaje es cerrar la cuenta: no se puede hasta que todas
+        // las cargas confirmadas tenga su saldo abonado.
+        if (status === "COMPLETED") {
+          // un saldo con contracargo no se puede volver a cobrar: no es "por
+          // pagar", lo resuelve un admin (no hay herramienta todavía, ver L9)
+          const chargedBack = trip.cargoItems.filter(
+            (item) =>
+              item.status === "CONFIRMED" &&
+              item.payments.some(
+                (p) => p.type === "BALANCE" && p.status === "CHARGED_BACK"
+              )
+          );
+          if (chargedBack.length > 0) {
+            throw new BalanceChargedBackError(chargedBack.length);
+          }
+
+          const pending = trip.cargoItems.filter(
+            (item) => item.status === "CONFIRMED" && !isBalanceSettled(item)
+          );
+          if (pending.length > 0) throw new BalancePendingError(pending.length);
+        }
+
+        // D3: lo que no se confirmó no viaja. Antes del update del viaje, así
+        // el resumen que se devuelve ya trae esas cargas CANCELLED.
+        const cancelled =
+          status === "IN_TRANSIT"
+            ? await cancelCargoForTrip(
+                tx,
+                trip.cargoItems.filter((item) => item.status === "PENDING"),
+                now
+              )
+            : [];
+
+        const updated = await tx.trip.update({
+          where: { id: tripId },
+          data: { status },
+          include: { cargoItems: true, carrier: { select: { name: true } } },
+        });
+
+        const balancesDue: BalanceDue[] = [];
+        if (status === "IN_TRANSIT") {
+          for (const item of trip.cargoItems) {
+            // solo las cargas confirmadas: una reserva sin pagar no viaja.
+            if (item.status !== "CONFIRMED") continue;
+            const amount = Number(balanceOf(item));
+            if (amount <= 0) continue;
+
+            const already = item.payments.find(
+              (p) =>
+                p.type === "BALANCE" &&
+                (p.status === "APPROVED" || p.status === "REFUNDED")
+            );
+            if (already) continue;
+
+            await tx.payment.upsert({
+              where: { cargoItemId_type: { cargoItemId: item.id, type: "BALANCE" } },
+              create: { cargoItemId: item.id, amount, type: "BALANCE" },
+              // si ya había un saldo pendiente no lo reiniciamos: puede ser que la
+              // empresa ya tenga el link de pago de este mismo monto.
+              update: {},
+            });
+            balancesDue.push({
+              company: item.company,
+              description: item.description,
+              amount,
+              priceShare: Number(item.priceShare),
+              depositAmount: Number(item.depositAmount),
+            });
+          }
+        }
+
+        return { trip: toTripSummary(updated), balancesDue, cancelled };
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, maxWait: 5000 }
+    )
   );
 
   // Aviso de estado del viaje: una vez por empresa, aunque tenga varias cargas
   // (notifyUsers deduplica los ids, pero el aviso se arma con la descripción de
-  // la primera carga para no duplicar texto). Los avisos nunca rompen la
-  // actualización de estado.
+  // la primera carga para no duplicar texto). Solo a las cargas que viajan: una
+  // retirada o cancelada no "va en camino" ni "llegó a destino". Los avisos
+  // nunca rompen la actualización de estado.
   const items = await prisma.cargoItem.findMany({
-    where: { tripId },
+    where: { tripId, status: "CONFIRMED" },
     select: { description: true, companyId: true },
     orderBy: { createdAt: "asc" },
   });
@@ -667,6 +798,29 @@ export async function updateTripStatus(
           }),
       })
     );
+  }
+
+  // D3: a cada empresa cuya carga no viaja, qué pasó y qué se le devuelve
+  for (const item of result.cancelled) {
+    const desc = item.description.toLowerCase();
+    await bestEffortNotify(() =>
+      notifyUsers([item.companyId], {
+        type: "CARGO_CANCELLED",
+        title: `tu carga se canceló: ${result.trip.origin} → ${result.trip.destination}`,
+        body:
+          item.refundAmount > 0
+            ? `el viaje salió sin que tu carga ${desc} estuviera confirmada, así que no viaja. te devolvemos la seña entera ($${item.refundAmount}).`
+            : `el viaje salió sin que tu carga ${desc} estuviera confirmada, así que no viaja. no se cobró la seña; si se llega a acreditar, te la devolvemos entera.`,
+        tripId,
+      })
+    );
+  }
+
+  // OUTBOX: las devoluciones ya quedaron encoladas en la TX; si MP falla acá,
+  // la RefundRequest queda PENDING y la retoma el worker
+  for (const item of result.cancelled) {
+    if (item.refundAmount <= 0) continue;
+    await processRefundRequest(item.cargoItemId).catch(() => {});
   }
 
   return result.trip;

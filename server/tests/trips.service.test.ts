@@ -2037,6 +2037,7 @@ describe("addCargoItem", () => {
                 email: "u@e.com",
                 emailNotifications: true,
               },
+              payments: [],
             }),
           ],
         })
@@ -2375,6 +2376,254 @@ describe("addCargoItem", () => {
         expect.any(Function),
         expect.any(Object)
       );
+    });
+
+    // D3 (= a): al salir el viaje, lo que no se confirmó no viaja. Las cargas
+    // PENDING se cancelan en la misma TX; la seña cobrada vuelve entera por el
+    // outbox (la cancelación no es de la empresa, no hay penalidad).
+    describe("IN_TRANSIT cancela las cargas PENDING (D3)", () => {
+      const empresa = (id: string) => ({
+        id,
+        name: `Empresa ${id}`,
+        email: `${id}@empresa.com`,
+        emailNotifications: true,
+      });
+
+      /** pendiente con la seña acreditada (el fletero no llegó a confirmarla) */
+      const pendienteConSeña = () =>
+        baseCargoItem({
+          id: "i2",
+          companyId: "c2",
+          description: "Acero",
+          company: empresa("c2"),
+          payments: [
+            basePayment({
+              id: "pay2",
+              cargoItemId: "i2",
+              amount: new Prisma.Decimal("100.00"),
+              mpPaymentId: "mp-2",
+            }),
+          ],
+        });
+
+      /** pendiente sin pago: reservó y nunca pagó la seña */
+      const pendienteSinSeña = () =>
+        baseCargoItem({
+          id: "i3",
+          companyId: "c3",
+          description: "Vidrio",
+          company: empresa("c3"),
+          payments: [],
+        });
+
+      const viajeConLasTres = () =>
+        baseTrip({
+          status: "FULL",
+          origin: "Córdoba",
+          destination: "Rosario",
+          cargoItems: [confirmedWithDeposit(), pendienteConSeña(), pendienteSinSeña()],
+        });
+
+      beforeEach(() => {
+        tx.trip.findUnique.mockResolvedValue(viajeConLasTres());
+        tx.cargoItem.update.mockImplementation(
+          async ({ where, data }: { where: { id: string }; data: object }) => ({
+            id: where.id,
+            ...data,
+          })
+        );
+        tx.payment.updateMany.mockResolvedValue({ count: 1 });
+        tx.refundRequest.create = vi.fn().mockResolvedValue({});
+      });
+
+      /** las cargas que quedaron CANCELLED, con lo que se asentó */
+      const canceladas = () =>
+        tx.cargoItem.update.mock.calls.map((call) => {
+          const arg = call[0] as { where: { id: string }; data: Record<string, unknown> };
+          return {
+            id: arg.where.id,
+            status: arg.data.status,
+            fee: Number(arg.data.cancellationFeeAmount),
+          };
+        });
+
+      it("1 CONFIRMED + 1 PENDING con seña + 1 sin seña: saldo solo para la confirmada, 100 % a la segunda, ninguna queda PENDING", async () => {
+        await tripsService.updateTripStatus("t1", "u1", "IN_TRANSIT");
+
+        // el saldo, solo para la confirmada
+        expect(tx.payment.upsert).toHaveBeenCalledTimes(1);
+        expect(tx.payment.upsert).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: { cargoItemId_type: { cargoItemId: "i1", type: "BALANCE" } },
+          })
+        );
+        // las dos pendientes, canceladas sin penalidad
+        expect(canceladas()).toEqual([
+          { id: "i2", status: "CANCELLED", fee: 0 },
+          { id: "i3", status: "CANCELLED", fee: 0 },
+        ]);
+        // la seña cobrada vuelve entera por el outbox; sin seña no hay nada
+        expect(tx.refundRequest.create).toHaveBeenCalledTimes(1);
+        expect(tx.refundRequest.create).toHaveBeenCalledWith({
+          data: {
+            cargoItemId: "i2",
+            targetAmount: new Prisma.Decimal("100.00"),
+            status: "PENDING",
+          },
+        });
+        // todo en la misma TX que el cambio de estado
+        expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+        expect(tx.trip.update).toHaveBeenCalledWith(
+          expect.objectContaining({ data: { status: "IN_TRANSIT" } })
+        );
+      });
+
+      it("después de la TX procesa la devolución (best-effort)", async () => {
+        await tripsService.updateTripStatus("t1", "u1", "IN_TRANSIT");
+
+        expect(prisma.refundRequest.findUnique).toHaveBeenCalledWith({
+          where: { cargoItemId: "i2" },
+        });
+        expect(prisma.refundRequest.findUnique).not.toHaveBeenCalledWith({
+          where: { cargoItemId: "i3" },
+        });
+      });
+
+      it("seña por acreditarse: se cancela sin devolución y fija la fila de la seña (CAS)", async () => {
+        // si MP la aprueba después, el webhook ve la carga CANCELLED con fee 0 y
+        // la devuelve entera (refundIfCancelled)
+        tx.trip.findUnique.mockResolvedValue(
+          baseTrip({
+            status: "FULL",
+            cargoItems: [
+              baseCargoItem({
+                company: empresa("c1"),
+                payments: [basePayment({ status: "PENDING", mpPaymentId: null })],
+              }),
+            ],
+          })
+        );
+
+        await tripsService.updateTripStatus("t1", "u1", "IN_TRANSIT");
+
+        expect(tx.payment.updateMany).toHaveBeenCalledWith({
+          where: { id: "pay1", status: "PENDING" },
+          data: { updatedAt: expect.any(Date) },
+        });
+        expect(canceladas()).toEqual([{ id: "i1", status: "CANCELLED", fee: 0 }]);
+        expect(tx.refundRequest.create).not.toHaveBeenCalled();
+      });
+
+      it("si el webhook aprobó la seña en el medio, reintenta y la devuelve entera", async () => {
+        const conSeñaPendiente = baseTrip({
+          status: "FULL",
+          cargoItems: [
+            baseCargoItem({
+              company: empresa("c1"),
+              payments: [
+                basePayment({ status: "PENDING", amount: new Prisma.Decimal("100.00") }),
+              ],
+            }),
+          ],
+        });
+        const conSeñaAprobada = baseTrip({
+          status: "FULL",
+          cargoItems: [
+            baseCargoItem({
+              company: empresa("c1"),
+              payments: [basePayment({ amount: new Prisma.Decimal("100.00") })],
+            }),
+          ],
+        });
+        tx.trip.findUnique
+          .mockResolvedValueOnce(conSeñaPendiente)
+          .mockResolvedValue(conSeñaAprobada);
+        // el CAS sobre la seña leída PENDING no encuentra la fila: ya está APPROVED
+        tx.payment.updateMany
+          .mockResolvedValueOnce({ count: 0 })
+          .mockResolvedValue({ count: 1 });
+
+        await tripsService.updateTripStatus("t1", "u1", "IN_TRANSIT");
+
+        expect(prisma.$transaction).toHaveBeenCalledTimes(2);
+        expect(tx.refundRequest.create).toHaveBeenCalledTimes(1);
+        expect(tx.refundRequest.create).toHaveBeenCalledWith({
+          data: {
+            cargoItemId: "i1",
+            targetAmount: new Prisma.Decimal("100.00"),
+            status: "PENDING",
+          },
+        });
+      });
+
+      it("reintenta ante un conflicto de serialización (P2034)", async () => {
+        const conflicto = new Prisma.PrismaClientKnownRequestError("conflicto", {
+          code: "P2034",
+          clientVersion: "test",
+        });
+        (prisma.$transaction as unknown as ReturnType<typeof vi.fn>)
+          .mockRejectedValueOnce(conflicto)
+          .mockImplementation((fn: unknown) => (fn as (t: unknown) => unknown)(tx));
+
+        const result = await tripsService.updateTripStatus("t1", "u1", "IN_TRANSIT");
+
+        expect(prisma.$transaction).toHaveBeenCalledTimes(2);
+        expect(result.status).toBe("IN_TRANSIT");
+      });
+
+      it("si la seña sigue moviéndose en cada intento: 409 PAYMENT_IN_FLIGHT, sin avisos", async () => {
+        tx.payment.updateMany.mockResolvedValue({ count: 0 });
+
+        await expect(
+          tripsService.updateTripStatus("t1", "u1", "IN_TRANSIT")
+        ).rejects.toMatchObject({ statusCode: 409, code: "PAYMENT_IN_FLIGHT" });
+        expect(notifyUsers).not.toHaveBeenCalled();
+      });
+
+      it("«va en camino» solo a las cargas activas; a las canceladas, CARGO_CANCELLED con la devolución", async () => {
+        await tripsService.updateTripStatus("t1", "u1", "IN_TRANSIT");
+
+        // el aviso de estado se arma solo con las cargas que viajan
+        expect(prisma.cargoItem.findMany).toHaveBeenCalledWith(
+          expect.objectContaining({ where: { tripId: "t1", status: "CONFIRMED" } })
+        );
+
+        const cancelaciones = vi
+          .mocked(notifyUsers)
+          .mock.calls.filter(([, data]) => data.type === "CARGO_CANCELLED");
+        expect(cancelaciones.map(([ids]) => ids)).toEqual([["c2"], ["c3"]]);
+
+        const conSeña = avisoA("c2");
+        expect(conSeña.tripId).toBe("t1");
+        expect(conSeña.title).toBe("tu carga se canceló: Córdoba → Rosario");
+        expect(conSeña.body).toContain("acero");
+        expect(conSeña.body).toContain("te devolvemos la seña entera ($100)");
+
+        const sinSeña = avisoA("c3");
+        expect(sinSeña.body).toContain("vidrio");
+        expect(sinSeña.body).not.toContain("$");
+      });
+
+      it("COMPLETED no cancela nada", async () => {
+        tx.trip.findUnique.mockResolvedValue(
+          baseTrip({
+            status: "IN_TRANSIT",
+            cargoItems: [
+              confirmedWithDeposit({
+                payments: [
+                  basePayment({ type: "DEPOSIT" }),
+                  basePayment({ id: "pay2", type: "BALANCE", status: "APPROVED" }),
+                ],
+              }),
+            ],
+          })
+        );
+
+        await tripsService.updateTripStatus("t1", "u1", "COMPLETED");
+
+        expect(tx.cargoItem.update).not.toHaveBeenCalled();
+        expect(tx.refundRequest.create).not.toHaveBeenCalled();
+      });
     });
   });
 

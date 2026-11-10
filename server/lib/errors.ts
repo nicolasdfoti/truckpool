@@ -174,12 +174,10 @@ export class PaymentRequiredError extends AppError {
  * vuelve a intentar en unos segundos.
  */
 export class PaymentInFlightError extends AppError {
-  constructor() {
-    super(
-      "la seña se está acreditando en este momento: probá retirar la carga de nuevo en unos segundos",
-      409,
-      "PAYMENT_IN_FLIGHT"
-    );
+  constructor(
+    message = "la seña se está acreditando en este momento: probá retirar la carga de nuevo en unos segundos"
+  ) {
+    super(message, 409, "PAYMENT_IN_FLIGHT");
   }
 }
 
