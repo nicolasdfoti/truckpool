@@ -14,6 +14,7 @@ import { calculateSuggestedPrice } from "../lib/pricing.js";
 import { AppError } from "../lib/errors.js";
 import { quoteCancellation, hoursUntilDeparture } from "../lib/cancellation.js";
 import { salidaEn } from "./helpers/salida.js";
+import { CARRIER_CAN_CHARGE } from "../lib/mappers.js";
 
 // el token del transportista llega a la base cifrado (ver OAuth), así que los
 // mocks usan un sobre real y no un string suelto
@@ -374,6 +375,7 @@ describe("GET /api/trips con filtros", () => {
       expect.objectContaining({
         where: {
           status: "OPEN",
+          carrier: CARRIER_CAN_CHARGE,
           origin: { contains: "rosario", mode: "insensitive" },
           features: { hasEvery: ["seguro", "expreso"] },
           date: { gt: expect.any(Date) },
@@ -390,7 +392,7 @@ describe("GET /api/trips con filtros", () => {
     expect(res.status).toBe(200);
     expect(prisma.trip.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { status: "OPEN", date: { gt: expect.any(Date) } },
+        where: { status: "OPEN", carrier: CARRIER_CAN_CHARGE, date: { gt: expect.any(Date) } },
       })
     );
   });
@@ -403,7 +405,7 @@ describe("GET /api/trips con filtros", () => {
     expect(res.status).toBe(200);
     expect(prisma.trip.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { status: "OPEN", date: { gt: expect.any(Date) } },
+        where: { status: "OPEN", carrier: CARRIER_CAN_CHARGE, date: { gt: expect.any(Date) } },
       })
     );
   });
@@ -420,6 +422,7 @@ describe("GET /api/trips con filtros", () => {
       expect.objectContaining({
         where: {
           status: "OPEN",
+          carrier: CARRIER_CAN_CHARGE,
           date: {
             gt: expect.any(Date),
             gte: new Date("2026-10-01T00:00:00.000Z"),
@@ -460,7 +463,7 @@ describe("POST /api/trips/:id/cargo-items y la fecha del viaje", () => {
       status: "OPEN",
       createdAt: new Date(),
       carrierId: "u1",
-      carrier: { id: "u1", name: "Flete" },
+      carrier: { id: "u1", name: "Flete", mpUserId: "mp-u1", mpAccessToken: MP_TOKEN_STORED },
       features: [],
       cargoItems: [],
       originLat: null,
@@ -534,6 +537,20 @@ describe("POST /api/trips/:id/cargo-items y la fecha del viaje", () => {
 
     expect(res.status).toBe(201);
     expect(tx.cargoItem.create).toHaveBeenCalled();
+  });
+
+  it("409 MP_ACCOUNT_NOT_CONNECTED si el fletero del viaje no tiene MP conectado", async () => {
+    const viaje = viajeAbierto(new Date(Date.now() + 2 * 24 * 60 * 60 * 1000));
+    const tx = mockTx({
+      ...viaje,
+      carrier: { ...viaje.carrier, mpUserId: null, mpAccessToken: null },
+    });
+
+    const res = await agregar();
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("MP_ACCOUNT_NOT_CONNECTED");
+    expect(tx.cargoItem.create).not.toHaveBeenCalled();
   });
 });
 

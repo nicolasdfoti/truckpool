@@ -34,6 +34,25 @@ export function tripAcceptsCargo(trip: { status: Trip["status"]; date: Date }) {
   return trip.status === "OPEN" && isTripDateAvailable(trip.date);
 }
 
+/**
+ * Filtro de Prisma para el fletero que puede cobrar: con cuenta de Mercado Pago
+ * conectada y su token (lo mismo que exige `resolveCarrierMpToken`). Un viaje de
+ * un fletero sin MP no se lista ni se reserva: la empresa recién se enteraba al
+ * pagar la seña, con el lugar tomado 24 h (03/Pagar seña#1).
+ */
+export const CARRIER_CAN_CHARGE = {
+  mpUserId: { not: null },
+  mpAccessToken: { not: null },
+} satisfies Prisma.UserWhereInput;
+
+/** el mismo chequeo en memoria (vacío o ausente también es no conectado) */
+export function carrierCanCharge(carrier: {
+  mpUserId?: string | null;
+  mpAccessToken?: string | null;
+}): boolean {
+  return Boolean(carrier.mpUserId && carrier.mpAccessToken);
+}
+
 export function toTripSummary(trip: TripWithCargo) {
   const used = activeVolume(trip.cargoItems);
   return {

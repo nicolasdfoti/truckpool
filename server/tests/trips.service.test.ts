@@ -23,6 +23,7 @@ import { notifyUsers } from "../lib/notifications.js";
 import { refundPayment } from "../lib/mercadopago.js";
 import { salidaEn } from "./helpers/salida.js";
 import { cargoPrice } from "../lib/pricing.js";
+import { CARRIER_CAN_CHARGE } from "../lib/mappers.js";
 
 // Los avisos son best-effort: en los tests de trips lo que importa es a Quién
 // se avisa y con qué tipo/title, nunca que el email salga. Por eso el módulo de
@@ -165,7 +166,13 @@ function baseTrip(overrides: Record<string, unknown> = {}) {
     originLng: null,
     destLat: null,
     destLng: null,
-    carrier: { id: "u1", isAvailableForRequests: true },
+    // por defecto el fletero tiene MP conectado: puede cobrar la seña
+    carrier: {
+      id: "u1",
+      isAvailableForRequests: true,
+      mpUserId: "mp-u1",
+      mpAccessToken: "token-cifrado",
+    },
     ...overrides,
   };
 }
@@ -244,9 +251,19 @@ describe("listOpenTrips", () => {
     await tripsService.listOpenTrips({}, AHORA);
 
     expect(prisma.trip.findMany).toHaveBeenCalledWith({
-      where: { status: "OPEN", date: { gt: CORTE_ARGENTINA } },
+      where: { status: "OPEN", carrier: CARRIER_CAN_CHARGE, date: { gt: CORTE_ARGENTINA } },
       include: { cargoItems: true, carrier: { select: { name: true } } },
       orderBy: { date: "asc" },
+    });
+  });
+
+  it("no lista viajes de fleteros sin Mercado Pago conectado", async () => {
+    await tripsService.listOpenTrips({}, AHORA);
+
+    const where = vi.mocked(prisma.trip.findMany).mock.calls[0]?.[0]?.where;
+    expect(where?.carrier).toEqual({
+      mpUserId: { not: null },
+      mpAccessToken: { not: null },
     });
   });
 
@@ -257,6 +274,7 @@ describe("listOpenTrips", () => {
       expect.objectContaining({
         where: {
           status: "OPEN",
+          carrier: CARRIER_CAN_CHARGE,
           origin: { contains: "ros", mode: "insensitive" },
           date: { gt: CORTE_ARGENTINA },
         },
@@ -274,6 +292,7 @@ describe("listOpenTrips", () => {
       expect.objectContaining({
         where: {
           status: "OPEN",
+          carrier: CARRIER_CAN_CHARGE,
           origin: { contains: "Córdoba", mode: "insensitive" },
           features: { hasEvery: ["seguro", "expreso"] },
           date: { gt: CORTE_ARGENTINA },
@@ -295,6 +314,7 @@ describe("listOpenTrips", () => {
       expect.objectContaining({
         where: {
           status: "OPEN",
+          carrier: CARRIER_CAN_CHARGE,
           date: {
             gt: CORTE_ARGENTINA,
             gte: new Date("2026-10-01T00:00:00.000Z"),
@@ -312,6 +332,7 @@ describe("listOpenTrips", () => {
       expect.objectContaining({
         where: {
           status: "OPEN",
+          carrier: CARRIER_CAN_CHARGE,
           destination: { contains: "Rosario", mode: "insensitive" },
           date: { gt: CORTE_ARGENTINA },
         },
@@ -1405,6 +1426,51 @@ describe("addCargoItem", () => {
       expect.objectContaining({ type: "DEPOSIT", amount: 100 })
     );
     expect(result.balancePayment).toBeNull();
+  });
+
+  it.each([
+    ["sin cuenta", { mpUserId: null, mpAccessToken: null }],
+    ["sin token", { mpUserId: "mp-u1", mpAccessToken: null }],
+    ["token vacío", { mpUserId: "mp-u1", mpAccessToken: "" }],
+    ["sin los campos", {}],
+  ])(
+    "409 MP_ACCOUNT_NOT_CONNECTED si el fletero no puede cobrar (%s)",
+    async (_caso, mp) => {
+      tx.trip.findUnique.mockResolvedValue(
+        baseTrip({ carrier: { id: "u1", isAvailableForRequests: true, ...mp } })
+      );
+
+      const err = await tripsService
+        .addCargoItem("t1", "c1", {
+          description: "Maquinaria",
+          pickupAddress: "Córdoba, Córdoba",
+          volume: 10,
+        })
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(AppError);
+      expect(err).toMatchObject({ statusCode: 409, code: "MP_ACCOUNT_NOT_CONNECTED" });
+      expect(tx.cargoItem.create).not.toHaveBeenCalled();
+      expect(tx.payment.create).not.toHaveBeenCalled();
+    }
+  );
+
+  it("lee la cuenta de MP del fletero dentro de la transacción", async () => {
+    tx.trip.findUnique.mockResolvedValue(baseTrip());
+
+    await tripsService.addCargoItem("t1", "c1", {
+      description: "Maquinaria",
+      pickupAddress: "Córdoba, Córdoba",
+      volume: 10,
+    });
+
+    expect(tx.trip.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({
+        include: expect.objectContaining({
+          carrier: { select: { mpUserId: true, mpAccessToken: true } },
+        }),
+      })
+    );
   });
 
   it("guarda el precio y la seña que da cargoPrice (lib/pricing.ts)", async () => {

@@ -3,6 +3,8 @@ import { Prisma } from "@prisma/client";
 import type { PaymentStatus, Role, Trip } from "@prisma/client";
 import {
   activeVolume,
+  CARRIER_CAN_CHARGE,
+  carrierCanCharge,
   isActiveCargo,
   toCargoItemResponse,
   toCargoQuoteResponse,
@@ -150,7 +152,8 @@ function endOfUtcDay(date: Date) {
 }
 
 export async function listOpenTrips(filters: ListTripsQuery = {}, now: Date = new Date()) {
-  const where: Prisma.TripWhereInput = { status: "OPEN" };
+  // un fletero sin MP no puede cobrar la seña: su viaje no se ofrece
+  const where: Prisma.TripWhereInput = { status: "OPEN", carrier: CARRIER_CAN_CHARGE };
 
   // Un viaje deja de ser una oportunidad para sumar carga cuando llega su fecha,
   // aunque el estado siga OPEN. El corte es el último instante del día de hoy en
@@ -1439,7 +1442,10 @@ export async function addCargoItem(
         async (tx) => {
           const trip = await tx.trip.findUnique({
             where: { id: tripId },
-            include: { cargoItems: true },
+            include: {
+              cargoItems: true,
+              carrier: { select: { mpUserId: true, mpAccessToken: true } },
+            },
           });
           if (!trip) throw new TripNotFoundError();
           if (trip.status !== "OPEN") throw new TripNotOpenError();
@@ -1447,6 +1453,15 @@ export async function addCargoItem(
           // carga nueva, aunque el estado siga OPEN. El estado no se toca: la
           // transición a IN_TRANSIT sigue siendo del transportista.
           if (!isTripDateAvailable(trip.date)) throw new TripDatePassedError();
+          // sin MP el fletero no puede cobrar la seña: la reserva tomaría el
+          // lugar 24 h para nada. Mismo código que la preference.
+          if (!carrierCanCharge(trip.carrier)) {
+            throw new AppError(
+              "este viaje no puede recibir pagos por ahora: el fletero no tiene Mercado Pago conectado",
+              409,
+              "MP_ACCOUNT_NOT_CONNECTED"
+            );
+          }
 
           const used = activeVolume(trip.cargoItems);
           const remaining = trip.capacityTotal - used;

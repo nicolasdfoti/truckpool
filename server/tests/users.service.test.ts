@@ -160,6 +160,29 @@ describe("users.service", () => {
     expect(include.tripsAsCarrier.where).toEqual({
       status: "OPEN",
       date: { gt: expect.any(Date) },
+      carrier: { mpUserId: { not: null }, mpAccessToken: { not: null } },
+    });
+  });
+
+  it("getCarrierProfile no muestra viajes abiertos si el fletero no puede cobrar por MP", async () => {
+    vi.mocked(prisma.user.findUnique).mockResolvedValue({
+      ...baseUser(),
+      tripsAsCarrier: [],
+      reviewsReceived: [],
+    } as PrismaUser & { tripsAsCarrier: unknown[]; reviewsReceived: unknown[] });
+    vi.mocked(prisma.review.aggregate).mockResolvedValue({
+      _avg: { rating: null },
+      _count: { _all: 0 },
+    } as never);
+
+    await usersService.getCarrierProfile("u1");
+
+    const include = vi.mocked(prisma.user.findUnique).mock.calls[0]?.[0]?.include as {
+      tripsAsCarrier: { where: { carrier?: unknown } };
+    };
+    expect(include.tripsAsCarrier.where.carrier).toEqual({
+      mpUserId: { not: null },
+      mpAccessToken: { not: null },
     });
   });
 
@@ -299,6 +322,21 @@ describe("calificaciones de fleteros", () => {
       id: "u2",
       ratingAvg: null,
       ratingCount: 0,
+    });
+  });
+
+  it("listCarriers no cuenta viajes abiertos de fleteros sin MP conectado", async () => {
+    vi.mocked(prisma.user.findMany).mockResolvedValue([] as never);
+    vi.mocked(prisma.review.groupBy).mockResolvedValue([] as never);
+
+    await usersService.listCarriers();
+
+    const select = vi.mocked(prisma.user.findMany).mock.calls[0]?.[0]?.select as {
+      _count: { select: { tripsAsCarrier: { where: { carrier?: unknown } } } };
+    };
+    expect(select._count.select.tripsAsCarrier.where.carrier).toEqual({
+      mpUserId: { not: null },
+      mpAccessToken: { not: null },
     });
   });
 
