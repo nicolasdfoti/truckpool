@@ -12,6 +12,7 @@ import { geocode, haversineKm, type LatLng } from "../../lib/geocode.js";
 import { fetchRouteGeometry } from "../../lib/routing.js";
 import { point, lineString, pointToLineDistance } from "@turf/turf";
 import {
+  cargoPrice,
   formatPesos,
   isPriceInRange,
   priceRangeFor,
@@ -1434,17 +1435,9 @@ export async function addCargoItem(
             throw new NotEnoughCapacityError();
           }
 
-          const priceShare = new Prisma.Decimal(trip.price)
-            .mul(data.volume)
-            .div(trip.capacityTotal)
-            .toDecimalPlaces(2);
-
           // la seña sale de esta carga (no del viaje entero): cada empresa deja
           // su parte para que el transportista no le arme el espacio al aire.
-          const depositAmount = priceShare
-            .mul(trip.depositPercent)
-            .div(100)
-            .toDecimalPlaces(2);
+          const { priceShare, depositAmount } = cargoPrice(trip, data.volume);
 
           // geocodificar el pickup (best-effort: si falla, lat/lng quedan null)
           const pickupCoords = await geocode(data.pickupAddress);

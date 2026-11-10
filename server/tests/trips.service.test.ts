@@ -22,6 +22,7 @@ import { geocode } from "../lib/geocode.js";
 import { notifyUsers } from "../lib/notifications.js";
 import { refundPayment } from "../lib/mercadopago.js";
 import { salidaEn } from "./helpers/salida.js";
+import { cargoPrice } from "../lib/pricing.js";
 
 // Los avisos son best-effort: en los tests de trips lo que importa es a Quién
 // se avisa y con qué tipo/title, nunca que el email salga. Por eso el módulo de
@@ -1352,6 +1353,34 @@ describe("addCargoItem", () => {
       expect.objectContaining({ type: "DEPOSIT", amount: 100 })
     );
     expect(result.balancePayment).toBeNull();
+  });
+
+  it("guarda el precio y la seña que da cargoPrice (lib/pricing.ts)", async () => {
+    // 1000 por 3 m³ con 15 % de seña: 333,33 y 50,00, los dos redondeados
+    const viaje = baseTrip({
+      price: new Prisma.Decimal("1000.00"),
+      capacityTotal: 3,
+      depositPercent: 15,
+    });
+    tx.trip.findUnique.mockResolvedValue(viaje);
+    const esperado = cargoPrice(viaje, 1);
+
+    await tripsService.addCargoItem("t1", "c1", {
+      description: "Maquinaria",
+      pickupAddress: "Córdoba, Córdoba",
+      volume: 1,
+    });
+
+    expect(tx.cargoItem.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          priceShare: esperado.priceShare,
+          depositAmount: esperado.depositAmount,
+        }),
+      })
+    );
+    expect(esperado.priceShare.toFixed(2)).toBe("333.33");
+    expect(esperado.depositAmount.toFixed(2)).toBe("50.00");
   });
 
   it("respeta un porcentaje de seña distinto al 20%", async () => {

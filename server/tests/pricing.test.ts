@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
+import { Prisma } from "@prisma/client";
 import {
   calculateSuggestedPrice,
+  cargoPrice,
   formatPesos,
   isPriceInRange,
   priceRangeFor,
@@ -119,5 +121,39 @@ describe("formatPesos", () => {
   it("usa el separador de miles argentino", () => {
     expect(formatPesos(88_200)).toBe("$88.200");
     expect(formatPesos(1_234_567)).toBe("$1.234.567");
+  });
+});
+
+describe("cargoPrice", () => {
+  it("prorratea el precio del viaje por volumen y saca la seña de esa parte", () => {
+    // 1500 por 30 m³, 10 m³ → 500; 20 % de seña → 100; saldo 400
+    const quote = cargoPrice(
+      { price: new Prisma.Decimal("1500.00"), capacityTotal: 30, depositPercent: 20 },
+      10
+    );
+    expect(quote.priceShare.toFixed(2)).toBe("500.00");
+    expect(quote.depositAmount.toFixed(2)).toBe("100.00");
+    expect(quote.balanceAmount.toFixed(2)).toBe("400.00");
+  });
+
+  it("redondea a centavos y el saldo es lo que falta para el precio de la carga", () => {
+    // 1000 / 3 = 333.333… → 333.33; 15 % = 49.9995 → 50.00; saldo 283.33
+    const quote = cargoPrice(
+      { price: new Prisma.Decimal("1000.00"), capacityTotal: 3, depositPercent: 15 },
+      1
+    );
+    expect(quote.priceShare.toFixed(2)).toBe("333.33");
+    expect(quote.depositAmount.toFixed(2)).toBe("50.00");
+    expect(quote.balanceAmount.toFixed(2)).toBe("283.33");
+    expect(quote.depositAmount.plus(quote.balanceAmount).equals(quote.priceShare)).toBe(
+      true
+    );
+  });
+
+  it("devuelve Decimal, nunca number: la plata no pasa por coma flotante", () => {
+    const quote = cargoPrice({ price: "0.30", capacityTotal: 3, depositPercent: 10 }, 1);
+    expect(quote.priceShare).toBeInstanceOf(Prisma.Decimal);
+    expect(quote.priceShare.toFixed(2)).toBe("0.10");
+    expect(quote.depositAmount.toFixed(2)).toBe("0.01");
   });
 });
