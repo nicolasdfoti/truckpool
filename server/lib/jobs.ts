@@ -1,6 +1,9 @@
 import { AppError } from "./errors.js";
 import { processPendingRefunds } from "../modules/payments/refunds.service.js";
-import { releaseExpiredReservations } from "../modules/trips/trips.service.js";
+import {
+  autoCancelUndepartedTrips,
+  releaseExpiredReservations,
+} from "../modules/trips/trips.service.js";
 
 /**
  * Scheduler de tareas periódicas, en el mismo proceso de la API.
@@ -32,6 +35,12 @@ export const JOBS: Job[] = [
   { name: "refunds", intervalMs: MINUTE_MS, run: processPendingRefunds },
   // reservas PENDING sin seña vencidas a las 24 h (FULL→OPEN en la misma TX)
   { name: "reservations", intervalMs: MINUTE_MS, run: releaseExpiredReservations },
+  // D6: viajes OPEN/FULL que no salieron 24 h después de la salida
+  {
+    name: "auto-cancel-trips",
+    intervalMs: 5 * MINUTE_MS,
+    run: autoCancelUndepartedTrips,
+  },
   // L9: renovar los tokens de MP de los fleteros va acá como un job más
   // (`{ name: "mp-token-refresh", intervalMs, run }`), con su CAS en la base.
 ];

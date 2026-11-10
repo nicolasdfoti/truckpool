@@ -29,8 +29,9 @@ export type NotifyInput = {
    * Email a medida para los avisos que necesitan más contexto del que cabe en
    * title/body (importes, varias cargas, ventana de cancelación). Si no se pasa,
    * se arma un email genérico con el title, el body y un link al viaje.
+   * `false`: el aviso es solo in-app (todavía no tiene un email pensado).
    */
-  email?: (recipient: { name: string; email: string }) => NotificationEmail;
+  email?: ((recipient: { name: string; email: string }) => NotificationEmail) | false;
 };
 
 /** el email por defecto: el mismo aviso, con formato */
@@ -85,6 +86,7 @@ export async function notifyUsers(userIds: string[], data: NotifyInput): Promise
 
   // El email va fire-and-forget: la respuesta HTTP no espera a Resend. Los
   // errores se loguean adentro de sendEmailToUser, que nunca lanza.
+  if (data.email === false) return count;
   const recipients = users.filter((user) => user.emailNotifications);
   if (recipients.length > 0) {
     void deliverEmails(recipients, data);

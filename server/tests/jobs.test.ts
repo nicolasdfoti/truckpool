@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { processPendingRefunds } from "../modules/payments/refunds.service.js";
-import { releaseExpiredReservations } from "../modules/trips/trips.service.js";
+import {
+  autoCancelUndepartedTrips,
+  releaseExpiredReservations,
+} from "../modules/trips/trips.service.js";
 import { JOBS, runJob, startJobs, type Job } from "../lib/jobs.js";
 
 // El scheduler: cada job se prueba llamándolo directo (sin timers); los timers
@@ -12,6 +15,7 @@ vi.mock("../modules/payments/refunds.service.js", () => ({
 
 vi.mock("../modules/trips/trips.service.js", () => ({
   releaseExpiredReservations: vi.fn().mockResolvedValue(0),
+  autoCancelUndepartedTrips: vi.fn().mockResolvedValue(0),
 }));
 
 const AHORA = new Date("2026-11-10T12:00:00.000Z");
@@ -47,6 +51,14 @@ describe("JOBS", () => {
 
     await reservations!.run(AHORA);
     expect(releaseExpiredReservations).toHaveBeenCalledWith(AHORA);
+  });
+
+  it("los viajes que no salieron se auto-cancelan cada 5 min (D6)", async () => {
+    const autoCancel = JOBS.find((j) => j.name === "auto-cancel-trips");
+    expect(autoCancel?.intervalMs).toBe(5 * 60_000);
+
+    await autoCancel!.run(AHORA);
+    expect(autoCancelUndepartedTrips).toHaveBeenCalledWith(AHORA);
   });
 
   it("cada job tiene un nombre único", () => {

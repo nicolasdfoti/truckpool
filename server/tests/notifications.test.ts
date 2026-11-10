@@ -148,6 +148,17 @@ describe("notifyUsers", () => {
       expect(sendEmailToUser).not.toHaveBeenCalled();
     });
 
+    it("con email: false el aviso es solo in-app, aunque el usuario tenga el email prendido", async () => {
+      vi.mocked(prisma.user.findMany).mockResolvedValue([user()] as never);
+      vi.mocked(prisma.notification.createMany).mockResolvedValue({ count: 1 } as never);
+
+      const count = await notifyUsers(["u1"], { ...aviso, email: false });
+
+      expect(count).toBe(1);
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(sendEmailToUser).not.toHaveBeenCalled();
+    });
+
     it("usa el email a medida cuando el aviso lo trae", async () => {
       vi.mocked(prisma.user.findMany).mockResolvedValue([user()] as never);
       vi.mocked(prisma.notification.createMany).mockResolvedValue({ count: 1 } as never);

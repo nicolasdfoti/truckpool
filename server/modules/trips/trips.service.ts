@@ -17,7 +17,11 @@ import {
   priceRangeFor,
   rateFor,
 } from "../../lib/pricing.js";
-import { hoursUntilDeparture, quoteCancellation } from "../../lib/cancellation.js";
+import {
+  departureInstant,
+  hoursUntilDeparture,
+  quoteCancellation,
+} from "../../lib/cancellation.js";
 import { balanceOf } from "../payments/payments.service.js";
 import { processRefundRequest } from "../payments/refunds.service.js";
 import {
@@ -662,20 +666,101 @@ async function notifyTripStatusChange(
   }
 }
 
+/** D6: un viaje que no pasó a IN_TRANSIT 24 h después de la salida se cancela solo */
+export const NO_DEPARTURE_CANCEL_AFTER_MS = 24 * 60 * 60 * 1000;
+
+/** cuántos viajes mira la auto-cancelación por corrida */
+const AUTO_CANCEL_BATCH = 100;
+
+/**
+ * Quién cambia el estado del viaje: el fletero dueño, o el scheduler cuando el
+ * viaje no salió a tiempo (D6, auto-cancelación).
+ */
+type StatusActor = { by: "CARRIER"; carrierId: string } | { by: "NO_DEPARTURE" };
+
+/** desde cuándo un viaje que no salió se cancela solo: 24 h después de la salida */
+function noDepartureDeadline(trip: { date: Date; departureTime: string | null }): Date {
+  return new Date(
+    departureInstant(trip.date, trip.departureTime).getTime() +
+      NO_DEPARTURE_CANCEL_AFTER_MS
+  );
+}
+
 export async function updateTripStatus(
   tripId: string,
   carrierId: string,
   status: TripStatusChange
 ): Promise<ReturnType<typeof toTripSummary>> {
+  const trip = await applyTripStatus(
+    tripId,
+    status,
+    { by: "CARRIER", carrierId },
+    new Date()
+  );
+  // el fletero nunca se saltea: lo que no puede hacer lanza adentro
+  if (!trip) throw new InvalidTransitionError();
+  return trip;
+}
+
+/**
+ * D6 (b): cancela los viajes OPEN/FULL que no pasaron a IN_TRANSIT 24 h después
+ * de la salida (`departureInstant`; sin hora, las 23:59 ART del día). Lo corre
+ * el scheduler (lib/jobs.ts). Es el mismo camino que la cancelación del
+ * fletero: las cargas activas se cancelan con `cancelCargoForTrip` y la seña
+ * cobrada vuelve entera por el outbox. Cancela también los viajes sin cargas.
+ *
+ * La búsqueda es un superconjunto (el plazo vence después de `date`, porque la
+ * salida nunca es más de un día antes) y el plazo se filtra acá. Dentro de la
+ * TX se vuelve a chequear estado y plazo: si el fletero lo pasó a IN_TRANSIT
+ * en el medio, no se toca. Un viaje que falla no corta la corrida.
+ */
+export async function autoCancelUndepartedTrips(now: Date = new Date()): Promise<number> {
+  const candidates = await prisma.trip.findMany({
+    where: { status: { in: ["OPEN", "FULL"] }, date: { lte: now } },
+    select: { id: true, date: true, departureTime: true },
+    orderBy: { date: "asc" },
+    take: AUTO_CANCEL_BATCH,
+  });
+
+  let cancelled = 0;
+  for (const trip of candidates) {
+    if (noDepartureDeadline(trip) > now) continue;
+    try {
+      const done = await applyTripStatus(
+        trip.id,
+        "CANCELLED",
+        { by: "NO_DEPARTURE" },
+        now
+      );
+      if (done) cancelled++;
+    } catch (err) {
+      console.error("[viajes] no se pudo auto-cancelar un viaje que no salió", {
+        name: err instanceof Error ? err.name : typeof err,
+        code: err instanceof AppError ? err.code : undefined,
+      });
+    }
+  }
+  return cancelled;
+}
+
+/**
+ * Cambia el estado del viaje. Devuelve null solo si el scheduler se saltea el
+ * viaje porque al releerlo ya no corresponde cancelarlo (CAS).
+ */
+async function applyTripStatus(
+  tripId: string,
+  status: TripStatusChange,
+  actor: StatusActor,
+  now: Date
+): Promise<ReturnType<typeof toTripSummary> | null> {
   // El cambio de estado y los saldos a cobrar se escriben juntos: si el viaje
   // quedara IN_TRANSIT sin sus pagos BALANCE, nadie podría cobrarlos y el
   // balance de la carga quedaría trucho. Lo mismo con las cargas PENDING que se
   // cancelan al salir (D3). Serializable con reintento: la seña de una carga
   // PENDING se puede estar acreditando en el mismo momento.
-  const now = new Date();
   const result = await retryOnConflict(() =>
     prisma.$transaction(
-      async (tx): Promise<StatusChangeResult> => {
+      async (tx): Promise<StatusChangeResult | null> => {
         const trip = await tx.trip.findUnique({
           where: { id: tripId },
           include: {
@@ -689,15 +774,24 @@ export async function updateTripStatus(
           },
         });
         if (!trip) throw new TripNotFoundError();
-        if (trip.carrierId !== carrierId) {
-          throw new AppError(
-            "solo el transportista del viaje puede actualizar su estado",
-            403,
-            "FORBIDDEN"
-          );
-        }
-        if (!ALLOWED_TRANSITIONS[status].includes(trip.status)) {
-          throw new InvalidTransitionError();
+        if (actor.by === "CARRIER") {
+          if (trip.carrierId !== actor.carrierId) {
+            throw new AppError(
+              "solo el transportista del viaje puede actualizar su estado",
+              403,
+              "FORBIDDEN"
+            );
+          }
+          if (!ALLOWED_TRANSITIONS[status].includes(trip.status)) {
+            throw new InvalidTransitionError();
+          }
+        } else if (
+          // CAS del scheduler: si el viaje ya salió o se canceló, o su salida
+          // ya no está vencida, no se toca
+          !ALLOWED_TRANSITIONS[status].includes(trip.status) ||
+          noDepartureDeadline(trip) > now
+        ) {
+          return null;
         }
 
         // completar el viaje es cerrar la cuenta: no se puede hasta que todas
@@ -778,6 +872,7 @@ export async function updateTripStatus(
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, maxWait: 5000 }
     )
   );
+  if (!result) return null;
 
   // Aviso de estado del viaje (un viaje cancelado avisa con CARGO_CANCELLED, abajo)
   if (status !== "CANCELLED") await notifyTripStatusChange(tripId, result.trip, status);
@@ -845,9 +940,11 @@ export async function updateTripStatus(
   for (const item of result.cancelled) {
     const desc = item.description.toLowerCase();
     const motivo =
-      status === "CANCELLED"
-        ? `${result.trip.carrierName} canceló el viaje, así que tu carga ${desc} no viaja.`
-        : `el viaje salió sin que tu carga ${desc} estuviera confirmada, así que no viaja.`;
+      status !== "CANCELLED"
+        ? `el viaje salió sin que tu carga ${desc} estuviera confirmada, así que no viaja.`
+        : actor.by === "NO_DEPARTURE"
+          ? `el viaje no salió dentro de las 24 h posteriores a la salida, así que tu carga ${desc} no viaja.`
+          : `${result.trip.carrierName} canceló el viaje, así que tu carga ${desc} no viaja.`;
     const plata =
       item.refundAmount > 0
         ? `te devolvemos la seña entera ($${item.refundAmount}).`
@@ -861,6 +958,25 @@ export async function updateTripStatus(
             : `tu carga se canceló: ${ruta}`,
         body: `${motivo} ${plata}`,
         tripId,
+      })
+    );
+  }
+
+  // D6 automática: el fletero se entera de que el viaje se canceló sin él.
+  // Solo in-app: el email queda para L7.
+  if (actor.by === "NO_DEPARTURE") {
+    const n = result.cancelled.length;
+    const cargas =
+      n === 0
+        ? "no tenía cargas activas."
+        : `${n === 1 ? "se canceló 1 carga" : `se cancelaron ${n} cargas`} y a cada empresa se le devuelve la seña cobrada.`;
+    await bestEffortNotify(() =>
+      notifyUsers([result.trip.carrierId], {
+        type: "TRIP_STATUS_CHANGED",
+        title: `se canceló tu viaje: ${ruta}`,
+        body: `no pasó a «en tránsito» dentro de las 24 h posteriores a la salida, así que lo cancelamos. ${cargas}`,
+        tripId,
+        email: false,
       })
     );
   }

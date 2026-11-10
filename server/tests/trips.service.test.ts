@@ -394,7 +394,9 @@ function avisoA(userId: string) {
   const [, data] = call;
   return {
     ...data,
-    email: data.email?.({ name: "Destinatario", email: "d@e.com" }),
+    email: data.email
+      ? data.email({ name: "Destinatario", email: "d@e.com" })
+      : undefined,
   };
 }
 
@@ -2934,6 +2936,308 @@ describe("addCargoItem", () => {
         const sinSeña = avisoA("c3");
         expect(sinSeña.body).toContain("vidrio");
         expect(sinSeña.body).not.toContain("$");
+      });
+    });
+
+    describe("auto-cancelación: el viaje no salió 24 h después de la salida (D6)", () => {
+      // 12/11 09:00 ART
+      const AHORA = new Date("2026-11-12T12:00:00.000Z");
+
+      let errorSpy: ReturnType<typeof vi.spyOn>;
+
+      beforeEach(() => {
+        // los viajes que lee la TX se encolan por test: un valor que un test no
+        // consumió (porque no llegó a la TX) no puede pasar al siguiente
+        tx.trip.findUnique.mockReset();
+        tx.cargoItem.update.mockResolvedValue({});
+        tx.payment.updateMany.mockReset().mockResolvedValue({ count: 1 });
+        tx.refundRequest.create = vi.fn().mockResolvedValue({});
+        errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      });
+
+      afterEach(() => {
+        tx.trip.findUnique.mockReset();
+        tx.payment.updateMany.mockReset().mockResolvedValue({ count: 1 });
+      });
+
+      const empresa = (id: string) => ({
+        id,
+        name: `Empresa ${id}`,
+        email: `${id}@empresa.com`,
+        emailNotifications: true,
+      });
+
+      /** confirmada con seña, pendiente con seña y pendiente sin pagar */
+      const cargas = () => [
+        baseCargoItem({
+          id: "i1",
+          status: "CONFIRMED",
+          companyId: "c1",
+          description: "Maquinaria",
+          company: empresa("c1"),
+          payments: [basePayment({ id: "pay1", cargoItemId: "i1", mpPaymentId: "mp-1" })],
+        }),
+        baseCargoItem({
+          id: "i2",
+          companyId: "c2",
+          description: "Acero",
+          company: empresa("c2"),
+          payments: [basePayment({ id: "pay2", cargoItemId: "i2", mpPaymentId: "mp-2" })],
+        }),
+        baseCargoItem({
+          id: "i3",
+          companyId: "c3",
+          description: "Vidrio",
+          company: empresa("c3"),
+          payments: [],
+        }),
+      ];
+
+      /** la búsqueda devuelve estos viajes; la TX lee el mismo viaje completo */
+      type Viaje = ReturnType<typeof baseTrip> & { departureTime: string | null };
+
+      function viajes(...trips: Viaje[]) {
+        (prisma.trip.findMany as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(
+          trips.map((t) => ({ id: t.id, date: t.date, departureTime: t.departureTime }))
+        );
+        for (const t of trips) tx.trip.findUnique.mockResolvedValueOnce(t);
+      }
+
+      function viaje(overrides: Record<string, unknown> = {}) {
+        return baseTrip({
+          origin: "Córdoba",
+          destination: "Rosario",
+          ...salidaEn(-24, AHORA.getTime()),
+          cargoItems: cargas(),
+          ...overrides,
+        }) as Viaje;
+      }
+
+      const avisos = (type: string) =>
+        vi.mocked(notifyUsers).mock.calls.filter(([, data]) => data.type === type);
+
+      it("busca los viajes OPEN/FULL cuya fecha ya pasó, los más viejos primero", async () => {
+        viajes();
+
+        expect(await tripsService.autoCancelUndepartedTrips(AHORA)).toBe(0);
+
+        expect(prisma.trip.findMany).toHaveBeenCalledWith({
+          // el plazo vence 24 h después de la salida, y la salida nunca es más
+          // de un día antes de `date`: con `date` en el futuro no hay nada que ver
+          where: { status: { in: ["OPEN", "FULL"] }, date: { lte: AHORA } },
+          select: { id: true, date: true, departureTime: true },
+          orderBy: { date: "asc" },
+          take: 100,
+        });
+        expect(prisma.$transaction).not.toHaveBeenCalled();
+      });
+
+      it.each([["OPEN"], ["FULL"]])(
+        "cancela el viaje %s a las 24 h exactas de la salida y devuelve entera cada seña cobrada",
+        async (status) => {
+          viajes(viaje({ status }));
+
+          expect(await tripsService.autoCancelUndepartedTrips(AHORA)).toBe(1);
+
+          expect(tx.trip.update).toHaveBeenCalledWith(
+            expect.objectContaining({
+              where: { id: "t1" },
+              data: { status: "CANCELLED" },
+            })
+          );
+          expect(tx.cargoItem.update.mock.calls.map(([arg]) => arg.where.id)).toEqual([
+            "i1",
+            "i2",
+            "i3",
+          ]);
+          expect(tx.refundRequest.create.mock.calls.map(([arg]) => arg.data)).toEqual([
+            {
+              cargoItemId: "i1",
+              targetAmount: new Prisma.Decimal("100.00"),
+              status: "PENDING",
+            },
+            {
+              cargoItemId: "i2",
+              targetAmount: new Prisma.Decimal("100.00"),
+              status: "PENDING",
+            },
+          ]);
+          // y después de la TX las procesa por el outbox
+          for (const id of ["i1", "i2"]) {
+            expect(prisma.refundRequest.findUnique).toHaveBeenCalledWith({
+              where: { cargoItemId: id },
+            });
+          }
+        }
+      );
+
+      it("a 23:59 h de la salida todavía no lo cancela", async () => {
+        viajes(viaje(salidaEn(-24 + 1 / 60, AHORA.getTime())));
+
+        expect(await tripsService.autoCancelUndepartedTrips(AHORA)).toBe(0);
+        expect(prisma.$transaction).not.toHaveBeenCalled();
+      });
+
+      it("un viaje viejo sin hora de salida cuenta desde las 23:59 ART de su día", async () => {
+        // 10/11 (mediodía del navegador): salida 10/11 23:59 ART = 11/11 02:59Z
+        const sinHora = () =>
+          viaje({ date: new Date("2026-11-10T15:00:00.000Z"), departureTime: null });
+
+        viajes(sinHora());
+        expect(
+          await tripsService.autoCancelUndepartedTrips(
+            new Date("2026-11-12T02:58:00.000Z")
+          )
+        ).toBe(0);
+
+        viajes(sinHora());
+        expect(
+          await tripsService.autoCancelUndepartedTrips(
+            new Date("2026-11-12T02:59:00.000Z")
+          )
+        ).toBe(1);
+      });
+
+      it("avisa a cada empresa que el viaje no salió y qué se le devuelve", async () => {
+        viajes(viaje());
+
+        await tripsService.autoCancelUndepartedTrips(AHORA);
+
+        const cancelaciones = avisos("CARGO_CANCELLED");
+        expect(cancelaciones.map(([ids]) => ids)).toEqual([["c1"], ["c2"], ["c3"]]);
+        const [, conSeña] = cancelaciones[0]!;
+        expect(conSeña.title).toBe("se canceló el viaje: Córdoba → Rosario");
+        expect(conSeña.body).toContain("no salió");
+        expect(conSeña.body).toContain("maquinaria");
+        expect(conSeña.body).toContain("te devolvemos la seña entera ($100)");
+        expect(conSeña.body).not.toContain("canceló el viaje");
+        const [, sinSeña] = cancelaciones[2]!;
+        expect(sinSeña.body).not.toContain("$");
+      });
+
+      it("avisa al fletero solo in-app que se le canceló el viaje", async () => {
+        viajes(viaje());
+
+        await tripsService.autoCancelUndepartedTrips(AHORA);
+
+        const alFletero = avisos("TRIP_STATUS_CHANGED");
+        expect(alFletero).toHaveLength(1);
+        const [ids, data] = alFletero[0]!;
+        expect(ids).toEqual(["u1"]);
+        expect(data).toMatchObject({
+          title: "se canceló tu viaje: Córdoba → Rosario",
+          tripId: "t1",
+          email: false,
+        });
+        expect(data.body).toContain("24 h");
+        expect(data.body).toContain("3 cargas");
+      });
+
+      it("también cancela un viaje sin cargas", async () => {
+        viajes(viaje({ cargoItems: [] }));
+
+        expect(await tripsService.autoCancelUndepartedTrips(AHORA)).toBe(1);
+
+        expect(tx.trip.update).toHaveBeenCalledWith(
+          expect.objectContaining({ data: { status: "CANCELLED" } })
+        );
+        expect(tx.refundRequest.create).not.toHaveBeenCalled();
+        expect(avisos("CARGO_CANCELLED")).toHaveLength(0);
+        const [, data] = avisos("TRIP_STATUS_CHANGED")[0]!;
+        expect(data.body).toContain("no tenía cargas");
+      });
+
+      it.each([["IN_TRANSIT"], ["COMPLETED"], ["CANCELLED"]])(
+        "si al releer el viaje está %s, no lo toca ni avisa",
+        async (status) => {
+          viajes(viaje({ status }));
+
+          expect(await tripsService.autoCancelUndepartedTrips(AHORA)).toBe(0);
+
+          expect(tx.trip.update).not.toHaveBeenCalled();
+          expect(tx.cargoItem.update).not.toHaveBeenCalled();
+          expect(notifyUsers).not.toHaveBeenCalled();
+        }
+      );
+
+      it("relee el plazo dentro de la TX: si la salida cambió, no lo cancela", async () => {
+        const original = viaje();
+        (prisma.trip.findMany as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([
+          { id: "t1", date: original.date, departureTime: original.departureTime },
+        ]);
+        tx.trip.findUnique.mockResolvedValueOnce(viaje(salidaEn(-2, AHORA.getTime())));
+
+        expect(await tripsService.autoCancelUndepartedTrips(AHORA)).toBe(0);
+        expect(tx.trip.update).not.toHaveBeenCalled();
+      });
+
+      it("no exige que lo pida el fletero: lo cancela el sistema", async () => {
+        viajes(viaje({ carrierId: "otro-fletero" }));
+
+        expect(await tripsService.autoCancelUndepartedTrips(AHORA)).toBe(1);
+        const [ids] = avisos("TRIP_STATUS_CHANGED")[0]!;
+        expect(ids).toEqual(["otro-fletero"]);
+      });
+
+      it("si una seña se aprueba en el medio reintenta y la devuelve entera", async () => {
+        const conSeñaPorAcreditarse = () =>
+          viaje({
+            cargoItems: [
+              baseCargoItem({
+                id: "i1",
+                company: empresa("c1"),
+                payments: [basePayment({ status: "PENDING", mpPaymentId: "mp-1" })],
+              }),
+            ],
+          });
+        viajes(conSeñaPorAcreditarse());
+        tx.trip.findUnique.mockResolvedValueOnce(
+          viaje({
+            cargoItems: [
+              baseCargoItem({
+                id: "i1",
+                company: empresa("c1"),
+                payments: [basePayment()],
+              }),
+            ],
+          })
+        );
+        tx.payment.updateMany.mockResolvedValueOnce({ count: 0 });
+
+        expect(await tripsService.autoCancelUndepartedTrips(AHORA)).toBe(1);
+
+        expect(prisma.$transaction).toHaveBeenCalledTimes(2);
+        expect(tx.refundRequest.create).toHaveBeenCalledTimes(1);
+      });
+
+      it("un viaje que falla no corta la corrida y el log no lleva el mensaje", async () => {
+        const roto = viaje({ id: "t-roto" });
+        const sano = viaje({ id: "t2", cargoItems: [] });
+        (prisma.trip.findMany as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(
+          [roto, sano].map((t) => ({
+            id: t.id,
+            date: t.date,
+            departureTime: t.departureTime,
+          }))
+        );
+        tx.trip.findUnique
+          .mockRejectedValueOnce(new Error("detalle de la base con datos"))
+          .mockResolvedValueOnce(sano);
+
+        expect(await tripsService.autoCancelUndepartedTrips(AHORA)).toBe(1);
+
+        expect(errorSpy).toHaveBeenCalledTimes(1);
+        expect(JSON.stringify(errorSpy.mock.calls[0])).not.toContain("datos");
+      });
+
+      it("la cancelación manual del fletero sigue avisando que la canceló él", async () => {
+        tx.trip.findUnique.mockResolvedValue(viaje({ date: futureTripDate(3) }));
+
+        await tripsService.updateTripStatus("t1", "u1", "CANCELLED");
+
+        const [, data] = avisos("CARGO_CANCELLED")[0]!;
+        expect(data.body).toContain("canceló el viaje");
+        expect(avisos("TRIP_STATUS_CHANGED")).toHaveLength(0);
       });
     });
   });
