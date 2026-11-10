@@ -237,6 +237,28 @@ reintentos legítimos. **Indicio sin confirmar (sandbox, 2026-11-03):** la entre
 con 200. Si fue un reintento posterior a la ventana de ±5 min, sugiere que MP firma cada
 reintento con un `ts` nuevo. El historial no muestra cuándo ni con cuántos intentos, así que
 la verificación sigue pendiente.
+**Pruebas con MP real que quedaron sin verificar en la Tanda 1 de L4** (los tests usan la forma
+de la documentación o mocks; antes del gate, verificarlas con pago real, montos chicos):
+- **Errores de la API de reembolsos:** la forma real del error (`status` + `cause[].code`) y qué
+  código devuelve MP por token inválido y por falta de saldo en la cuenta del fletero. Lo que
+  queda en `RefundRequest.lastError` (`MP_ERROR:<status>:<causa>`) y que termine en FAILED con
+  alerta (`REFUND_FAILED:<request>`) al llegar al tope.
+- **Timeout del SDK:** un pedido de reembolso que pasa los 20 s (o cuya respuesta se pierde) no
+  paga dos veces: el reintento lee `transaction_amount_refunded` antes de pedir y en MP queda un
+  solo reembolso.
+- **Devolución del 100 % pedida por la app:** hasta ahora el 100 % solo se hizo a mano desde el
+  panel (fase 1) y desde la app solo el 50 % (fase 2). Probar retiro a más de 48 h, salida con
+  una PENDING con seña (D3) y cancelación del viaje (D6): `Payment` REFUNDED con `refundedAmount`
+  igual al monto, `RefundRequest` COMPLETED, un solo reembolso en MP y la carga sin trabarse.
+- **Contracargos:** la respuesta real de `Payment.get` para `charged_back` e `in_mediation`
+  (estado, `CHARGED_BACK` y los avisos a los admins). Si MP no deja simularlo, revisar el primer
+  caso real.
+- **Redondeo de D7:** en un reembolso parcial cuyo monto no divide exacto (p. ej. seña de
+  $33,33 retirada entre 24 y 48 h), comparar `netPlatformFeeAmount` y `netCarrierAmount` con lo
+  que MP le sacó a la plataforma y le dejó al fletero; anotar si difiere en un centavo.
+- **Seña aprobada después de D3 o D6:** una seña que queda por acreditarse (pago creado en MP y
+  todavía pendiente) cuando el viaje sale (D3) o se cancela (D6); al aprobarse, el webhook la
+  devuelve entera (`refundIfCancelled`), con un solo reembolso y la carga CANCELLED.
 **El pago real es la única prueba de punta a punta del cobro con OAuth** (ver L1: en el sandbox
 ninguna preference creada con un token de OAuth se pudo pagar). Antes de hacerlo:
 - se hace en dos fases. **Fase 1, solo seña:** conexión, reserva, pago, webhook, comisión y
