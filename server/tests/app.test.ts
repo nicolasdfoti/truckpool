@@ -474,13 +474,16 @@ describe("POST /api/trips/:id/cargo-items y la fecha del viaje", () => {
   }
 
   /** La transacción de addCargoItem, con el viaje que cada test necesita. */
-  function mockTx(trip: unknown) {
+  function mockTx(trip: unknown, pendientes: { tripId: string }[] = []) {
     const tx = {
       trip: {
         findUnique: vi.fn().mockResolvedValue(trip),
         update: vi.fn().mockResolvedValue(undefined),
       },
-      cargoItem: { create: vi.fn().mockResolvedValue({ id: "i1" }) },
+      cargoItem: {
+        create: vi.fn().mockResolvedValue({ id: "i1" }),
+        findMany: vi.fn().mockResolvedValue(pendientes),
+      },
       payment: { create: vi.fn().mockResolvedValue({ id: "p1" }) },
       user: {
         findUnique: vi.fn().mockResolvedValue({
@@ -537,6 +540,20 @@ describe("POST /api/trips/:id/cargo-items y la fecha del viaje", () => {
 
     expect(res.status).toBe(201);
     expect(tx.cargoItem.create).toHaveBeenCalled();
+  });
+
+  it("409 TOO_MANY_PENDING con 3 reservas sin seña", async () => {
+    const tx = mockTx(viajeAbierto(new Date(Date.now() + 2 * 24 * 60 * 60 * 1000)), [
+      { tripId: "t2" },
+      { tripId: "t3" },
+      { tripId: "t4" },
+    ]);
+
+    const res = await agregar();
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("TOO_MANY_PENDING");
+    expect(tx.cargoItem.create).not.toHaveBeenCalled();
   });
 
   it("409 MP_ACCOUNT_NOT_CONNECTED si el fletero del viaje no tiene MP conectado", async () => {

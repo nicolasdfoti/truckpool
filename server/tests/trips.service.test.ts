@@ -98,6 +98,8 @@ const tx = {
     create: vi.fn(),
     findUnique: vi.fn(),
     update: vi.fn(),
+    // reservas sin seña de la empresa (tope de U15): ninguna por defecto
+    findMany: vi.fn().mockResolvedValue([]),
   },
   payment: {
     update: vi.fn(),
@@ -1272,6 +1274,89 @@ describe("quoteCargoPrice", () => {
     await expect(tripsService.quoteCargoPrice("nope", 1)).rejects.toBeInstanceOf(
       TripNotFoundError
     );
+  });
+});
+
+describe("addCargoItem: tope de reservas sin seña (U15)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (prisma.$transaction as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      (fn: unknown) => (fn as (t: unknown) => unknown)(tx)
+    );
+    tx.cargoItem.create.mockImplementation(({ data }: { data: unknown }) => ({
+      id: "i-nueva",
+      ...(data as object),
+    }));
+    tx.payment.create.mockImplementation(({ data }: { data: unknown }) => ({
+      id: "p-nueva",
+      ...(data as object),
+    }));
+    tx.cargoItem.findMany.mockResolvedValue([]);
+    tx.trip.findUnique.mockResolvedValue(baseTrip());
+  });
+
+  afterEach(() => {
+    tx.cargoItem.findMany.mockResolvedValue([]);
+  });
+
+  const reservar = () =>
+    tripsService.addCargoItem("t1", "c1", {
+      description: "Maquinaria",
+      pickupAddress: "Córdoba, Córdoba",
+      volume: 1,
+    });
+
+  it("la 4.ª reserva sin seña → 409 TOO_MANY_PENDING", async () => {
+    tx.cargoItem.findMany.mockResolvedValue([
+      { tripId: "t2" },
+      { tripId: "t3" },
+      { tripId: "t4" },
+    ]);
+
+    const err = await reservar().catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(AppError);
+    expect(err).toMatchObject({ statusCode: 409, code: "TOO_MANY_PENDING" });
+    expect(tx.cargoItem.create).not.toHaveBeenCalled();
+  });
+
+  it("con 2 reservas sin seña en otros viajes, la 3.ª entra", async () => {
+    tx.cargoItem.findMany.mockResolvedValue([{ tripId: "t2" }, { tripId: "t3" }]);
+
+    const result = await reservar();
+
+    expect(result.volume).toBe(1);
+  });
+
+  it("una 2.ª reserva sin seña en el mismo viaje → 409 TOO_MANY_PENDING", async () => {
+    tx.cargoItem.findMany.mockResolvedValue([{ tripId: "t1" }]);
+
+    const err = await reservar().catch((e: unknown) => e);
+
+    expect(err).toMatchObject({ statusCode: 409, code: "TOO_MANY_PENDING" });
+    expect(tx.cargoItem.create).not.toHaveBeenCalled();
+  });
+
+  it("cuenta dentro de la TX solo las PENDING de la empresa en viajes que no salieron, sin seña pagada ni por acreditarse", async () => {
+    await reservar();
+
+    expect(tx.cargoItem.findMany).toHaveBeenCalledWith({
+      where: {
+        companyId: "c1",
+        status: "PENDING",
+        trip: { status: { in: ["OPEN", "FULL"] } },
+        payments: {
+          none: {
+            type: "DEPOSIT",
+            OR: [
+              { status: "APPROVED" },
+              { status: "PENDING", mpPaymentId: { not: null } },
+            ],
+          },
+        },
+      },
+      select: { tripId: true },
+    });
   });
 });
 

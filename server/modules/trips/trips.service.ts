@@ -60,6 +60,7 @@ import {
   TripNotInTransitError,
   TripNotFoundError,
   TripNotOpenError,
+  TooManyPendingError,
 } from "../../lib/errors.js";
 import { AppError } from "../../lib/errors.js";
 import type {
@@ -102,6 +103,26 @@ async function retryOnConflict<T>(run: () => Promise<T>): Promise<T> {
  * (ver releaseExpiredReservations y lib/jobs.ts).
  */
 const RESERVATION_TTL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Una seña que sostiene la reserva: cobrada (APPROVED) o por acreditarse (pago
+ * creado en MP y todavía pendiente). Una carga PENDING sin una de estas es una
+ * reserva sin seña: vence a las 24 h (`releaseExpiredReservations`) y cuenta
+ * para el tope de reservas sin seña (U15).
+ */
+const DEPOSIT_HOLDS_RESERVATION = {
+  type: "DEPOSIT",
+  OR: [{ status: "APPROVED" }, { status: "PENDING", mpPaymentId: { not: null } }],
+} satisfies Prisma.PaymentWhereInput;
+
+/**
+ * U15: reservas sin seña (PENDING sin `DEPOSIT_HOLDS_RESERVATION`) que puede
+ * tener una empresa a la vez en viajes que no salieron: en total y en un mismo
+ * viaje. Sin tope, una empresa podía tomar el lugar de varios viajes 24 h sin
+ * pagar nada.
+ */
+export const MAX_UNPAID_RESERVATIONS = 3;
+export const MAX_UNPAID_RESERVATIONS_PER_TRIP = 1;
 
 const MAX_STOP_DISTANCE_FROM_ROUTE_KM = Number(process.env.MAX_STOP_DISTANCE_FROM_ROUTE_KM ?? 8);
 
@@ -294,12 +315,7 @@ export async function releaseExpiredReservations(
       status: "PENDING",
       createdAt: { lt: cutoff },
       trip: { status: { in: ["OPEN", "FULL"] } },
-      payments: {
-        none: {
-          type: "DEPOSIT",
-          OR: [{ status: "APPROVED" }, { status: "PENDING", mpPaymentId: { not: null } }],
-        },
-      },
+      payments: { none: DEPOSIT_HOLDS_RESERVATION },
     },
     select: { tripId: true },
     distinct: ["tripId"],
@@ -1460,6 +1476,32 @@ export async function addCargoItem(
               "este viaje no puede recibir pagos por ahora: el fletero no tiene Mercado Pago conectado",
               409,
               "MP_ACCOUNT_NOT_CONNECTED"
+            );
+          }
+
+          // U15: el tope se cuenta dentro de la TX Serializable: dos reservas
+          // simultáneas de la misma empresa chocan (P2034) y el reintento
+          // vuelve a contar con la que ya entró.
+          const unpaid = await tx.cargoItem.findMany({
+            where: {
+              companyId,
+              status: "PENDING",
+              trip: { status: { in: ["OPEN", "FULL"] } },
+              payments: { none: DEPOSIT_HOLDS_RESERVATION },
+            },
+            select: { tripId: true },
+          });
+          if (
+            unpaid.filter((c) => c.tripId === tripId).length >=
+            MAX_UNPAID_RESERVATIONS_PER_TRIP
+          ) {
+            throw new TooManyPendingError(
+              "ya tenés una reserva sin seña en este viaje: pagala o retirala antes de sumar otra carga"
+            );
+          }
+          if (unpaid.length >= MAX_UNPAID_RESERVATIONS) {
+            throw new TooManyPendingError(
+              `ya tenés ${MAX_UNPAID_RESERVATIONS} reservas sin seña: pagá o retirá alguna antes de reservar otra`
             );
           }
 

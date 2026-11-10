@@ -27,6 +27,16 @@ export class TripNotOpenError extends AppError {
   }
 }
 
+/**
+ * U15: una empresa no puede acaparar lugar con reservas que no paga. Hay un
+ * tope en total y otro por viaje; el código es el mismo y el mensaje dice cuál.
+ */
+export class TooManyPendingError extends AppError {
+  constructor(message: string) {
+    super(message, 409, "TOO_MANY_PENDING");
+  }
+}
+
 export class InvalidTransitionError extends AppError {
   constructor() {
     super(
