@@ -320,6 +320,9 @@ enum NotificationType {
   // para los admins: plata cobrada en MP que el sistema no pudo asentar
   // (cobro duplicado, monto o moneda distintos)
   PAYMENT_ALERT
+  // a la empresa: el fletero reordenó las paradas con el viaje en camino y la
+  // suya cambió de lugar (D2)
+  STOPS_REORDERED
 }
 
 // aviso in-app. el email es un canal opcional del mismo aviso (se manda solo si

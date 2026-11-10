@@ -5085,3 +5085,133 @@ describe("processRefundRequest (outbox processor)", () => {
     expect(await processRefundRequest("i1")).toEqual({ kind: "failed" });
   });
 });
+
+// D2 = b: se pueden reordenar las paradas con el viaje en camino, avisando a
+// las empresas cuya parada cambió de lugar.
+describe("reorderTripStops (D2)", () => {
+  /** tres paradas sin coordenadas: el orden es el manual y después el de creación */
+  const paradas = [
+    { id: "A", companyId: "c1", pickupAddress: "Pilar 100" },
+    { id: "B", companyId: "c2", pickupAddress: "Escobar 200" },
+    { id: "C", companyId: "c3", pickupAddress: "Zárate 300" },
+  ].map((p) =>
+    baseCargoItem({
+      ...p,
+      status: "CONFIRMED",
+      stopOrder: null,
+      company: { id: p.companyId, name: `Empresa ${p.companyId}` },
+    })
+  );
+
+  function viaje(status: string) {
+    const trip = baseTrip({
+      status,
+      origin: "CABA",
+      destination: "Rosario",
+      carrier: { id: "u1", name: "Flete" },
+      cargoItems: paradas,
+    });
+    vi.mocked(prisma.trip.findUnique).mockResolvedValue(trip as never);
+    vi.mocked(prisma.cargoItem.findMany).mockResolvedValue(paradas as never);
+    tx.cargoItem.findMany.mockResolvedValue(paradas);
+    return trip;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (prisma.$transaction as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      (fn: unknown) =>
+        typeof fn === "function" ? (fn as (t: unknown) => unknown)(tx) : Promise.all(fn as [])
+    );
+    tx.cargoItem.update.mockResolvedValue({});
+  });
+
+  afterEach(() => {
+    tx.cargoItem.findMany.mockResolvedValue([]);
+  });
+
+  // B pasa a la 1, A a la 2; C sigue 3.ª
+  const intercambio = [
+    { cargoItemId: "A", order: 2 },
+    { cargoItemId: "B", order: 1 },
+  ];
+
+  it("en tránsito avisa solo a las empresas cuya parada cambió de lugar", async () => {
+    viaje("IN_TRANSIT");
+
+    await tripsService.reorderTripStops("t1", "u1", intercambio);
+
+    const avisados = vi.mocked(notifyUsers).mock.calls.map(([ids]) => ids).flat();
+    expect(avisados.sort()).toEqual(["c1", "c2"]);
+    const aC1 = vi.mocked(notifyUsers).mock.calls.find(([ids]) => ids.includes("c1"))?.[1];
+    expect(aC1?.type).toBe("STOPS_REORDERED");
+    expect(aC1?.tripId).toBe("t1");
+    expect(aC1?.body).toContain("Pilar 100");
+    expect(aC1?.body).toContain("parada 2 de 3");
+    expect(tx.cargoItem.update).toHaveBeenCalledWith({
+      where: { id: "A" },
+      data: { stopOrder: 2 },
+    });
+  });
+
+  it("si el orden no cambia, no avisa a nadie", async () => {
+    viaje("IN_TRANSIT");
+
+    await tripsService.reorderTripStops("t1", "u1", [
+      { cargoItemId: "A", order: 1 },
+      { cargoItemId: "B", order: 2 },
+    ]);
+
+    expect(notifyUsers).not.toHaveBeenCalled();
+  });
+
+  it("antes de salir reordena sin avisar", async () => {
+    viaje("OPEN");
+
+    await tripsService.reorderTripStops("t1", "u1", intercambio);
+
+    expect(tx.cargoItem.update).toHaveBeenCalledTimes(2);
+    expect(notifyUsers).not.toHaveBeenCalled();
+  });
+
+  it.each(["COMPLETED", "CANCELLED"])(
+    "un viaje %s no se reordena: 409 INVALID_STATUS_TRANSITION",
+    async (status) => {
+      viaje(status);
+
+      await expect(
+        tripsService.reorderTripStops("t1", "u1", intercambio)
+      ).rejects.toMatchObject({ statusCode: 409, code: "INVALID_STATUS_TRANSITION" });
+      expect(tx.cargoItem.update).not.toHaveBeenCalled();
+      expect(notifyUsers).not.toHaveBeenCalled();
+    }
+  );
+
+  it("400 INVALID_CARGO_ITEMS si una carga no es del viaje", async () => {
+    viaje("IN_TRANSIT");
+
+    await expect(
+      tripsService.reorderTripStops("t1", "u1", [{ cargoItemId: "Z", order: 1 }])
+    ).rejects.toMatchObject({ statusCode: 400, code: "INVALID_CARGO_ITEMS" });
+    expect(tx.cargoItem.update).not.toHaveBeenCalled();
+  });
+
+  it("403 si no es el fletero del viaje", async () => {
+    viaje("IN_TRANSIT");
+
+    await expect(
+      tripsService.reorderTripStops("t1", "otro", intercambio)
+    ).rejects.toMatchObject({ statusCode: 403, code: "FORBIDDEN" });
+  });
+
+  it("reordena aunque el aviso falle", async () => {
+    viaje("IN_TRANSIT");
+    vi.mocked(notifyUsers).mockRejectedValue(new Error("la base de avisos cayó"));
+
+    await expect(
+      tripsService.reorderTripStops("t1", "u1", intercambio)
+    ).resolves.toBeDefined();
+    expect(tx.cargoItem.update).toHaveBeenCalledTimes(2);
+    vi.mocked(notifyUsers).mockResolvedValue(1);
+  });
+});

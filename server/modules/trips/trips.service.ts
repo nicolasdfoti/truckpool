@@ -2178,6 +2178,10 @@ export async function getTripStops(tripId: string, userId: string): Promise<Stop
 /**
  * Reordena las paradas manualmente. Solo el transportista dueño del viaje.
  * Body: array de { cargoItemId, order }.
+ *
+ * D2 = b: con el viaje en camino también se puede (las rutas cambian en la
+ * realidad), pero se avisa a cada empresa cuya parada cambió de lugar. Un viaje
+ * COMPLETED o CANCELLED no tiene paradas por delante: 409.
  */
 export async function reorderTripStops(
   tripId: string,
@@ -2188,6 +2192,9 @@ export async function reorderTripStops(
     where: { id: tripId },
     select: {
       carrierId: true,
+      status: true,
+      origin: true,
+      destination: true,
       originLat: true,
       originLng: true,
       destLat: true,
@@ -2202,33 +2209,87 @@ export async function reorderTripStops(
       "FORBIDDEN"
     );
   }
-
-  // validar que todos los cargoItemId pertenecen a este viaje y no están cancelados
-  const cargoItems = await prisma.cargoItem.findMany({
-    where: {
-      id: { in: items.map((i) => i.cargoItemId) },
-      tripId,
-      status: { not: "CANCELLED" },
-    },
-    select: { id: true },
-  });
-  if (cargoItems.length !== items.length) {
+  if (trip.status === "COMPLETED" || trip.status === "CANCELLED") {
     throw new AppError(
-      "uno o más IDs de carga no pertenecen a este viaje o están cancelados",
-      400,
-      "INVALID_CARGO_ITEMS"
+      "el viaje ya terminó o se canceló: no se pueden reordenar las paradas",
+      409,
+      "INVALID_STATUS_TRANSITION"
     );
   }
 
-  // actualizar stopOrder en transacción
-  await prisma.$transaction(
-    items.map((item) =>
-      prisma.cargoItem.update({
+  // el orden de antes y el de después salen de la misma cuenta que muestra
+  // getTripStops, así se avisa justo a quien ve su parada en otro lugar
+  const moved = await prisma.$transaction(async (tx) => {
+    const stops = await tx.cargoItem.findMany({
+      where: { tripId, status: { not: "CANCELLED" } },
+      select: {
+        id: true,
+        companyId: true,
+        pickupAddress: true,
+        pickupLat: true,
+        pickupLng: true,
+        stopOrder: true,
+      },
+      orderBy: { createdAt: "asc" },
+    });
+
+    // todos los cargoItemId tienen que ser cargas vivas de este viaje, sin repetir
+    const live = new Set(stops.map((s) => s.id));
+    const ids = items.map((i) => i.cargoItemId);
+    if (!ids.every((id) => live.has(id)) || new Set(ids).size !== ids.length) {
+      throw new AppError(
+        "uno o más IDs de carga no pertenecen a este viaje o están cancelados",
+        400,
+        "INVALID_CARGO_ITEMS"
+      );
+    }
+
+    for (const item of items) {
+      await tx.cargoItem.update({
         where: { id: item.cargoItemId },
         data: { stopOrder: item.order },
-      })
-    )
-  );
+      });
+    }
+
+    const newOrder = new Map(items.map((i) => [i.cargoItemId, i.order]));
+    const before = calculateStopOrder(trip, stops);
+    const after = calculateStopOrder(
+      trip,
+      stops.map((s) => ({ ...s, stopOrder: newOrder.get(s.id) ?? s.stopOrder }))
+    );
+    return stops
+      .filter((s) => before.get(s.id) !== after.get(s.id))
+      .map((s) => ({
+        companyId: s.companyId,
+        pickupAddress: s.pickupAddress,
+        position: after.get(s.id) ?? 0,
+        total: stops.length,
+      }));
+  });
+
+  // antes de salir el orden todavía es un plan: el aviso es para un cambio en
+  // camino. Un aviso por empresa, con cada una de sus paradas que se movió.
+  if (trip.status === "IN_TRANSIT" && moved.length > 0) {
+    const byCompany = new Map<string, typeof moved>();
+    for (const stop of moved) {
+      byCompany.set(stop.companyId, [...(byCompany.get(stop.companyId) ?? []), stop]);
+    }
+    for (const [companyId, stops] of byCompany) {
+      await bestEffortNotify(() =>
+        notifyUsers([companyId], {
+          type: "STOPS_REORDERED",
+          title: `cambió el orden de las paradas del viaje ${trip.origin} → ${trip.destination}`,
+          body: stops
+            .map(
+              (s) =>
+                `tu retiro en ${s.pickupAddress} pasó a ser la parada ${s.position} de ${s.total}.`
+            )
+            .join(" "),
+          tripId,
+        })
+      );
+    }
+  }
 
   // devolver lista ordenada actualizada
   return getTripStops(tripId, carrierId);
