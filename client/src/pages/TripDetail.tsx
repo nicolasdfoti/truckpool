@@ -548,10 +548,13 @@ export default function TripDetail() {
                 balance?.status !== "APPROVED" &&
                 balance?.status !== "CHARGED_BACK";
               const showPayButton = showDepositPayButton || showBalancePayButton;
-              // solo se puede retirar lo que sigue pendiente y con el viaje sin
-              // arrancar: el botón vive al lado de las otras acciones.
+              // se retira lo pendiente o confirmado (hasta la salida, con la misma
+              // penalidad) mientras el viaje no arrancó: el botón vive al lado
+              // de las otras acciones.
               const showCancelButton =
-                isCompany && item.status === "PENDING" && canCancelTrip;
+                isCompany &&
+                (item.status === "PENDING" || item.status === "CONFIRMED") &&
+                canCancelTrip;
               return (
                 <li
                   key={item.id}

@@ -491,17 +491,6 @@ describe("cancelCargoItem", () => {
     );
   });
 
-  it("no deja retirar una carga ya confirmada", async () => {
-    tx.cargoItem.findUnique.mockResolvedValue(
-      baseCargoItem({ status: "CONFIRMED", payments: [], company: { name: "Acero SA" } })
-    );
-
-    await expect(tripsService.cancelCargoItem("t1", "i1", "c1")).rejects.toBeInstanceOf(
-      CargoItemNotCancellableError
-    );
-    expect(tx.cargoItem.update).not.toHaveBeenCalled();
-  });
-
   it("no deja retirar dos veces la misma carga", async () => {
     tx.cargoItem.findUnique.mockResolvedValue(
       baseCargoItem({ status: "CANCELLED", payments: [], company: { name: "Acero SA" } })
@@ -841,7 +830,7 @@ describe("cancelCargoItem con seña pagada", () => {
     );
   });
 
-  it("ignora un pago BALANCE: el saldo no se devuelve en un retiro", async () => {
+  it("con un pago BALANCE no se retira y el saldo no se devuelve", async () => {
     tx.cargoItem.findUnique.mockResolvedValue(
       baseCargoItem({
         payments: [
@@ -857,10 +846,13 @@ describe("cancelCargoItem con seña pagada", () => {
       })
     );
 
-    await tripsService.cancelCargoItem("t1", "i1", "c1");
-
-    // sin seña cobrada no hay devolución, aunque haya un saldo aprobado (que en
-    // la práctica no puede existir con la carga PENDING).
+    // el saldo nace al pasar a IN_TRANSIT (en la práctica no puede existir con la
+    // carga PENDING): con saldo la carga ya viajó y no se retira (D4)
+    await expect(tripsService.cancelCargoItem("t1", "i1", "c1")).rejects.toMatchObject({
+      statusCode: 409,
+      code: "TRIP_ALREADY_STARTED",
+    });
+    expect(tx.cargoItem.update).not.toHaveBeenCalled();
     expect(refundPayment).not.toHaveBeenCalled();
   });
 });
@@ -980,6 +972,130 @@ describe("cancelCargoItem: ventana contra la hora de salida (U11)", () => {
     await tripsService.cancelCargoItem("t1", "i1", "c1");
 
     expect(resultado()).toEqual({ devuelve: null, fee: 100 });
+  });
+});
+
+describe("cancelCargoItem: carga CONFIRMED retirable hasta la salida (D4)", () => {
+  /** el 11/11 tal como lo guarda el cliente (12:00 ART), con salida a las 18:00 ART */
+  const DIA_DEL_VIAJE = new Date("2026-11-11T15:00:00.000Z");
+
+  const confirmada = (overrides: Record<string, unknown> = {}) =>
+    basePaidCargoItem({
+      status: "CONFIRMED",
+      payments: [paidDeposit()],
+      company: { name: "Acero SA" },
+      ...overrides,
+    });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (prisma.$transaction as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      (fn: unknown) => (fn as (t: unknown) => unknown)(tx)
+    );
+    tx.cargoItem.findUnique.mockResolvedValue(confirmada());
+    tx.cargoItem.update.mockImplementation(({ data }: { data: unknown }) => data);
+    tx.payment.updateMany.mockResolvedValue({ count: 1 });
+    tx.refundRequest = { create: vi.fn().mockResolvedValue({}) };
+    tx.trip.findUnique.mockResolvedValue(
+      baseTrip({ carrier: baseCarrier(), date: DIA_DEL_VIAJE, departureTime: "18:00" })
+    );
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** lo que quedó encolado (null = nada) y el fee congelado en la carga */
+  function resultado() {
+    const encolado = tx.refundRequest.create.mock.calls[0]?.[0] as
+      | { data: { targetAmount: Prisma.Decimal } }
+      | undefined;
+    const update = tx.cargoItem.update.mock.calls[0]?.[0] as {
+      data: { status: string; cancellationFeeAmount: Prisma.Decimal };
+    };
+    return {
+      estado: update.data.status,
+      devuelve: encolado ? Number(encolado.data.targetAmount) : null,
+      fee: Number(update.data.cancellationFeeAmount),
+    };
+  }
+
+  it.each([
+    ["más de 48 h: devuelve toda la seña", "2026-11-09T09:00:00.000Z", 100, 0],
+    ["entre 24 y 48 h: devuelve la mitad", "2026-11-10T15:00:00.000Z", 50, 50],
+    ["menos de 24 h: se retiene la seña entera", "2026-11-11T11:00:00.000Z", null, 100],
+  ] as const)("%s, igual que una PENDING", async (_tramo, ahora, devuelve, fee) => {
+    freezeClockAt(ahora);
+
+    await tripsService.cancelCargoItem("t1", "i1", "c1");
+
+    expect(resultado()).toEqual({ estado: "CANCELLED", devuelve, fee });
+  });
+
+  it("libera el lugar: si el viaje estaba FULL vuelve a OPEN en la misma TX", async () => {
+    freezeClockAt("2026-11-09T09:00:00.000Z");
+    tx.trip.findUnique.mockResolvedValue(
+      baseTrip({
+        carrier: baseCarrier(),
+        date: DIA_DEL_VIAJE,
+        departureTime: "18:00",
+        status: "FULL",
+        capacityTotal: 10,
+        cargoItems: [confirmada()],
+      })
+    );
+
+    await tripsService.cancelCargoItem("t1", "i1", "c1");
+
+    expect(tx.trip.update).toHaveBeenCalledWith({
+      where: { id: "t1" },
+      data: { status: "OPEN" },
+    });
+  });
+
+  it("con el viaje en camino: 409 TRIP_ALREADY_STARTED, sin tocar nada", async () => {
+    tx.trip.findUnique.mockResolvedValue(
+      baseTrip({ carrier: baseCarrier(), date: DIA_DEL_VIAJE, status: "IN_TRANSIT" })
+    );
+
+    await expect(tripsService.cancelCargoItem("t1", "i1", "c1")).rejects.toMatchObject({
+      statusCode: 409,
+      code: "TRIP_ALREADY_STARTED",
+    });
+    expect(tx.cargoItem.update).not.toHaveBeenCalled();
+    expect(tx.refundRequest.create).not.toHaveBeenCalled();
+  });
+
+  it("con un pago de saldo ya creado: 409 TRIP_ALREADY_STARTED, sin tocar nada", async () => {
+    // el saldo nace al pasar a IN_TRANSIT: una carga con saldo ya viajó, aunque
+    // el estado del viaje diga otra cosa. El outbox solo devuelve la seña.
+    tx.cargoItem.findUnique.mockResolvedValue(
+      confirmada({
+        payments: [
+          paidDeposit(),
+          paidDeposit({
+            id: "pay2",
+            type: "BALANCE",
+            amount: new Prisma.Decimal("400.00"),
+          }),
+        ],
+      })
+    );
+
+    await expect(tripsService.cancelCargoItem("t1", "i1", "c1")).rejects.toMatchObject({
+      statusCode: 409,
+      code: "TRIP_ALREADY_STARTED",
+    });
+    expect(tx.cargoItem.update).not.toHaveBeenCalled();
+    expect(tx.refundRequest.create).not.toHaveBeenCalled();
+  });
+
+  it("avisa al transportista igual que con una PENDING", async () => {
+    freezeClockAt("2026-11-09T09:00:00.000Z");
+
+    await tripsService.cancelCargoItem("t1", "i1", "c1");
+
+    expect(avisoA("u1").type).toBe("CARGO_CANCELLED");
   });
 });
 
@@ -2248,7 +2364,7 @@ describe("addCargoItem", () => {
       const result = await tripsService.confirmCargoItem("t1", "i1", "u1");
 
       expect(prisma.cargoItem.update).toHaveBeenCalledWith({
-        where: { id: "i1" },
+        where: { id: "i1", status: "PENDING" },
         data: { status: "CONFIRMED" },
         include: { payments: true },
       });
@@ -2283,6 +2399,50 @@ describe("addCargoItem", () => {
       expect(aviso.tripId).toBe("t1");
       expect(aviso.body).toContain("confirmamos maquinaria (10 m³)");
       expect(aviso.email?.subject).toBe("tu carga está confirmada: Córdoba → Rosario");
+    });
+
+    it("una carga retirada no se confirma: 409 CARGO_ITEM_CANCELLED", async () => {
+      (
+        prisma.cargoItem.findUnique as unknown as ReturnType<typeof vi.fn>
+      ).mockResolvedValue(basePaidCargoItem({ status: "CANCELLED" }));
+      (prisma.trip.findUnique as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+        carrierId: "u1",
+      });
+
+      await expect(tripsService.confirmCargoItem("t1", "i1", "u1")).rejects.toMatchObject({
+        statusCode: 409,
+        code: "CARGO_ITEM_CANCELLED",
+      });
+      expect(prisma.cargoItem.update).not.toHaveBeenCalled();
+      expect(notifyUsers).not.toHaveBeenCalled();
+    });
+
+    it("si la empresa la retiró entre la lectura y la confirmación: 409, no la revive", async () => {
+      // el retiro commiteó después de que leímos la carga PENDING
+      (prisma.cargoItem.findUnique as unknown as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce(basePaidCargoItem())
+        .mockResolvedValueOnce(basePaidCargoItem({ status: "CANCELLED" }));
+      (prisma.trip.findUnique as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+        carrierId: "u1",
+      });
+      (prisma.cargoItem.update as unknown as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError("Record to update not found", {
+          code: "P2025",
+          clientVersion: "test",
+        })
+      );
+
+      await expect(tripsService.confirmCargoItem("t1", "i1", "u1")).rejects.toMatchObject({
+        statusCode: 409,
+        code: "CARGO_ITEM_CANCELLED",
+      });
+      // CAS: la confirmación solo pisa una carga que sigue PENDING
+      expect(prisma.cargoItem.update).toHaveBeenCalledWith({
+        where: { id: "i1", status: "PENDING" },
+        data: { status: "CONFIRMED" },
+        include: { payments: true },
+      });
+      expect(notifyUsers).not.toHaveBeenCalled();
     });
 
     it("confirma la carga aunque el aviso falle", async () => {

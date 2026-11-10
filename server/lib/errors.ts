@@ -43,15 +43,20 @@ export class CargoItemNotFoundError extends AppError {
   }
 }
 
+/**
+ * Retirar una carga ya retirada. Una CONFIRMED se puede retirar hasta la salida
+ * (D4), así que `CARGO_ITEM_CONFIRMED` ya no sale del retiro.
+ */
 export class CargoItemNotCancellableError extends AppError {
-  constructor(status: "CONFIRMED" | "CANCELLED") {
-    super(
-      status === "CONFIRMED"
-        ? "esta carga ya está confirmada, no se puede retirar"
-        : "esta carga ya la habías retirado",
-      409,
-      status === "CONFIRMED" ? "CARGO_ITEM_CONFIRMED" : "CARGO_ITEM_CANCELLED"
-    );
+  constructor() {
+    super("esta carga ya la habías retirado", 409, "CARGO_ITEM_CANCELLED");
+  }
+}
+
+/** confirmar una carga que la empresa ya retiró */
+export class CargoItemCancelledError extends AppError {
+  constructor() {
+    super("esta carga fue retirada, no se puede confirmar", 409, "CARGO_ITEM_CANCELLED");
   }
 }
 

@@ -635,15 +635,26 @@ describe("DELETE /api/trips/:tripId/cargo-items/:id", () => {
     expect(res.body).toMatchObject({ id: "i1", status: "CANCELLED" });
   });
 
-  it("rechaza una carga ya confirmada (409)", async () => {
+  it("retira una carga ya confirmada antes de la salida (D4, 200)", async () => {
     mockTx({ ...cargoItem, status: "CONFIRMED" });
 
     const res = await request(app)
       .delete("/api/trips/t1/cargo-items/i1")
       .set("Authorization", `Bearer ${companyToken}`);
 
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: "i1", status: "CANCELLED" });
+  });
+
+  it("rechaza retirar una carga ya retirada (409)", async () => {
+    mockTx({ ...cargoItem, status: "CANCELLED" });
+
+    const res = await request(app)
+      .delete("/api/trips/t1/cargo-items/i1")
+      .set("Authorization", `Bearer ${companyToken}`);
+
     expect(res.status).toBe(409);
-    expect(res.body.code).toBe("CARGO_ITEM_CONFIRMED");
+    expect(res.body.code).toBe("CARGO_ITEM_CANCELLED");
   });
 
   it("rechaza retirar carga con el viaje en tránsito (409)", async () => {

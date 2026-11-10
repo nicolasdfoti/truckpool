@@ -39,6 +39,7 @@ import {
   BalanceChargedBackError,
   BalancePendingError,
   CarrierNotVerifiedError,
+  CargoItemCancelledError,
   CargoItemNotCancellableError,
   CargoItemNotFoundError,
   InvalidTransitionError,
@@ -702,6 +703,7 @@ export async function confirmCargoItem(
   });
   if (!item || item.tripId !== tripId) throw new CargoItemNotFoundError();
   if (item.status === "CONFIRMED") return toCargoItemResponse(item);
+  if (item.status === "CANCELLED") throw new CargoItemCancelledError();
 
   const trip = await prisma.trip.findUnique({
     where: { id: tripId },
@@ -718,11 +720,28 @@ export async function confirmCargoItem(
   const deposit = item.payments.find((p) => p.type === "DEPOSIT");
   if (deposit?.status !== "APPROVED") throw new PaymentRequiredError();
 
-  const updated = await prisma.cargoItem.update({
-    where: { id: cargoItemId },
-    data: { status: "CONFIRMED" },
-    include: { payments: true },
-  });
+  // CAS sobre PENDING: la empresa puede retirar la carga entre la lectura y
+  // acá, y la confirmación no puede revivir una carga retirada
+  let updated;
+  try {
+    updated = await prisma.cargoItem.update({
+      where: { id: cargoItemId, status: "PENDING" },
+      data: { status: "CONFIRMED" },
+      include: { payments: true },
+    });
+  } catch (err) {
+    if (!(err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2025")) {
+      throw err;
+    }
+    const current = await prisma.cargoItem.findUnique({
+      where: { id: cargoItemId },
+      include: { payments: true },
+    });
+    // la confirmó otro (el transportista y la empresa a la vez): ya está, y el
+    // aviso lo manda el que ganó
+    if (current?.status === "CONFIRMED") return toCargoItemResponse(current);
+    throw new CargoItemCancelledError();
+  }
 
   // aviso a la empresa que confirmó la carga (in-app + email)
   const confirmTrip = {
@@ -764,9 +783,9 @@ type CargoCancelledEmail = {
 };
 
 /**
- * Retirar una carga que sumó la empresa. Solo mientras la carga está PENDING y
- * el viaje no arrancó: una carga confirmada ya es un acuerdo con el
- * transportista, y con el camión en camino retirar carga no tiene sentido.
+ * Retirar una carga que sumó la empresa, PENDING o CONFIRMED, mientras el viaje
+ * no arrancó (D4: una confirmada se retira hasta la salida con la misma
+ * penalidad). Con el camión en camino retirar carga no tiene sentido.
  *
  * La seña se devuelve según cuánto falta para que salga el viaje: entera con más
  * de 48hs, la mitad entre 24 y 48hs, nada por debajo de las 24hs (la seña queda
@@ -809,9 +828,7 @@ export async function cancelCargoItem(
               "FORBIDDEN"
             );
           }
-          if (item.status === "CONFIRMED" || item.status === "CANCELLED") {
-            throw new CargoItemNotCancellableError(item.status);
-          }
+          if (item.status === "CANCELLED") throw new CargoItemNotCancellableError();
 
           const trip = await tx.trip.findUnique({
             where: { id: tripId },
@@ -819,6 +836,11 @@ export async function cancelCargoItem(
           });
           if (!trip) throw new TripNotFoundError();
           if (trip.status !== "OPEN" && trip.status !== "FULL") {
+            throw new TripAlreadyStartedError();
+          }
+          // el saldo nace al pasar a IN_TRANSIT: una carga con saldo ya viajó,
+          // diga lo que diga el estado. El outbox solo devuelve la seña.
+          if (item.payments.some((p) => p.type === "BALANCE")) {
             throw new TripAlreadyStartedError();
           }
 
