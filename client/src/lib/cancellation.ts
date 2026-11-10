@@ -4,8 +4,8 @@
  * Acá vive SOLO lo que el backend ya persistió en el cargo (depositAmount,
  * cancellationFeeAmount, depositPayment.status). La ventana de tiempo y el
  * monto a devolver NO se calculan en el cliente: se piden a
- * `GET /trips/cancellation-quote`, que corre la misma función que el retiro
- * real. Antes el front tenía su propia copia con un `/ 2` hardcodeado, y si el
+ * `GET /trips/:tripId/cargo-items/:cargoItemId/cancellation-quote`, que corre
+ * la misma cuenta que el retiro real con lo que la empresa pagó de seña (U21). Antes el front tenía su propia copia con un `/ 2` hardcodeado, y si el
  * servidor cambiaba PARTIAL_REFUND_RATIO el confirm le prometía al usuario un
  * número distinto del que después le devolvían.
  */
@@ -23,21 +23,21 @@ export type CancellationQuote = {
 };
 
 /**
- * Le pregunta al backend cuánto devolvería ahora. Devuelve null si no se pudo
- * consultar, para que el llamador pueda redacción sin número en vez de inventar
- * uno: es preferible no prometer un monto a prometer el equivocado.
+ * Le pregunta al backend cuánto devolvería ahora si se retirara esta carga. El
+ * server mira la seña real: si no se pagó, devolución y retención vienen en 0
+ * (antes se cotizaba con el monto de la seña aunque nunca se hubiera cobrado,
+ * y el confirm decía «la seña no se devuelve» a quien no había pagado nada).
+ * Devuelve null si no se pudo consultar, para que el llamador pueda redactar
+ * sin número en vez de inventar uno: es preferible no prometer un monto a
+ * prometer el equivocado.
  */
 export async function fetchCancellationQuote(
-  depositAmount: number,
-  tripDate: string,
-  departureTime: string | null
+  tripId: string,
+  cargoItemId: string
 ): Promise<CancellationQuote | null> {
-  // el plazo se cuenta desde la salida (día + hora); sin hora, el server toma
-  // las 23:59 del día del viaje
-  const hora = departureTime ? `&departureTime=${encodeURIComponent(departureTime)}` : "";
   try {
     return await api.get<CancellationQuote>(
-      `/trips/cancellation-quote?depositAmount=${depositAmount}&tripDate=${encodeURIComponent(tripDate)}${hora}`
+      `/trips/${encodeURIComponent(tripId)}/cargo-items/${encodeURIComponent(cargoItemId)}/cancellation-quote`
     );
   } catch {
     return null;

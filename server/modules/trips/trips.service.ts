@@ -25,6 +25,7 @@ import {
   departureInstant,
   hoursUntilDeparture,
   quoteCancellation,
+  type CancellationQuote,
 } from "../../lib/cancellation.js";
 import { balanceOf } from "../payments/payments.service.js";
 import { processRefundRequest } from "../payments/refunds.service.js";
@@ -483,6 +484,87 @@ export async function estimateCancellation(input: {
   );
 }
 
+/** desde la salida, con el viaje en camino o con saldo: no hay retiro */
+const CLOSED_QUOTE: CancellationQuote = {
+  window: "CLOSED",
+  cancellable: false,
+  refundAmount: 0,
+  feeAmount: 0,
+};
+
+/**
+ * La seña que de verdad entró y se puede devolver: APPROVED y con el pago de MP
+ * asentado. Una seña sin pagar, por acreditarse o APPROVED sin `mpPaymentId` no
+ * retiene nada: ni se devuelve ni hay fee.
+ */
+function paidDepositOf<
+  P extends { type: string; status: PaymentStatus; mpPaymentId: string | null },
+>(payments: P[]): P | null {
+  const deposit = payments.find((p) => p.type === "DEPOSIT");
+  return deposit?.status === "APPROVED" && deposit.mpPaymentId !== null ? deposit : null;
+}
+
+/**
+ * Lo que pasaría si la empresa retirara esta carga ahora. Es la única cuenta:
+ * la usan el retiro (`cancelCargoItem`) y la cotización por carga (U21), así
+ * que lo que se le muestra es lo que se hace.
+ *
+ * - CLOSED si el viaje ya no está OPEN/FULL, si llegó la salida (contra día +
+ *   hora en ART, U11) o si la carga tiene saldo (el saldo nace al salir).
+ * - Si la seña no se cobró, la ventana es la real pero sin montos: no hay nada
+ *   que devolver ni que retener (U21).
+ */
+function cargoCancellationQuote(
+  item: {
+    depositAmount: Prisma.Decimal;
+    payments: { type: string; status: PaymentStatus; mpPaymentId: string | null }[];
+  },
+  trip: { status: Trip["status"]; date: Date; departureTime: string | null },
+  now: Date = new Date()
+): CancellationQuote {
+  if (trip.status !== "OPEN" && trip.status !== "FULL") return CLOSED_QUOTE;
+  if (item.payments.some((p) => p.type === "BALANCE")) return CLOSED_QUOTE;
+  const quote = quoteCancellation(
+    Number(item.depositAmount),
+    hoursUntilDeparture(trip, now)
+  );
+  if (!quote.cancellable) return CLOSED_QUOTE;
+  if (!paidDepositOf(item.payments)) return { ...quote, refundAmount: 0, feeAmount: 0 };
+  return quote;
+}
+
+/**
+ * U21: cuánto se le devolvería y cuánto se retendría a la empresa si retirara
+ * su carga ahora, con lo que de verdad pagó de seña. Solo la empresa dueña.
+ * No toca nada: el retiro real vuelve a leer todo dentro de su TX.
+ */
+export async function getCargoCancellationQuote(
+  tripId: string,
+  cargoItemId: string,
+  companyId: string
+): Promise<CancellationQuote> {
+  const item = await prisma.cargoItem.findUnique({
+    where: { id: cargoItemId },
+    include: { payments: true },
+  });
+  if (!item || item.tripId !== tripId) throw new CargoItemNotFoundError();
+  if (item.companyId !== companyId) {
+    throw new AppError(
+      "solo podés consultar el retiro de una carga que sumaste vos",
+      403,
+      "FORBIDDEN"
+    );
+  }
+  if (item.status === "CANCELLED") throw new CargoItemNotCancellableError();
+
+  const trip = await prisma.trip.findUnique({
+    where: { id: tripId },
+    select: { status: true, date: true, departureTime: true },
+  });
+  if (!trip) throw new TripNotFoundError();
+  return cargoCancellationQuote(item, trip);
+}
+
 export async function createTrip(carrierId: string, data: CreateTripInput) {
   const carrier = await prisma.user.findUnique({
     where: { id: carrierId },
@@ -624,7 +706,7 @@ async function cancelCargoForTrip(
       }
     }
 
-    const paid = deposit?.status === "APPROVED" && deposit.mpPaymentId !== null;
+    const paid = paidDepositOf(item.payments) !== null;
     if (paid) {
       await tx.refundRequest.create({
         data: {
@@ -1193,22 +1275,12 @@ export async function cancelCargoItem(
             include: { cargoItems: true },
           });
           if (!trip) throw new TripNotFoundError();
-          if (trip.status !== "OPEN" && trip.status !== "FULL") {
-            throw new TripAlreadyStartedError();
-          }
-          // contra la salida (día + hora en ART), no contra `trip.date` (U11).
-          // Desde la salida el retiro está cerrado aunque el fletero no haya
-          // marcado IN_TRANSIT: si no sale, D6 devuelve la seña entera.
-          const quote = quoteCancellation(
-            Number(item.depositAmount),
-            hoursUntilDeparture(trip)
-          );
+          // CLOSED con el viaje en camino, desde la salida (día + hora en ART,
+          // U11) aunque el fletero no haya marcado IN_TRANSIT (si no sale, D6
+          // devuelve la seña entera), o con saldo (el saldo nace al salir: la
+          // carga ya viajó, y el outbox solo devuelve la seña).
+          const quote = cargoCancellationQuote(item, trip);
           if (!quote.cancellable) throw new TripAlreadyStartedError();
-          // el saldo nace al pasar a IN_TRANSIT: una carga con saldo ya viajó,
-          // diga lo que diga el estado. El outbox solo devuelve la seña.
-          if (item.payments.some((p) => p.type === "BALANCE")) {
-            throw new TripAlreadyStartedError();
-          }
 
           const deposit = item.payments.find((p) => p.type === "DEPOSIT");
 
@@ -1226,20 +1298,17 @@ export async function cancelCargoItem(
             if (held.count === 0) throw new PaymentInFlightError();
           }
 
-          const paidDeposit =
-            deposit?.status === "APPROVED" && deposit.mpPaymentId !== null
-              ? deposit
-              : null;
           // Un fee es plata que se retiene de un pago que REALMENTE entró. Si la
           // empresa nunca pagó la seña (o el pago APPROVED no tiene mpPaymentId y
-          // no se puede devolver) no hay nada retenido: el fee va en 0, igual que
-          // el reembolso, en vez de inventar una deuda.
-          const feeAmount = paidDeposit ? quote.feeAmount : 0;
+          // no se puede devolver) la cotización ya trae fee y devolución en 0, en
+          // vez de inventar una deuda. El CAS de arriba garantiza que la seña
+          // sigue como la leyó la cotización.
+          const feeAmount = quote.feeAmount;
 
-          // OUTBOX: si hay seña pagada y la ventana dice que se devuelve algo,
+          // OUTBOX: si la ventana dice que se devuelve algo de una seña pagada,
           // creamos una RefundRequest en PENDING. El processor (fuera de la TX)
           // llamará a refundPayment y actualizará el Payment cuando termine.
-          if (paidDeposit && quote.refundAmount > 0) {
+          if (quote.refundAmount > 0) {
             await tx.refundRequest.create({
               data: {
                 cargoItemId,

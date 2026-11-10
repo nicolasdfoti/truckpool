@@ -94,15 +94,8 @@ function cancellationMessage(quote: CancellationQuote | null) {
 }
 
 /** Pide la quote y abre el confirm. Devuelve false si el usuario cancela. */
-async function confirmCancellation(
-  item: CargoItem,
-  trip: { date: string; departureTime: string | null }
-) {
-  const quote = await fetchCancellationQuote(
-    item.depositAmount,
-    trip.date,
-    trip.departureTime
-  );
+async function confirmCancellation(item: CargoItem, trip: { id: string }) {
+  const quote = await fetchCancellationQuote(trip.id, item.id);
   // desde la salida no se retira: si el viaje no sale, se cancela solo y la
   // seña vuelve entera
   if (quote && !quote.cancellable) {

@@ -883,6 +883,163 @@ describe("cancelCargoItem con seña pagada", () => {
   });
 });
 
+// U21: la cotización de retiro de una carga puntual, con lo que de verdad se
+// cobró de su seña. La pública (`estimateCancellation`) solo ve un monto y una
+// fecha, así que le prometía «la seña no se devuelve» a quien nunca la pagó.
+describe("getCargoCancellationQuote (U21)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (prisma.$transaction as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      (fn: unknown) => (fn as (t: unknown) => unknown)(tx)
+    );
+  });
+
+  /** el viaje sale en `horas` y la carga tiene esta seña */
+  function cargaConSena(horas: number, sena: Record<string, unknown> | null) {
+    const salida = salidaEn(horas);
+    const item = baseCargoItem({
+      payments: sena ? [paidDeposit(sena)] : [],
+      company: { name: "Acero SA" },
+    });
+    const trip = baseTrip({ ...salida, cargoItems: [item] });
+    vi.mocked(prisma.cargoItem.findUnique).mockResolvedValue(item as never);
+    vi.mocked(prisma.trip.findUnique).mockResolvedValue(trip as never);
+    tx.cargoItem.findUnique.mockResolvedValue(item);
+    tx.trip.findUnique.mockResolvedValue(trip);
+    tx.cargoItem.update.mockImplementation(({ data }: { data: object }) => ({
+      ...item,
+      ...data,
+    }));
+  }
+
+  it("seña PENDING (sin pagar): no promete devolución ni retención, $ 0", async () => {
+    cargaConSena(30, { status: "PENDING", mpPaymentId: null });
+
+    const quote = await tripsService.getCargoCancellationQuote("t1", "i1", "c1");
+
+    expect(quote).toEqual({
+      window: "PARTIAL_REFUND",
+      cancellable: true,
+      refundAmount: 0,
+      feeAmount: 0,
+    });
+  });
+
+  it("seña por acreditarse (pago creado en MP, pendiente): todavía no se cobró, $ 0", async () => {
+    cargaConSena(10, { status: "PENDING", mpPaymentId: "mp-9" });
+
+    const quote = await tripsService.getCargoCancellationQuote("t1", "i1", "c1");
+
+    expect(quote).toMatchObject({ window: "NO_REFUND", refundAmount: 0, feeAmount: 0 });
+  });
+
+  it("sin pago de seña: $ 0", async () => {
+    cargaConSena(72, null);
+
+    const quote = await tripsService.getCargoCancellationQuote("t1", "i1", "c1");
+
+    expect(quote).toMatchObject({ window: "FULL_REFUND", refundAmount: 0, feeAmount: 0 });
+  });
+
+  it.each([
+    [72, { window: "FULL_REFUND", cancellable: true, refundAmount: 100, feeAmount: 0 }],
+    [36, { window: "PARTIAL_REFUND", cancellable: true, refundAmount: 50, feeAmount: 50 }],
+    [10, { window: "NO_REFUND", cancellable: true, refundAmount: 0, feeAmount: 100 }],
+  ])("seña APPROVED a %i h de la salida: la ventana de la política", async (horas, esperado) => {
+    cargaConSena(horas, {});
+
+    const quote = await tripsService.getCargoCancellationQuote("t1", "i1", "c1");
+
+    expect(quote).toEqual(esperado);
+  });
+
+  it("dice lo mismo que después hace el retiro", async () => {
+    cargaConSena(36, {});
+
+    const quote = await tripsService.getCargoCancellationQuote("t1", "i1", "c1");
+    await tripsService.cancelCargoItem("t1", "i1", "c1");
+
+    expect(tx.cargoItem.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          cancellationFeeAmount: new Prisma.Decimal(quote.feeAmount),
+        }),
+      })
+    );
+    expect(tx.refundRequest.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        targetAmount: new Prisma.Decimal(quote.refundAmount),
+      }),
+    });
+  });
+
+  it("desde la salida: CLOSED, sin montos", async () => {
+    cargaConSena(-1, {});
+
+    const quote = await tripsService.getCargoCancellationQuote("t1", "i1", "c1");
+
+    expect(quote).toEqual({
+      window: "CLOSED",
+      cancellable: false,
+      refundAmount: 0,
+      feeAmount: 0,
+    });
+  });
+
+  it("viaje IN_TRANSIT aunque la salida sea futura: CLOSED", async () => {
+    cargaConSena(72, {});
+    vi.mocked(prisma.trip.findUnique).mockResolvedValue(
+      baseTrip({ ...salidaEn(72), status: "IN_TRANSIT" }) as never
+    );
+
+    const quote = await tripsService.getCargoCancellationQuote("t1", "i1", "c1");
+
+    expect(quote).toMatchObject({ window: "CLOSED", cancellable: false });
+  });
+
+  it("carga con saldo (ya viajó): CLOSED", async () => {
+    const item = baseCargoItem({
+      payments: [paidDeposit(), paidDeposit({ id: "pay2", type: "BALANCE" })],
+    });
+    vi.mocked(prisma.cargoItem.findUnique).mockResolvedValue(item as never);
+    vi.mocked(prisma.trip.findUnique).mockResolvedValue(
+      baseTrip({ ...salidaEn(72) }) as never
+    );
+
+    const quote = await tripsService.getCargoCancellationQuote("t1", "i1", "c1");
+
+    expect(quote).toMatchObject({ window: "CLOSED", cancellable: false });
+  });
+
+  it("403 si la carga es de otra empresa", async () => {
+    cargaConSena(72, {});
+
+    await expect(
+      tripsService.getCargoCancellationQuote("t1", "i1", "otra")
+    ).rejects.toMatchObject({ statusCode: 403, code: "FORBIDDEN" });
+  });
+
+  it("409 CARGO_ITEM_CANCELLED si ya la retiró", async () => {
+    vi.mocked(prisma.cargoItem.findUnique).mockResolvedValue(
+      baseCargoItem({ status: "CANCELLED", payments: [] }) as never
+    );
+
+    await expect(
+      tripsService.getCargoCancellationQuote("t1", "i1", "c1")
+    ).rejects.toBeInstanceOf(CargoItemNotCancellableError);
+  });
+
+  it("404 si la carga no es de ese viaje", async () => {
+    vi.mocked(prisma.cargoItem.findUnique).mockResolvedValue(
+      baseCargoItem({ tripId: "otro", payments: [] }) as never
+    );
+
+    await expect(
+      tripsService.getCargoCancellationQuote("t1", "i1", "c1")
+    ).rejects.toBeInstanceOf(CargoItemNotFoundError);
+  });
+});
+
 // U11: la ventana se mide contra la salida (día del viaje + hora, en hora
 // argentina). `date` guarda el mediodía del navegador del fletero (~15:00Z), así
 // que medir contra `date` le daba a la empresa horas de más o de menos.

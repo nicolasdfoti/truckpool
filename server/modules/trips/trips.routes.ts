@@ -79,6 +79,13 @@ tripsRouter.patch(
   validateBody(updateTripStatusSchema),
   tripsController.patchTripStatus
 );
+// U21: la cotización del retiro de una carga, con lo que la empresa pagó
+tripsRouter.get(
+  "/:tripId/cargo-items/:cargoItemId/cancellation-quote",
+  requireAuth,
+  requireRole("COMPANY"),
+  tripsController.getCargoCancellationQuote
+);
 tripsRouter.delete(
   "/:tripId/cargo-items/:cargoItemId",
   requireAuth,

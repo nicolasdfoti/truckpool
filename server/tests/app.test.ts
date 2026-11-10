@@ -3239,6 +3239,68 @@ describe("logout con revocación real", () => {
   });
 });
 
+describe("GET /api/trips/:tripId/cargo-items/:cargoItemId/cancellation-quote (U21)", () => {
+  const url = "/api/trips/t1/cargo-items/i1/cancellation-quote";
+
+  beforeEach(() => {
+    vi.mocked(prisma.cargoItem.findUnique).mockReset();
+    vi.mocked(prisma.trip.findUnique).mockReset();
+  });
+
+  it("401 sin sesión", async () => {
+    const res = await request(app).get(url);
+    expect(res.status).toBe(401);
+  });
+
+  it("403 para un fletero: es la cotización de la empresa", async () => {
+    const res = await request(app).get(url).set("Authorization", `Bearer ${carrierToken}`);
+    expect(res.status).toBe(403);
+  });
+
+  it("seña sin pagar → $ 0 para la empresa dueña", async () => {
+    const { date, departureTime } = salidaEn(10);
+    vi.mocked(prisma.cargoItem.findUnique).mockResolvedValue({
+      id: "i1",
+      tripId: "t1",
+      companyId: "u2",
+      status: "PENDING",
+      depositAmount: new Prisma.Decimal("100.00"),
+      payments: [{ type: "DEPOSIT", status: "PENDING", mpPaymentId: null }],
+    } as never);
+    vi.mocked(prisma.trip.findUnique).mockResolvedValue({
+      status: "OPEN",
+      date,
+      departureTime,
+    } as never);
+
+    const res = await request(app).get(url).set("Authorization", `Bearer ${companyToken}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      window: "NO_REFUND",
+      cancellable: true,
+      refundAmount: 0,
+      feeAmount: 0,
+    });
+  });
+
+  it("403 FORBIDDEN para otra empresa", async () => {
+    vi.mocked(prisma.cargoItem.findUnique).mockResolvedValue({
+      id: "i1",
+      tripId: "t1",
+      companyId: "u2",
+      status: "PENDING",
+      depositAmount: new Prisma.Decimal("100.00"),
+      payments: [],
+    } as never);
+
+    const res = await request(app).get(url).set("Authorization", `Bearer ${strangerToken}`);
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("FORBIDDEN");
+  });
+});
+
 describe("GET /api/trips/cancellation-quote", () => {
   /**
    * salida del viaje a X horas desde ahora, para cruzar cada ventana. La

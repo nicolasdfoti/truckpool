@@ -51,6 +51,23 @@ export async function getCargoQuote(req: Request, res: Response) {
 }
 
 /**
+ * GET /api/trips/:tripId/cargo-items/:cargoItemId/cancellation-quote — U21:
+ * cuánto le devolverían a la empresa si retirara esta carga ahora, con lo que
+ * de verdad pagó de seña ($ 0 si no la pagó).
+ */
+export async function getCargoCancellationQuote(req: Request, res: Response) {
+  if (!req.user) {
+    throw new AppError("no autenticado", 401, "UNAUTHORIZED");
+  }
+  const quote = await tripsService.getCargoCancellationQuote(
+    getParam(req, "tripId"),
+    getParam(req, "cargoItemId"),
+    req.user.id
+  );
+  res.json(quote);
+}
+
+/**
  * Simulación del retiro: cuánto se devolvería de la seña ahora. Va sin auth
  * porque no lee nada de la base ni de la sesión, solo corre la política de
  * cancelación con los números que le mande el front.
