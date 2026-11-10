@@ -90,8 +90,8 @@ async function retryOnConflict<T>(run: () => Promise<T>): Promise<T> {
 
 /**
  * Una reserva de espacio vale 24hs: si en ese plazo la empresa no abonó la
- * seña, el lugar vuelve a estar disponible para otro. No hay cron, el chequeo
- * es perezoso (ver releaseExpiredReservations).
+ * seña, el lugar vuelve a estar disponible para otro. La libera el scheduler
+ * (ver releaseExpiredReservations y lib/jobs.ts).
  */
 const RESERVATION_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -168,10 +168,6 @@ export async function listOpenTrips(filters: ListTripsQuery = {}, now: Date = ne
     where.features = { hasEvery: filters.features };
   }
 
-  // antes de contar lugares libres: una reserva vencida libera su espacio acá
-  // mismo, sin depender de un job.
-  await releaseExpiredReservations();
-
   const trips = await prisma.trip.findMany({
     where,
     include: { cargoItems: true, carrier: { select: { name: true } } },
@@ -239,91 +235,118 @@ function applyProximityFilter<
 }
 
 /**
+ * Una reserva vencida: PENDING desde antes del corte y sin una seña que la
+ * sostenga. La seña aprobada reserva el lugar (la empresa todavía puede
+ * confirmar o retirar) y la seña por acreditarse también (el pago ya existe en
+ * MP y todavía está pendiente: si se aprueba, la carga tiene que seguir viva).
+ * Una seña rechazada, o una preference sin pago en MP, no sostienen nada.
+ */
+function isExpiredReservation(
+  item: {
+    status: string;
+    createdAt: Date;
+    payments: { type: string; status: PaymentStatus; mpPaymentId: string | null }[];
+  },
+  cutoff: Date
+): boolean {
+  if (item.status !== "PENDING" || item.createdAt >= cutoff) return false;
+  const deposit = item.payments.find((p) => p.type === "DEPOSIT");
+  if (deposit?.status === "APPROVED") return false;
+  if (deposit?.status === "PENDING" && deposit.mpPaymentId !== null) return false;
+  return true;
+}
+
+/**
  * Reserva vencida: una carga PENDING que no pagó su seña dentro de las 24hs
- * libera el lugar. Es perezoso a propósito (no hay cron ni worker en el stack):
- * cada vez que alguien mira los viajes o entra a uno, aprovechamos para
- * limpiar las reservas que ya vencieron.
+ * libera el lugar. Lo corre el scheduler cada minuto (lib/jobs.ts); ya no se
+ * hace al listar ni al mirar un viaje.
  *
  * Solo se liberan cargas de viajes que todavía no salieron (OPEN/FULL): con el
  * camión en camino la reserva dejó de ser un espacio en un viaje futuro.
- * No avisamos por email a la empresa: es la consecuencia de no pagar, y el
+ * No avisamos a la empresa: es la consecuencia de no pagar, y el
  * transportista igual ve el lugar libre.
+ *
+ * La búsqueda solo elige los viajes. Cada viaje va en su propia TX
+ * Serializable que relee el viaje con sus cargas y pagos, cancela las vencidas
+ * con `cancelCargoForTrip` (fee 0, con CAS sobre la seña: si el webhook la
+ * aprobó en el medio, la TX se reintenta y la reserva se mantiene) y, si
+ * quedó lugar, pasa el viaje de FULL a OPEN en la misma TX. Un `addCargoItem`
+ * concurrente choca por serialización (P2034) y uno de los dos se reintenta
+ * con lo que hay ahora.
+ *
+ * Un viaje que falla no corta la corrida: se loguea y lo retoma la próxima.
  */
 export async function releaseExpiredReservations(
   now: Date = new Date()
 ): Promise<number> {
   const cutoff = new Date(now.getTime() - RESERVATION_TTL_MS);
-  const expired = await prisma.cargoItem.findMany({
+  const candidates = await prisma.cargoItem.findMany({
     where: {
       status: "PENDING",
       createdAt: { lt: cutoff },
-      // la seña pagada reserva el lugar para siempre (la empresa todavía
-      // puede confirmar o retirar). un pago rechazado tampoco bloquea: si
-      // Mercado Pago lo marcó como no cobrado no hay nada que esperar.
       trip: { status: { in: ["OPEN", "FULL"] } },
-      payments: { none: { type: "DEPOSIT", status: "APPROVED" } },
+      payments: {
+        none: {
+          type: "DEPOSIT",
+          OR: [{ status: "APPROVED" }, { status: "PENDING", mpPaymentId: { not: null } }],
+        },
+      },
     },
-    select: { id: true, tripId: true },
+    select: { tripId: true },
+    distinct: ["tripId"],
   });
-  if (expired.length === 0) return 0;
-
-  const byTrip = new Map<string, typeof expired>();
-  for (const item of expired) {
-    const bucket = byTrip.get(item.tripId);
-    if (bucket) bucket.push(item);
-    else byTrip.set(item.tripId, [item]);
-  }
 
   let released = 0;
-  for (const [tripId, items] of byTrip) {
-    const ids = items.map((i) => i.id);
-    // La búsqueda y el update no son atómicos: entre los dos la empresa puede
-    // acreditar la seña (el webhook de Mercado Pago). Por eso el update vuelve
-    // a exigir las mismas condiciones que el filtro: si el pago entró, la
-    // reserva se mantiene y no perdemos la plata de la empresa. El updateMany
-    // devuelve cuántos se liberaron, que puede ser menos que `ids`.
-    const result = await prisma.cargoItem.updateMany({
-      where: {
-        id: { in: ids },
-        status: "PENDING",
-        trip: { status: { in: ["OPEN", "FULL"] } },
-        payments: { none: { type: "DEPOSIT", status: "APPROVED" } },
-      },
-      // se libera el lugar sin cobrar nada: el filtro garantiza que no hay
-      // seña acreditada, así que el fee es 0 (y no null, que significa "la
-      // carga sigue viva").
-      data: {
-        status: "CANCELLED",
-        cancelledAt: now,
-        cancellationFeeAmount: new Prisma.Decimal(0),
-      },
-    });
-
-    released += result.count;
-
-    // el lugar vuelve al viaje. Se relee el viaje porque el snapshot previo ya
-    // no sirve: entre la búsqueda y el update las cargas pudieron cambiar.
-    const trip = await prisma.trip.findUnique({
-      where: { id: tripId },
-      select: {
-        status: true,
-        capacityTotal: true,
-        cargoItems: { select: { volume: true, status: true } },
-      },
-    });
-    if (!trip) continue;
-    const used = activeVolume(trip.cargoItems);
-    if (trip.status === "FULL" && used < trip.capacityTotal) {
-      await prisma.trip.update({ where: { id: tripId }, data: { status: "OPEN" } });
+  for (const { tripId } of candidates) {
+    try {
+      released += await releaseTripReservations(tripId, cutoff, now);
+    } catch (err) {
+      console.error("[reservas] no se pudieron liberar las reservas de un viaje", {
+        name: err instanceof Error ? err.name : typeof err,
+        code: err instanceof AppError ? err.code : undefined,
+      });
     }
   }
-
   return released;
 }
 
-export async function getTripById(id: string) {
-  await releaseExpiredReservations();
+async function releaseTripReservations(
+  tripId: string,
+  cutoff: Date,
+  now: Date
+): Promise<number> {
+  return retryOnConflict(() =>
+    prisma.$transaction(
+      async (tx) => {
+        const trip = await tx.trip.findUnique({
+          where: { id: tripId },
+          include: { cargoItems: { include: { payments: true } } },
+        });
+        if (!trip || (trip.status !== "OPEN" && trip.status !== "FULL")) return 0;
 
+        const expired = trip.cargoItems.filter((item) =>
+          isExpiredReservation(item, cutoff)
+        );
+        if (expired.length === 0) return 0;
+
+        await cancelCargoForTrip(tx, expired, now);
+
+        // el lugar vuelve al viaje, con las cargas que se leyeron en esta TX
+        const expiredIds = new Set(expired.map((item) => item.id));
+        const used = activeVolume(
+          trip.cargoItems.filter((item) => !expiredIds.has(item.id))
+        );
+        if (trip.status === "FULL" && used < trip.capacityTotal) {
+          await tx.trip.update({ where: { id: tripId }, data: { status: "OPEN" } });
+        }
+        return expired.length;
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, maxWait: 5000 }
+    )
+  );
+}
+
+export async function getTripById(id: string) {
   const trip = await prisma.trip.findUnique({
     where: { id },
     include: {

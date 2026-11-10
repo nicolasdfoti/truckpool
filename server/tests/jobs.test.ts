@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { processPendingRefunds } from "../modules/payments/refunds.service.js";
+import { releaseExpiredReservations } from "../modules/trips/trips.service.js";
 import { JOBS, runJob, startJobs, type Job } from "../lib/jobs.js";
 
 // El scheduler: cada job se prueba llamándolo directo (sin timers); los timers
@@ -7,6 +8,10 @@ import { JOBS, runJob, startJobs, type Job } from "../lib/jobs.js";
 
 vi.mock("../modules/payments/refunds.service.js", () => ({
   processPendingRefunds: vi.fn().mockResolvedValue({ retomadas: 0, procesadas: 0 }),
+}));
+
+vi.mock("../modules/trips/trips.service.js", () => ({
+  releaseExpiredReservations: vi.fn().mockResolvedValue(0),
 }));
 
 const AHORA = new Date("2026-11-10T12:00:00.000Z");
@@ -34,6 +39,14 @@ describe("JOBS", () => {
 
     await refunds!.run(AHORA);
     expect(processPendingRefunds).toHaveBeenCalledWith(AHORA);
+  });
+
+  it("las reservas vencidas se liberan cada minuto con releaseExpiredReservations", async () => {
+    const reservations = JOBS.find((j) => j.name === "reservations");
+    expect(reservations?.intervalMs).toBe(60_000);
+
+    await reservations!.run(AHORA);
+    expect(releaseExpiredReservations).toHaveBeenCalledWith(AHORA);
   });
 
   it("cada job tiene un nombre único", () => {

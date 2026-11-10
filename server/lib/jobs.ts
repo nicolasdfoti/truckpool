@@ -1,5 +1,6 @@
 import { AppError } from "./errors.js";
 import { processPendingRefunds } from "../modules/payments/refunds.service.js";
+import { releaseExpiredReservations } from "../modules/trips/trips.service.js";
 
 /**
  * Scheduler de tareas periódicas, en el mismo proceso de la API.
@@ -29,6 +30,8 @@ const MINUTE_MS = 60_000;
 export const JOBS: Job[] = [
   // U12: outbox de reembolsos (PROCESSING colgados y PENDING con backoff vencido)
   { name: "refunds", intervalMs: MINUTE_MS, run: processPendingRefunds },
+  // reservas PENDING sin seña vencidas a las 24 h (FULL→OPEN en la misma TX)
+  { name: "reservations", intervalMs: MINUTE_MS, run: releaseExpiredReservations },
   // L9: renovar los tokens de MP de los fleteros va acá como un job más
   // (`{ name: "mp-token-refresh", intervalMs, run }`), con su CAS en la base.
 ];

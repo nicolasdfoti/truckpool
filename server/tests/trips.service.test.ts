@@ -1669,205 +1669,317 @@ describe("addCargoItem", () => {
   });
 
   describe("reservas vencidas", () => {
+    // 24 h antes de AHORA: una reserva creada antes vence; creada justo ahí, no
+    const AHORA = new Date("2026-09-27T12:00:00Z");
+    const CORTE = new Date("2026-09-26T12:00:00Z");
+    const VIEJA = new Date("2026-09-26T11:59:59Z");
+
+    let errorSpy: ReturnType<typeof vi.spyOn>;
+
     beforeEach(() => {
       vi.clearAllMocks();
-      (
-        prisma.cargoItem.updateMany as unknown as ReturnType<typeof vi.fn>
-      ).mockResolvedValue({
-        count: 1,
-      });
-      (prisma.trip.update as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({});
       (prisma.$transaction as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-        (arg: unknown) => (Array.isArray(arg) ? Promise.all(arg) : undefined)
+        (fn: unknown) => (fn as (t: unknown) => unknown)(tx)
       );
-      vi.useFakeTimers();
-      vi.setSystemTime(new Date("2026-09-27T12:00:00Z"));
+      tx.cargoItem.update.mockResolvedValue({});
+      tx.trip.update.mockResolvedValue({});
+      tx.payment.updateMany.mockResolvedValue({ count: 1 });
+      tx.refundRequest.create = vi.fn().mockResolvedValue({});
+      errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     });
 
-    afterEach(() => {
-      vi.useRealTimers();
-    });
-
-    /** una carga vencida (la búsqueda ya no trae el snapshot del viaje) */
-    function expiredItem(overrides: Record<string, unknown> = {}) {
-      return { id: "i1", tripId: "t1", ...overrides };
+    /** la búsqueda devuelve los viajes con alguna reserva vencida */
+    function candidatos(...tripIds: string[]) {
+      (
+        prisma.cargoItem.findMany as unknown as ReturnType<typeof vi.fn>
+      ).mockResolvedValue(tripIds.map((tripId) => ({ tripId })));
     }
 
-    /**
-     * El liberador relee el viaje después de cancelar para calcular la capacidad
-     * con el estado real (y no con un snapshot que pudo quedar viejo si una seña
-     * se acreditó en el medio).
-     */
-    function mockTripState(state: {
-      status: "OPEN" | "FULL";
-      capacityTotal: number;
-      cargoItems: { id: string; volume: number; status: string }[];
-    }) {
-      (prisma.trip.findUnique as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(
-        state
+    /** lo que la TX lee del viaje (con cada carga y sus pagos) */
+    function viajeEnTx(...estados: Record<string, unknown>[]) {
+      for (const estado of estados) {
+        tx.trip.findUnique.mockResolvedValueOnce(baseTrip({ ...estado }));
+      }
+    }
+
+    function vencida(overrides: Record<string, unknown> = {}) {
+      return baseCargoItem({ createdAt: VIEJA, payments: [], ...overrides });
+    }
+
+    const canceladas = () =>
+      tx.cargoItem.update.mock.calls.map(
+        (call) => (call[0] as { where: { id: string } }).where.id
       );
-    }
 
     it("no hace nada si no hay reservas vencidas", async () => {
-      (
-        prisma.cargoItem.findMany as unknown as ReturnType<typeof vi.fn>
-      ).mockResolvedValue([]);
+      candidatos();
 
-      const released = await tripsService.releaseExpiredReservations();
-
-      expect(released).toBe(0);
-      expect(prisma.cargoItem.updateMany).not.toHaveBeenCalled();
+      expect(await tripsService.releaseExpiredReservations(AHORA)).toBe(0);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
     });
 
-    it("libera la carga que no pagó la seña dentro de las 24hs", async () => {
-      (
-        prisma.cargoItem.findMany as unknown as ReturnType<typeof vi.fn>
-      ).mockResolvedValue([expiredItem()]);
+    it("busca reservas vencidas sin seña aprobada ni por acreditarse, en viajes que no salieron", async () => {
+      candidatos();
 
-      const released = await tripsService.releaseExpiredReservations();
+      await tripsService.releaseExpiredReservations(AHORA);
 
-      expect(released).toBe(1);
-      expect(prisma.cargoItem.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: expect.objectContaining({
-            status: "PENDING",
-            // 24hs exactas: la reserva se rompe recién pasado el plazo
-            createdAt: { lt: new Date("2026-09-26T12:00:00Z") },
-            trip: { status: { in: ["OPEN", "FULL"] } },
-            payments: { none: { type: "DEPOSIT", status: "APPROVED" } },
-          }),
-        })
-      );
-      // el update revalida: si la seña entró entre la búsqueda y ahora, la
-      // reserva se mantiene (el filtro solo del findMany no alcanza).
-      expect(prisma.cargoItem.updateMany).toHaveBeenCalledWith({
+      expect(prisma.cargoItem.findMany).toHaveBeenCalledWith({
         where: {
-          id: { in: ["i1"] },
           status: "PENDING",
+          // 24 h exactas: la reserva se rompe recién pasado el plazo
+          createdAt: { lt: CORTE },
           trip: { status: { in: ["OPEN", "FULL"] } },
-          payments: { none: { type: "DEPOSIT", status: "APPROVED" } },
+          payments: {
+            none: {
+              type: "DEPOSIT",
+              OR: [
+                { status: "APPROVED" },
+                { status: "PENDING", mpPaymentId: { not: null } },
+              ],
+            },
+          },
         },
+        select: { tripId: true },
+        distinct: ["tripId"],
+      });
+    });
+
+    it("libera la reserva que no pagó la seña en 24 h, dentro de una TX Serializable y sin reembolso", async () => {
+      candidatos("t1");
+      viajeEnTx({ cargoItems: [vencida()] });
+
+      expect(await tripsService.releaseExpiredReservations(AHORA)).toBe(1);
+
+      expect(prisma.$transaction).toHaveBeenCalledWith(expect.any(Function), {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        maxWait: 5000,
+      });
+      expect(tx.cargoItem.update).toHaveBeenCalledWith({
+        where: { id: "i1" },
         data: {
           status: "CANCELLED",
-          cancelledAt: new Date("2026-09-27T12:00:00Z"),
-          // nunca se cobró nada, así que el costo de cancelacion es 0 (y no
-          // null, que en el mapper significa "la carga sigue viva").
+          cancelledAt: AHORA,
+          // nunca se cobró nada: el costo es 0 (y no null, que en el mapper
+          // significa "la carga sigue viva")
           cancellationFeeAmount: new Prisma.Decimal(0),
         },
       });
-    });
-
-    it("no libera la carga si la seña se acreditó entre la búsqueda y el update", async () => {
-      (
-        prisma.cargoItem.findMany as unknown as ReturnType<typeof vi.fn>
-      ).mockResolvedValue([expiredItem()]);
-      // el updateMany no encuentra la fila: el pago la rescató
-      (
-        prisma.cargoItem.updateMany as unknown as ReturnType<typeof vi.fn>
-      ).mockResolvedValue({
-        count: 0,
-      });
-      mockTripState({
-        status: "OPEN",
-        capacityTotal: 30,
-        cargoItems: [{ id: "i1", volume: 10, status: "PENDING" }],
-      });
-
-      expect(await tripsService.releaseExpiredReservations()).toBe(0);
-    });
-
-    it("reabre el viaje FULL que quedó con lugar libre", async () => {
-      (
-        prisma.cargoItem.findMany as unknown as ReturnType<typeof vi.fn>
-      ).mockResolvedValue([expiredItem()]);
-      // estado real ya liberated
-      mockTripState({
-        status: "FULL",
-        capacityTotal: 30,
-        cargoItems: [
-          { id: "i1", volume: 10, status: "CANCELLED" },
-          { id: "i2", volume: 20, status: "CONFIRMED" },
-        ],
-      });
-
-      await tripsService.releaseExpiredReservations();
-
-      // 30 - 10 (la vencida) = 20, y quedaban 20 ocupados: vuelve a haber lugar.
-      expect(prisma.trip.update).toHaveBeenCalledWith({
-        where: { id: "t1" },
-        data: { status: "OPEN" },
-      });
-    });
-
-    it("deja el viaje FULL si las reservas vencidas no liberan lugar", async () => {
-      (
-        prisma.cargoItem.findMany as unknown as ReturnType<typeof vi.fn>
-      ).mockResolvedValue([expiredItem()]);
-      mockTripState({
-        status: "FULL",
-        capacityTotal: 30,
-        cargoItems: [
-          { id: "i1", volume: 10, status: "CANCELLED" },
-          { id: "i2", volume: 30, status: "CONFIRMED" },
-        ],
-      });
-
-      await tripsService.releaseExpiredReservations();
-
+      expect(tx.refundRequest.create).not.toHaveBeenCalled();
+      // la consecuencia de no pagar no se avisa
+      expect(notifyUsers).not.toHaveBeenCalled();
+      // todo pasa en la TX: nada se escribe por fuera
+      expect(prisma.cargoItem.updateMany).not.toHaveBeenCalled();
       expect(prisma.trip.update).not.toHaveBeenCalled();
     });
 
-    it("libera todas las reservas vencidas de un mismo viaje de una vez", async () => {
-      (
-        prisma.cargoItem.findMany as unknown as ReturnType<typeof vi.fn>
-      ).mockResolvedValue([expiredItem(), expiredItem({ id: "i2" })]);
-      (
-        prisma.cargoItem.updateMany as unknown as ReturnType<typeof vi.fn>
-      ).mockResolvedValue({
-        count: 2,
-      });
-      mockTripState({
-        status: "OPEN",
-        capacityTotal: 30,
+    it("no libera una reserva con la seña aprobada ni con la seña por acreditarse", async () => {
+      candidatos("t1");
+      viajeEnTx({
         cargoItems: [
-          { id: "i1", volume: 10, status: "CANCELLED" },
-          { id: "i2", volume: 10, status: "CANCELLED" },
+          vencida({
+            id: "aprobada",
+            payments: [basePayment({ cargoItemId: "aprobada" })],
+          }),
+          vencida({
+            id: "por-acreditarse",
+            payments: [
+              basePayment({
+                cargoItemId: "por-acreditarse",
+                status: "PENDING",
+                mpPaymentId: "mp-9",
+              }),
+            ],
+          }),
         ],
       });
 
-      const released = await tripsService.releaseExpiredReservations();
-
-      expect(released).toBe(2);
-      expect(prisma.cargoItem.updateMany).toHaveBeenCalledTimes(1);
-      expect(prisma.cargoItem.updateMany).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: expect.objectContaining({ id: { in: ["i1", "i2"] } }),
-        })
-      );
+      expect(await tripsService.releaseExpiredReservations(AHORA)).toBe(0);
+      expect(tx.cargoItem.update).not.toHaveBeenCalled();
     });
 
-    it("listar viajes libera primero las reservas vencidas", async () => {
-      (
-        prisma.cargoItem.findMany as unknown as ReturnType<typeof vi.fn>
-      ).mockResolvedValue([expiredItem()]);
+    it("libera la reserva con la seña rechazada o con la preference creada pero sin pago en MP", async () => {
+      candidatos("t1");
+      viajeEnTx({
+        cargoItems: [
+          vencida({
+            id: "rechazada",
+            payments: [basePayment({ cargoItemId: "rechazada", status: "REJECTED" })],
+          }),
+          vencida({
+            id: "sin-pago",
+            payments: [
+              basePayment({
+                cargoItemId: "sin-pago",
+                status: "PENDING",
+                mpPaymentId: null,
+              }),
+            ],
+          }),
+        ],
+      });
+
+      expect(await tripsService.releaseExpiredReservations(AHORA)).toBe(2);
+      expect(canceladas()).toEqual(["rechazada", "sin-pago"]);
+      expect(tx.refundRequest.create).not.toHaveBeenCalled();
+    });
+
+    it("no toca reservas que no vencieron ni cargas confirmadas", async () => {
+      candidatos("t1");
+      viajeEnTx({
+        cargoItems: [
+          vencida({ id: "justo-24h", createdAt: CORTE }),
+          vencida({ id: "confirmada", status: "CONFIRMED" }),
+          vencida({ id: "vieja" }),
+        ],
+      });
+
+      expect(await tripsService.releaseExpiredReservations(AHORA)).toBe(1);
+      expect(canceladas()).toEqual(["vieja"]);
+    });
+
+    it("no libera nada si al releer el viaje ya salió o se canceló", async () => {
+      candidatos("t1", "t2");
+      viajeEnTx(
+        { id: "t1", status: "IN_TRANSIT", cargoItems: [vencida()] },
+        { id: "t2", status: "CANCELLED", cargoItems: [vencida()] }
+      );
+
+      expect(await tripsService.releaseExpiredReservations(AHORA)).toBe(0);
+      expect(tx.cargoItem.update).not.toHaveBeenCalled();
+    });
+
+    it("reabre dentro de la TX el viaje FULL que quedó con lugar libre", async () => {
+      candidatos("t1");
+      viajeEnTx({
+        status: "FULL",
+        capacityTotal: 30,
+        cargoItems: [
+          vencida({ id: "i1", volume: 10 }),
+          vencida({ id: "i2", volume: 20, status: "CONFIRMED" }),
+        ],
+      });
+
+      await tripsService.releaseExpiredReservations(AHORA);
+
+      expect(tx.trip.update).toHaveBeenCalledWith({
+        where: { id: "t1" },
+        data: { status: "OPEN" },
+      });
+      expect(prisma.trip.update).not.toHaveBeenCalled();
+    });
+
+    it("deja FULL el viaje si las reservas vencidas no liberan lugar", async () => {
+      candidatos("t1");
+      viajeEnTx({
+        status: "FULL",
+        capacityTotal: 30,
+        cargoItems: [
+          // la vencida se libera, pero lo confirmado ya ocupa todo
+          vencida({ id: "i1", volume: 10 }),
+          vencida({ id: "i2", volume: 30, status: "CONFIRMED" }),
+        ],
+      });
+
+      expect(await tripsService.releaseExpiredReservations(AHORA)).toBe(1);
+      expect(tx.trip.update).not.toHaveBeenCalled();
+    });
+
+    it("un viaje OPEN sigue OPEN (no se reescribe el estado)", async () => {
+      candidatos("t1");
+      viajeEnTx({ cargoItems: [vencida()] });
+
+      await tripsService.releaseExpiredReservations(AHORA);
+
+      expect(tx.trip.update).not.toHaveBeenCalled();
+    });
+
+    it("si la seña se aprobó en el medio, reintenta la TX y la reserva se mantiene", async () => {
+      candidatos("t1");
+      viajeEnTx(
+        {
+          cargoItems: [
+            vencida({
+              payments: [basePayment({ status: "PENDING", mpPaymentId: null })],
+            }),
+          ],
+        },
+        // al reintentar, el webhook ya la aprobó
+        { cargoItems: [vencida({ payments: [basePayment()] })] }
+      );
+      // el CAS sobre la seña no encuentra el estado leído
+      tx.payment.updateMany.mockResolvedValueOnce({ count: 0 });
+
+      expect(await tripsService.releaseExpiredReservations(AHORA)).toBe(0);
+
+      expect(prisma.$transaction).toHaveBeenCalledTimes(2);
+      expect(tx.payment.updateMany).toHaveBeenCalledWith({
+        where: { id: "pay1", status: "PENDING" },
+        data: { updatedAt: AHORA },
+      });
+      expect(tx.cargoItem.update).not.toHaveBeenCalled();
+    });
+
+    it("con un addCargoItem concurrente reintenta y decide el estado con lo que hay ahora", async () => {
+      candidatos("t1");
+      const conflicto = new Prisma.PrismaClientKnownRequestError("conflicto", {
+        code: "P2034",
+        clientVersion: "test",
+      });
+      (prisma.$transaction as unknown as ReturnType<typeof vi.fn>)
+        .mockRejectedValueOnce(conflicto)
+        .mockImplementation((fn: unknown) => (fn as (t: unknown) => unknown)(tx));
+      // ya con la carga nueva que llenó el lugar que liberaba la vencida
+      viajeEnTx({
+        status: "FULL",
+        capacityTotal: 30,
+        cargoItems: [
+          vencida({ id: "i1", volume: 10 }),
+          vencida({ id: "i2", volume: 20, status: "CONFIRMED" }),
+          baseCargoItem({ id: "nueva", volume: 10, createdAt: AHORA, payments: [] }),
+        ],
+      });
+
+      expect(await tripsService.releaseExpiredReservations(AHORA)).toBe(1);
+
+      expect(prisma.$transaction).toHaveBeenCalledTimes(2);
+      expect(canceladas()).toEqual(["i1"]);
+      // 20 confirmados + 10 de la nueva = 30: sigue FULL
+      expect(tx.trip.update).not.toHaveBeenCalled();
+    });
+
+    it("un viaje que falla no corta la corrida y el log no lleva el mensaje", async () => {
+      candidatos("t1", "t2");
+      tx.trip.findUnique
+        .mockRejectedValueOnce(new Error("detalle de la base con datos"))
+        .mockResolvedValueOnce(
+          baseTrip({ id: "t2", cargoItems: [vencida({ id: "i2" })] })
+        );
+
+      expect(await tripsService.releaseExpiredReservations(AHORA)).toBe(1);
+
+      expect(canceladas()).toEqual(["i2"]);
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(errorSpy.mock.calls[0])).not.toContain("datos");
+    });
+
+    it("listar viajes ya no libera reservas: lo hace el scheduler", async () => {
       (prisma.trip.findMany as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([]);
 
       await tripsService.listOpenTrips();
 
-      expect(prisma.cargoItem.updateMany).toHaveBeenCalled();
+      expect(prisma.cargoItem.findMany).not.toHaveBeenCalled();
+      expect(prisma.$transaction).not.toHaveBeenCalled();
     });
 
-    it("mirar un viaje también libera las reservas vencidas", async () => {
-      (
-        prisma.cargoItem.findMany as unknown as ReturnType<typeof vi.fn>
-      ).mockResolvedValue([expiredItem()]);
+    it("mirar un viaje tampoco libera reservas", async () => {
       (prisma.trip.findUnique as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(
         baseTrip({ carrier: { name: "Flete" }, reviews: [] })
       );
 
       await tripsService.getTripById("t1");
 
-      expect(prisma.cargoItem.updateMany).toHaveBeenCalled();
+      expect(prisma.cargoItem.findMany).not.toHaveBeenCalled();
+      expect(prisma.$transaction).not.toHaveBeenCalled();
     });
   });
 
