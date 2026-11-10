@@ -1,5 +1,6 @@
 import { AppError } from "./errors.js";
 import { processPendingRefunds } from "../modules/payments/refunds.service.js";
+import { reconcilePendingPayments } from "../modules/payments/reconcile.service.js";
 import {
   autoCancelUndepartedTrips,
   releaseExpiredReservations,
@@ -40,6 +41,12 @@ export const JOBS: Job[] = [
     name: "auto-cancel-trips",
     intervalMs: 5 * MINUTE_MS,
     run: autoCancelUndepartedTrips,
+  },
+  // conciliación con MP de los pagos PENDING/REJECTED, por si se perdió un webhook
+  {
+    name: "reconcile-payments",
+    intervalMs: 15 * MINUTE_MS,
+    run: reconcilePendingPayments,
   },
   // L9: renovar los tokens de MP de los fleteros va acá como un job más
   // (`{ name: "mp-token-refresh", intervalMs, run }`), con su CAS en la base.

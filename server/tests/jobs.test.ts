@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { processPendingRefunds } from "../modules/payments/refunds.service.js";
+import { reconcilePendingPayments } from "../modules/payments/reconcile.service.js";
 import {
   autoCancelUndepartedTrips,
   releaseExpiredReservations,
@@ -11,6 +12,10 @@ import { JOBS, runJob, startJobs, type Job } from "../lib/jobs.js";
 
 vi.mock("../modules/payments/refunds.service.js", () => ({
   processPendingRefunds: vi.fn().mockResolvedValue({ retomadas: 0, procesadas: 0 }),
+}));
+
+vi.mock("../modules/payments/reconcile.service.js", () => ({
+  reconcilePendingPayments: vi.fn().mockResolvedValue({ revisados: 0 }),
 }));
 
 vi.mock("../modules/trips/trips.service.js", () => ({
@@ -59,6 +64,14 @@ describe("JOBS", () => {
 
     await autoCancel!.run(AHORA);
     expect(autoCancelUndepartedTrips).toHaveBeenCalledWith(AHORA);
+  });
+
+  it("los pagos se concilian con MP cada 15 min", async () => {
+    const reconcile = JOBS.find((j) => j.name === "reconcile-payments");
+    expect(reconcile?.intervalMs).toBe(15 * 60_000);
+
+    await reconcile!.run(AHORA);
+    expect(reconcilePendingPayments).toHaveBeenCalledWith(AHORA);
   });
 
   it("cada job tiene un nombre único", () => {

@@ -402,6 +402,90 @@ export async function fetchPaymentState(
   };
 }
 
+/** un pago de MP encontrado por su `external_reference` */
+export type MpPaymentSummary = {
+  id: string;
+  state: MpPaymentState | null;
+  externalReference: string;
+};
+
+/**
+ * Los pagos de MP de un pago local, buscados por `external_reference` (el
+ * `Payment.id` interno que mandamos en la preference), del más viejo al más
+ * nuevo. Los usa la conciliación cuando se perdió un webhook: el primer aviso
+ * es el que deja asentado el `mpPaymentId`, así que sin él la única forma de
+ * encontrar el pago de MP es esta búsqueda. Trae también los reintentos con
+ * otra tarjeta, que en MP son pagos distintos.
+ *
+ * Va con el token del transportista (el pago vive en su cuenta) y con el
+ * timeout de los reembolsos. Errores saneados, como en el resto del archivo: el
+ * error crudo del SDK puede traer los headers con el token.
+ *
+ * Sin verificar contra MP: la búsqueda con el token de OAuth de un fletero y
+ * la forma de la respuesta (ver el gate en docs/review/04-launch.md).
+ */
+export async function searchPaymentsByExternalReference(
+  externalReference: string,
+  accessToken: string
+): Promise<MpPaymentSummary[]> {
+  let response;
+  try {
+    response = await new Payment(refundClientConfig(accessToken)).search({
+      options: {
+        external_reference: externalReference,
+        sort: "date_created",
+        criteria: "asc",
+      },
+    });
+  } catch (err) {
+    if (err instanceof AppError) throw err;
+    console.warn("[mercadopago] searchPaymentsByExternalReference falló", {
+      status: mpErrorStatus(err),
+    });
+    throw new MpApiError("no pudimos buscar los pagos en Mercado Pago", mpErrorCode(err));
+  }
+
+  const results = (response as { results?: unknown } | undefined)?.results;
+  if (!Array.isArray(results)) {
+    throw new AppError(
+      "Mercado Pago no devolvió una búsqueda de pagos utilizable",
+      502,
+      "MP_INVALID_RESPONSE"
+    );
+  }
+
+  return (
+    (
+      results as {
+        id?: unknown;
+        status?: string;
+        external_reference?: unknown;
+        date_created?: unknown;
+      }[]
+    )
+      .filter(
+        (payment) =>
+          (typeof payment.id === "number" || typeof payment.id === "string") &&
+          // el filtro es de MP; acá se vuelve a exigir, no se confía en la búsqueda
+          payment.external_reference === externalReference
+      )
+      .map((payment) => ({
+        payment,
+        created:
+          typeof payment.date_created === "string"
+            ? Date.parse(payment.date_created)
+            : NaN,
+      }))
+      // del más viejo al más nuevo aunque MP no respete el orden pedido
+      .sort((a, b) => (a.created || 0) - (b.created || 0))
+      .map(({ payment }) => ({
+        id: String(payment.id),
+        state: mapMpStatus(payment.status),
+        externalReference,
+      }))
+  );
+}
+
 /**
  * El pago de Mercado Pago completo, mapeado a los campos que sirven para
  * trazar un cobro de punta a punta.

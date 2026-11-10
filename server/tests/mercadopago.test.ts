@@ -3,17 +3,25 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 // El SDK de Mercado Pago se reemplaza entero: acá se prueba la lógica de
 // idempotencia de refundPayment, no la integración con MP.
-const { create, total, paymentGet, paymentMethods, preferenceCreate, mpConfigs } =
-  vi.hoisted(() => ({
-    create: vi.fn(),
-    paymentGet: vi.fn(),
-    total: vi.fn(),
-    paymentMethods: vi.fn(),
-    preferenceCreate: vi.fn(),
-    // guardamos los opts de cada MercadoPagoConfig para poder verificar de dónde
-    // sale el access token
-    mpConfigs: [] as Array<{ accessToken?: string }>,
-  }));
+const {
+  create,
+  total,
+  paymentGet,
+  paymentSearch,
+  paymentMethods,
+  preferenceCreate,
+  mpConfigs,
+} = vi.hoisted(() => ({
+  create: vi.fn(),
+  paymentGet: vi.fn(),
+  paymentSearch: vi.fn(),
+  total: vi.fn(),
+  paymentMethods: vi.fn(),
+  preferenceCreate: vi.fn(),
+  // guardamos los opts de cada MercadoPagoConfig para poder verificar de dónde
+  // sale el access token
+  mpConfigs: [] as Array<{ accessToken?: string }>,
+}));
 
 vi.mock("mercadopago", () => ({
   MercadoPagoConfig: class {
@@ -27,6 +35,7 @@ vi.mock("mercadopago", () => ({
   },
   Payment: class {
     get = paymentGet;
+    search = paymentSearch;
   },
   PaymentMethod: class {
     get = paymentMethods;
@@ -42,6 +51,7 @@ const {
   createTestPreference,
   fetchPaymentState,
   refundPayment,
+  searchPaymentsByExternalReference,
   verifyWebhookSignature,
 } = await import("../lib/mercadopago.js");
 const { AppError, MpApiError } = await import("../lib/errors.js");
@@ -907,6 +917,97 @@ describe("fetchPaymentState", () => {
     paymentGet.mockResolvedValue({ status: "approved" });
 
     await expect(fetchPaymentState("mp-77", "token-de-prueba")).rejects.toMatchObject({
+      statusCode: 502,
+      code: "MP_INVALID_RESPONSE",
+    });
+  });
+});
+
+// la forma de la respuesta de búsqueda sale de la documentación de MP; no se vio
+// todavía con el token de OAuth de un fletero (ver el gate en
+// docs/review/04-launch.md)
+describe("searchPaymentsByExternalReference", () => {
+  const TOKEN = "APP_USR-secreto";
+
+  beforeEach(() => {
+    paymentSearch.mockReset();
+    mpConfigs.length = 0;
+  });
+
+  it("busca con el token del fletero, con timeout, por external_reference y del más viejo al más nuevo", async () => {
+    paymentSearch.mockResolvedValue({ results: [] });
+
+    await searchPaymentsByExternalReference("pay1", TOKEN);
+
+    expect(paymentSearch).toHaveBeenCalledWith({
+      options: { external_reference: "pay1", sort: "date_created", criteria: "asc" },
+    });
+    expect(mpConfigs.at(-1)).toEqual({
+      accessToken: TOKEN,
+      options: { timeout: 20_000 },
+    });
+  });
+
+  it("devuelve cada pago con su estado mapeado, ordenados por creación y solo los de esa referencia", async () => {
+    paymentSearch.mockResolvedValue({
+      results: [
+        {
+          id: 3,
+          status: "approved",
+          external_reference: "pay1",
+          date_created: "2026-11-10T10:05:00.000-03:00",
+        },
+        {
+          id: 1,
+          status: "rejected",
+          external_reference: "pay1",
+          date_created: "2026-11-10T10:00:00.000-03:00",
+        },
+        {
+          id: 2,
+          status: "approved",
+          external_reference: "otro",
+          date_created: "2026-11-10T10:01:00.000-03:00",
+        },
+        {
+          id: 4,
+          status: "in_process",
+          external_reference: "pay1",
+          date_created: "2026-11-10T10:07:00.000-03:00",
+        },
+      ],
+    });
+
+    await expect(searchPaymentsByExternalReference("pay1", TOKEN)).resolves.toEqual([
+      { id: "1", state: "REJECTED", externalReference: "pay1" },
+      { id: "3", state: "APPROVED", externalReference: "pay1" },
+      { id: "4", state: "PENDING", externalReference: "pay1" },
+    ]);
+  });
+
+  it("traduce un error del SDK a MP_ERROR sin loguear el token", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    paymentSearch.mockRejectedValue(
+      Object.assign(new Error("Unauthorized"), {
+        status: 401,
+        config: { headers: { Authorization: `Bearer ${TOKEN}` } },
+      })
+    );
+
+    const err = await searchPaymentsByExternalReference("pay1", TOKEN).catch(
+      (e: unknown) => e
+    );
+
+    expect(err).toBeInstanceOf(MpApiError);
+    expect(err).toMatchObject({ statusCode: 502, code: "MP_ERROR", mpCode: "401" });
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(TOKEN);
+    warn.mockRestore();
+  });
+
+  it("una respuesta sin lista de resultados es MP_INVALID_RESPONSE", async () => {
+    paymentSearch.mockResolvedValue({});
+
+    await expect(searchPaymentsByExternalReference("pay1", TOKEN)).rejects.toMatchObject({
       statusCode: 502,
       code: "MP_INVALID_RESPONSE",
     });
