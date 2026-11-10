@@ -12,7 +12,10 @@
 import { api } from "../api/client";
 
 export type CancellationQuote = {
-  window: "FULL_REFUND" | "PARTIAL_REFUND" | "NO_REFUND";
+  /** CLOSED: el viaje ya salió y la carga no se puede retirar */
+  window: "FULL_REFUND" | "PARTIAL_REFUND" | "NO_REFUND" | "CLOSED";
+  /** false desde la hora de salida: el retiro responde 409 */
+  cancellable: boolean;
   /** cuánto se devuelve de la seña */
   refundAmount: number;
   /** cuánto se queda la plataforma (fee) */

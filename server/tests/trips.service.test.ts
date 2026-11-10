@@ -1097,6 +1097,39 @@ describe("cancelCargoItem: carga CONFIRMED retirable hasta la salida (D4)", () =
 
     expect(avisoA("u1").type).toBe("CARGO_CANCELLED");
   });
+
+  // el retiro se corta a la hora de salida, no solo por el estado del viaje: si
+  // el fletero no sale, D6 devuelve la seña entera, y retirar tarde la haría
+  // perder. La salida es 18:00 ART del 11/11 = 21:00Z.
+  describe.each([["PENDING"], ["CONFIRMED"]] as const)(
+    "corte en la salida (%s)",
+    (status) => {
+      beforeEach(() => {
+        tx.cargoItem.findUnique.mockResolvedValue(confirmada({ status }));
+      });
+
+      it("un minuto antes de la salida: se retira, con la seña retenida entera", async () => {
+        freezeClockAt("2026-11-11T20:59:00.000Z");
+
+        await tripsService.cancelCargoItem("t1", "i1", "c1");
+
+        expect(resultado()).toEqual({ estado: "CANCELLED", devuelve: null, fee: 100 });
+      });
+
+      it("un minuto después de la salida: 409 TRIP_ALREADY_STARTED, sin tocar nada", async () => {
+        freezeClockAt("2026-11-11T21:01:00.000Z");
+
+        await expect(tripsService.cancelCargoItem("t1", "i1", "c1")).rejects.toMatchObject({
+          statusCode: 409,
+          code: "TRIP_ALREADY_STARTED",
+        });
+        expect(tx.cargoItem.update).not.toHaveBeenCalled();
+        expect(tx.payment.updateMany).not.toHaveBeenCalled();
+        expect(tx.refundRequest.create).not.toHaveBeenCalled();
+        expect(tx.trip.update).not.toHaveBeenCalled();
+      });
+    }
+  );
 });
 
 describe("cancelCargoItem: carrera con el webhook que aprueba la seña", () => {

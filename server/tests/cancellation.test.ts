@@ -3,6 +3,7 @@ import {
   DEFAULT_DEPARTURE_TIME,
   departureInstant,
   hoursUntilDeparture,
+  quoteCancellation,
 } from "../lib/cancellation.js";
 
 // U11: la ventana de retiro se mide contra la salida que ve la empresa (día del
@@ -48,5 +49,43 @@ describe("hoursUntilDeparture", () => {
     const trip = { date: new Date("2026-11-11T15:00:00.000Z"), departureTime: null };
     const ahora = new Date("2026-11-10T02:59:00.000Z");
     expect(hoursUntilDeparture(trip, ahora)).toBe(48);
+  });
+});
+
+// después de la salida ya no se retira: si el fletero no sale, D6 cancela el
+// viaje y devuelve la seña entera. Retirar tarde haría perderla.
+describe("quoteCancellation en la salida", () => {
+  const MIN = 1 / 60;
+
+  it("un minuto antes de la salida se puede retirar, sin devolución", () => {
+    expect(quoteCancellation(100, MIN)).toEqual({
+      window: "NO_REFUND",
+      cancellable: true,
+      refundAmount: 0,
+      feeAmount: 100,
+    });
+  });
+
+  it("en la salida exacta ya no se puede retirar", () => {
+    expect(quoteCancellation(100, 0)).toEqual({
+      window: "CLOSED",
+      cancellable: false,
+      refundAmount: 0,
+      feeAmount: 0,
+    });
+  });
+
+  it("un minuto después de la salida ya no se puede retirar", () => {
+    expect(quoteCancellation(100, -MIN)).toMatchObject({
+      window: "CLOSED",
+      cancellable: false,
+    });
+  });
+
+  it("antes de la salida el quote dice que se puede retirar", () => {
+    expect(quoteCancellation(100, 60)).toMatchObject({
+      window: "FULL_REFUND",
+      cancellable: true,
+    });
   });
 });

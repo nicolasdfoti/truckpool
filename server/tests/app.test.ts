@@ -3139,6 +3139,7 @@ describe("GET /api/trips/cancellation-quote", () => {
     const res = await ask(100_000, inHours(72));
     expect(res.body).toEqual({
       window: "FULL_REFUND",
+      cancellable: true,
       refundAmount: 100_000,
       feeAmount: 0,
     });
@@ -3148,6 +3149,7 @@ describe("GET /api/trips/cancellation-quote", () => {
     const res = await ask(100_000, inHours(36));
     expect(res.body).toEqual({
       window: "PARTIAL_REFUND",
+      cancellable: true,
       refundAmount: 50_000,
       feeAmount: 50_000,
     });
@@ -3157,6 +3159,7 @@ describe("GET /api/trips/cancellation-quote", () => {
     const res = await ask(100_000, inHours(2));
     expect(res.body).toEqual({
       window: "NO_REFUND",
+      cancellable: true,
       refundAmount: 0,
       feeAmount: 100_000,
     });
@@ -3250,6 +3253,25 @@ describe("GET /api/trips/cancellation-quote", () => {
       // 48 h antes de las 23:59 ART del 11/11 (02:59Z del 12/11)
       expect(await at("2026-11-10T02:59:00.000Z")).toBe("PARTIAL_REFUND");
       expect(await at("2026-11-10T02:58:00.000Z")).toBe("FULL_REFUND");
+    });
+
+    it("un minuto antes de la salida se puede retirar; un minuto después, no", async () => {
+      expect(await at("2026-11-11T20:59:00.000Z", "18:00")).toBe("NO_REFUND");
+      expect(await at("2026-11-11T21:01:00.000Z", "18:00")).toBe("CLOSED");
+
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-11-11T21:01:00.000Z"));
+      try {
+        const res = await askSalida("18:00");
+        expect(res.body).toEqual({
+          window: "CLOSED",
+          cancellable: false,
+          refundAmount: 0,
+          feeAmount: 0,
+        });
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("rechaza una hora de salida inválida (400)", async () => {

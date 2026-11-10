@@ -102,6 +102,14 @@ async function confirmCancellation(
     trip.date,
     trip.departureTime
   );
+  // desde la salida no se retira: si el viaje no sale, se cancela solo y la
+  // seña vuelve entera
+  if (quote && !quote.cancellable) {
+    window.alert(
+      "el viaje ya salió: la carga no se puede retirar. si el viaje no sale, se cancela y te devolvemos lo que pagaste de seña."
+    );
+    return false;
+  }
   return window.confirm(cancellationMessage(quote));
 }
 

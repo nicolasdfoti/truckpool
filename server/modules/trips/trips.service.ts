@@ -783,9 +783,9 @@ type CargoCancelledEmail = {
 };
 
 /**
- * Retirar una carga que sumó la empresa, PENDING o CONFIRMED, mientras el viaje
- * no arrancó (D4: una confirmada se retira hasta la salida con la misma
- * penalidad). Con el camión en camino retirar carga no tiene sentido.
+ * Retirar una carga que sumó la empresa, PENDING o CONFIRMED, hasta la hora de
+ * salida y con el viaje OPEN/FULL (D4: una confirmada se retira con la misma
+ * penalidad). Después de la salida, 409 aunque el viaje siga OPEN.
  *
  * La seña se devuelve según cuánto falta para que salga el viaje: entera con más
  * de 48hs, la mitad entre 24 y 48hs, nada por debajo de las 24hs (la seña queda
@@ -838,6 +838,14 @@ export async function cancelCargoItem(
           if (trip.status !== "OPEN" && trip.status !== "FULL") {
             throw new TripAlreadyStartedError();
           }
+          // contra la salida (día + hora en ART), no contra `trip.date` (U11).
+          // Desde la salida el retiro está cerrado aunque el fletero no haya
+          // marcado IN_TRANSIT: si no sale, D6 devuelve la seña entera.
+          const quote = quoteCancellation(
+            Number(item.depositAmount),
+            hoursUntilDeparture(trip)
+          );
+          if (!quote.cancellable) throw new TripAlreadyStartedError();
           // el saldo nace al pasar a IN_TRANSIT: una carga con saldo ya viajó,
           // diga lo que diga el estado. El outbox solo devuelve la seña.
           if (item.payments.some((p) => p.type === "BALANCE")) {
@@ -864,12 +872,6 @@ export async function cancelCargoItem(
             deposit?.status === "APPROVED" && deposit.mpPaymentId !== null
               ? deposit
               : null;
-          // contra la salida (día + hora en ART), no contra `trip.date` (U11)
-          const quote = quoteCancellation(
-            Number(item.depositAmount),
-            hoursUntilDeparture(trip)
-          );
-
           // Un fee es plata que se retiene de un pago que REALMENTE entró. Si la
           // empresa nunca pagó la seña (o el pago APPROVED no tiene mpPaymentId y
           // no se puede devolver) no hay nada retenido: el fee va en 0, igual que
