@@ -278,6 +278,32 @@ describe("createPaymentPreference", () => {
     expect(mp.createCheckoutPreference).not.toHaveBeenCalled();
   });
 
+  it.each([["DEPOSIT"], ["BALANCE"]] as const)(
+    "no deja volver a pagar un %s con contracargo (lo resuelve un admin)",
+    async (type) => {
+      vi.mocked(prisma.cargoItem.findUnique).mockResolvedValue(
+        baseCargoItem(
+          type === "BALANCE"
+            ? {
+                status: "CONFIRMED",
+                trip: { ...baseCargoItem().trip, status: "IN_TRANSIT" },
+              }
+            : {}
+        ) as never
+      );
+      vi.mocked(prisma.payment.findUnique).mockResolvedValue(
+        basePayment({ status: "CHARGED_BACK", type, mpPaymentId: "mp-77" }) as never
+      );
+
+      await expect(
+        createPaymentPreference("i1", companyUserId, type)
+      ).rejects.toMatchObject({ statusCode: 409, code: "PAYMENT_CHARGED_BACK" });
+      // ni se resetea a PENDING ni se crea otra preference
+      expect(prisma.payment.updateMany).not.toHaveBeenCalled();
+      expect(mp.createCheckoutPreference).not.toHaveBeenCalled();
+    }
+  );
+
   it("no deja volver a pagar una seña ya aprobada", async () => {
     vi.mocked(prisma.payment.findUnique).mockResolvedValue(
       basePayment({ status: "APPROVED" }) as never
@@ -380,6 +406,7 @@ describe("handlePaymentNotification", () => {
   ) =>
     vi.mocked(mp.fetchPaymentState).mockResolvedValue({
       state,
+      inMediation: false,
       externalReference,
       ...cobro,
     });
@@ -1311,6 +1338,134 @@ describe("handlePaymentNotification", () => {
       });
     });
   });
+
+  describe("contracargos (U3)", () => {
+    const aprobado = (overrides: Record<string, unknown> = {}) =>
+      basePayment({ status: "APPROVED", mpPaymentId: "mp-77", ...overrides });
+    const conContracargo = (overrides: Record<string, unknown> = {}) =>
+      basePayment({ status: "CHARGED_BACK", mpPaymentId: "mp-77", ...overrides });
+
+    it("APPROVED + charged_back → CHARGED_BACK y aviso a los admins", async () => {
+      vi.mocked(prisma.payment.findFirst).mockResolvedValue(aprobado() as never);
+      mpDice("CHARGED_BACK");
+
+      const result = await handlePaymentNotification(notificacion);
+
+      // CAS contra el estado leído y el pago de MP que lo aprobó
+      expect(prisma.payment.updateMany).toHaveBeenCalledWith({
+        where: { id: "pay1", status: "APPROVED", mpPaymentId: "mp-77" },
+        data: { status: "CHARGED_BACK", mpPaymentId: "mp-77" },
+      });
+      expect(result).toEqual({ updated: true, status: "CHARGED_BACK" });
+      expect(prisma.paymentAlert.create).toHaveBeenCalledWith({
+        data: { key: "CHARGED_BACK:pay1:mp-77" },
+      });
+      // el único aviso es a los admins: a la empresa no se le dice nada
+      expect(notifyUsers).toHaveBeenCalledTimes(1);
+      alertaAdmins();
+      const [, aviso] = vi.mocked(notifyUsers).mock.calls[0]!;
+      expect(aviso.body).toContain("mp-77");
+      expect(aviso.body).not.toContain("empresa@");
+      // la plata ya volvió a quien pagó: no se devuelve nada más
+      expect(mp.refundPayment).not.toHaveBeenCalled();
+      expect(prisma.refundRequest.upsert).not.toHaveBeenCalled();
+    });
+
+    it("si otro webhook ganó el CAS, no avisa", async () => {
+      vi.mocked(prisma.payment.findFirst).mockResolvedValue(aprobado() as never);
+      mpDice("CHARGED_BACK");
+      vi.mocked(prisma.payment.updateMany).mockResolvedValue({ count: 0 } as never);
+
+      const result = await handlePaymentNotification(notificacion);
+
+      expect(notifyUsers).not.toHaveBeenCalled();
+      expect(result).toEqual({ updated: false, status: "APPROVED" });
+    });
+
+    it("MP repite el charged_back: no escribe ni vuelve a avisar", async () => {
+      vi.mocked(prisma.payment.findFirst).mockResolvedValue(conContracargo() as never);
+      mpDice("CHARGED_BACK");
+
+      const result = await handlePaymentNotification(notificacion);
+
+      sinEscrituras();
+      expect(notifyUsers).not.toHaveBeenCalled();
+      expect(result).toEqual({ updated: false, status: "CHARGED_BACK" });
+    });
+
+    it.each([["APPROVED"], ["REFUNDED"], ["REJECTED"], ["PENDING"]] as const)(
+      "CHARGED_BACK es final: un %s posterior se ignora y avisa a los admins una vez",
+      async (state) => {
+        vi.mocked(prisma.payment.findFirst).mockResolvedValue(conContracargo() as never);
+        mpDice(state);
+        vi.mocked(prisma.paymentAlert.create)
+          .mockResolvedValueOnce({} as never)
+          .mockRejectedValue(claveRepetida());
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        await handlePaymentNotification(notificacion);
+        const result = await handlePaymentNotification(notificacion);
+
+        sinEscrituras();
+        expect(mp.refundPayment).not.toHaveBeenCalled();
+        expect(result).toEqual({ updated: false, status: "CHARGED_BACK" });
+        expect(prisma.paymentAlert.create).toHaveBeenCalledWith({
+          data: { key: `CHARGED_BACK_TRANSITION:pay1:mp-77:${state}` },
+        });
+        expect(notifyUsers).toHaveBeenCalledTimes(1);
+        alertaAdmins();
+        warn.mockRestore();
+      }
+    );
+
+    it("charged_back sobre un pago que no estaba aprobado: no lo mueve y avisa", async () => {
+      // MP cobró y revirtió un pago que acá nunca se acreditó (p. ej. se perdió
+      // el webhook de la aprobación): la plata se movió y nadie más lo ve
+      mpDice("CHARGED_BACK");
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const result = await handlePaymentNotification(notificacion);
+
+      sinEscrituras();
+      expect(result).toEqual({ updated: false, status: "PENDING" });
+      expect(prisma.paymentAlert.create).toHaveBeenCalledWith({
+        data: { key: "CHARGED_BACK:pay1:mp-77" },
+      });
+      alertaAdmins();
+      warn.mockRestore();
+    });
+
+    describe("in_mediation (la empresa abrió un reclamo)", () => {
+      const enMediacion = () =>
+        vi.mocked(mp.fetchPaymentState).mockResolvedValue({
+          state: null,
+          inMediation: true,
+          externalReference: "pay1",
+          amount: 100,
+          currencyId: "ARS",
+        });
+
+      it("no cambia el estado y avisa a los admins una sola vez", async () => {
+        vi.mocked(prisma.payment.findFirst).mockResolvedValue(aprobado() as never);
+        enMediacion();
+        vi.mocked(prisma.paymentAlert.create)
+          .mockResolvedValueOnce({} as never)
+          .mockRejectedValue(claveRepetida());
+
+        await handlePaymentNotification(notificacion);
+        const result = await handlePaymentNotification(notificacion);
+
+        sinEscrituras();
+        expect(result).toEqual({ updated: false, status: "APPROVED" });
+        expect(prisma.paymentAlert.create).toHaveBeenCalledWith({
+          data: { key: "IN_MEDIATION:pay1:mp-77" },
+        });
+        expect(notifyUsers).toHaveBeenCalledTimes(1);
+        alertaAdmins();
+        expect(mp.refundPayment).not.toHaveBeenCalled();
+      });
+    });
+  });
 });
 
 describe("seña devuelta por fuera de la app (desde el panel de MP)", () => {
@@ -1368,6 +1523,7 @@ describe("seña devuelta por fuera de la app (desde el panel de MP)", () => {
     );
     vi.mocked(mp.fetchPaymentState).mockResolvedValue({
       state: "REFUNDED",
+      inMediation: false,
       externalReference: "pay1",
       amount: 100,
       currencyId: "ARS",
@@ -1636,6 +1792,7 @@ describe("seña devuelta por fuera de la app (desde el panel de MP)", () => {
   it("devolución parcial (MP sigue en approved): no toca la carga", async () => {
     vi.mocked(mp.fetchPaymentState).mockResolvedValue({
       state: "APPROVED",
+      inMediation: false,
       externalReference: "pay1",
       amount: 100,
       currencyId: "ARS",

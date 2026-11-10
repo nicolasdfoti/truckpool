@@ -862,9 +862,44 @@ describe("fetchPaymentState", () => {
 
     await expect(fetchPaymentState("mp-77", "token-de-prueba")).resolves.toEqual({
       state: "APPROVED",
+      inMediation: false,
       externalReference: "pay1",
       amount: 100,
       currencyId: "ARS",
+    });
+  });
+
+  // la forma de Payment.get para estos dos estados sale de la documentación de
+  // MP; no se vio todavía en un pago real (ver L4 en docs/review/04-launch.md)
+  it("un contracargo es CHARGED_BACK, no REJECTED", async () => {
+    paymentGet.mockResolvedValue({
+      id: 77,
+      status: "charged_back",
+      status_detail: "settled",
+      external_reference: "pay1",
+      transaction_amount: 100,
+      currency_id: "ARS",
+    });
+
+    await expect(fetchPaymentState("mp-77", "token-de-prueba")).resolves.toMatchObject({
+      state: "CHARGED_BACK",
+      inMediation: false,
+    });
+  });
+
+  it("un reclamo abierto (in_mediation) no mueve el estado y se informa aparte", async () => {
+    paymentGet.mockResolvedValue({
+      id: 77,
+      status: "in_mediation",
+      status_detail: "in_process",
+      external_reference: "pay1",
+      transaction_amount: 100,
+      currency_id: "ARS",
+    });
+
+    await expect(fetchPaymentState("mp-77", "token-de-prueba")).resolves.toMatchObject({
+      state: null,
+      inMediation: true,
     });
   });
 

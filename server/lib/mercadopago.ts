@@ -11,7 +11,8 @@ import { isLocalUrl } from "./urls.js";
 import { mpCheckoutSandbox } from "./env.js";
 import { decryptSecret } from "./crypto.js";
 
-export type MpPaymentState = "PENDING" | "APPROVED" | "REJECTED" | "REFUNDED";
+export type MpPaymentState =
+  "PENDING" | "APPROVED" | "REJECTED" | "REFUNDED" | "CHARGED_BACK";
 
 const STATUS_BY_MP_STATE: Record<string, MpPaymentState> = {
   approved: "APPROVED",
@@ -21,7 +22,7 @@ const STATUS_BY_MP_STATE: Record<string, MpPaymentState> = {
   requires_action: "PENDING",
   rejected: "REJECTED",
   cancelled: "REJECTED",
-  charged_back: "REJECTED",
+  charged_back: "CHARGED_BACK",
   refunded: "REFUNDED",
 };
 
@@ -361,6 +362,11 @@ export async function fetchPaymentState(
   accessToken: string
 ): Promise<{
   state: MpPaymentState | null;
+  /**
+   * `in_mediation`: quien pagó abrió un reclamo. No mueve el estado (la plata
+   * sigue cobrada mientras MP decide); el webhook solo avisa a los admins.
+   */
+  inMediation: boolean;
   externalReference: string | null;
   /** `transaction_amount`: lo que MP cobró, para compararlo con el pago local */
   amount: number | null;
@@ -388,6 +394,7 @@ export async function fetchPaymentState(
   }
   return {
     state: mapMpStatus(payment.status),
+    inMediation: payment.status?.toLowerCase() === "in_mediation",
     externalReference: payment.external_reference ?? null,
     amount:
       typeof payment.transaction_amount === "number" ? payment.transaction_amount : null,

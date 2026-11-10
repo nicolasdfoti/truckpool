@@ -102,6 +102,7 @@ vi.mock("../lib/prisma", () => ({
       create: vi.fn(),
       update: vi.fn(),
     },
+    paymentAlert: { create: vi.fn(), delete: vi.fn() },
     $transaction: vi.fn(),
   },
 }));
@@ -1056,6 +1057,7 @@ describe("POST /api/payments/webhook", () => {
     vi.mocked(prisma.payment.findFirst).mockResolvedValue(pagoLocal() as never);
     vi.mocked(mp.fetchPaymentState).mockResolvedValue({
       state: "PENDING",
+      inMediation: false,
       externalReference: "pay1",
       amount: 500,
       currencyId: "ARS",
@@ -1083,6 +1085,7 @@ describe("POST /api/payments/webhook", () => {
   it("actualiza el status a APPROVED con la firma válida (200)", async () => {
     vi.mocked(mp.fetchPaymentState).mockResolvedValue({
       state: "APPROVED",
+      inMediation: false,
       externalReference: "pay1",
       amount: 500,
       currencyId: "ARS",
@@ -1123,6 +1126,45 @@ describe("POST /api/payments/webhook", () => {
     expect(prisma.payment.updateMany).toHaveBeenCalledWith({
       where: { id: "pay1", status: "PENDING" },
       data: { status: "APPROVED", mpPaymentId: "mp-77" },
+    });
+  });
+
+  it("charged_back sobre un pago aprobado: CHARGED_BACK y aviso a los admins (200)", async () => {
+    // el body es el mismo payment.updated de siempre: el contracargo solo se
+    // ve al consultar el pago en MP
+    vi.mocked(prisma.payment.findFirst).mockResolvedValue({
+      ...pagoLocal(),
+      status: "APPROVED",
+      mpPaymentId: "mp-77",
+    } as never);
+    vi.mocked(mp.fetchPaymentState).mockResolvedValue({
+      state: "CHARGED_BACK",
+      inMediation: false,
+      externalReference: "pay1",
+      amount: 500,
+      currencyId: "ARS",
+    });
+    vi.mocked(prisma.payment.updateMany).mockResolvedValue({ count: 1 } as never);
+    vi.mocked(prisma.paymentAlert.create).mockResolvedValue({} as never);
+    vi.mocked(prisma.user.findMany).mockResolvedValue([{ id: "admin1" }] as never);
+
+    const res = await request(app)
+      .post("/api/payments/webhook?payment_id=pay1&data.id=mp-77&type=payment")
+      .set(signedWebhook("mp-77", secret))
+      .send(payload);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      received: true,
+      updated: true,
+      status: "CHARGED_BACK",
+    });
+    expect(prisma.payment.updateMany).toHaveBeenCalledWith({
+      where: { id: "pay1", status: "APPROVED", mpPaymentId: "mp-77" },
+      data: { status: "CHARGED_BACK", mpPaymentId: "mp-77" },
+    });
+    expect(prisma.paymentAlert.create).toHaveBeenCalledWith({
+      data: { key: "CHARGED_BACK:pay1:mp-77" },
     });
   });
 
@@ -1189,6 +1231,7 @@ describe("POST /api/payments/webhook", () => {
     vi.mocked(prisma.payment.findFirst).mockResolvedValue(pagoLocal() as never);
     vi.mocked(mp.fetchPaymentState).mockResolvedValue({
       state: "PENDING",
+      inMediation: false,
       externalReference: "pay1",
       amount: 500,
       currencyId: "ARS",

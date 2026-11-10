@@ -527,6 +527,9 @@ export default function TripDetail() {
               const isCancelled = item.status === "CANCELLED";
               const isCompany = user?.id === item.companyId;
               const depositApproved = deposit?.status === "APPROVED";
+              // un contracargo no se vuelve a pagar: lo resuelve un admin
+              const chargedBack =
+                deposit?.status === "CHARGED_BACK" || balance?.status === "CHARGED_BACK";
               // el saldo solo existe con el viaje en camino y la carga
               // confirmada: antes de eso todavía no hay nada que cobrar.
               const balanceDue =
@@ -537,9 +540,13 @@ export default function TripDetail() {
                 isCompany &&
                 !isCancelled &&
                 item.status === "PENDING" &&
-                !depositApproved;
+                !depositApproved &&
+                !chargedBack;
               const showBalancePayButton =
-                isCompany && balanceDue && balance?.status !== "APPROVED";
+                isCompany &&
+                balanceDue &&
+                balance?.status !== "APPROVED" &&
+                balance?.status !== "CHARGED_BACK";
               const showPayButton = showDepositPayButton || showBalancePayButton;
               // solo se puede retirar lo que sigue pendiente y con el viaje sin
               // arrancar: el botón vive al lado de las otras acciones.
@@ -598,9 +605,17 @@ export default function TripDetail() {
                           quedan {currency(balanceAmount)} al salir
                         </p>
                       )}
-                      {balanceDue && balance?.status !== "APPROVED" && (
+                      {balanceDue &&
+                        balance?.status !== "APPROVED" &&
+                        balance?.status !== "CHARGED_BACK" && (
+                          <p className="text-[13px] text-ink-muted">
+                            saldo de {currency(balanceAmount)} pendiente
+                          </p>
+                        )}
+                      {chargedBack && (
                         <p className="text-[13px] text-ink-muted">
-                          saldo de {currency(balanceAmount)} pendiente
+                          el pago tiene un contracargo en Mercado Pago: lo revisa un
+                          admin.
                         </p>
                       )}
                       {showDepositPayButton && deposit?.status === "REJECTED" && (

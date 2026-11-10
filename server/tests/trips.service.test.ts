@@ -2074,6 +2074,30 @@ describe("addCargoItem", () => {
       expect(tx.trip.update).not.toHaveBeenCalled();
     });
 
+    it("un saldo con contracargo bloquea el COMPLETED (409 BALANCE_CHARGED_BACK)", async () => {
+      // MP revirtió el saldo: no es un saldo "por pagar" (la empresa no puede
+      // volver a pagarlo), lo resuelve un admin
+      tx.trip.findUnique.mockResolvedValue(
+        baseTrip({
+          status: "IN_TRANSIT",
+          cargoItems: [
+            confirmedWithDeposit({
+              payments: [
+                basePayment({ type: "DEPOSIT" }),
+                basePayment({ id: "pay2", type: "BALANCE", status: "CHARGED_BACK" }),
+              ],
+            }),
+          ],
+        })
+      );
+
+      await expect(tripsService.updateTripStatus("t1", "u1", "COMPLETED")).rejects.toMatchObject({
+        statusCode: 409,
+        code: "BALANCE_CHARGED_BACK",
+      });
+      expect(tx.trip.update).not.toHaveBeenCalled();
+    });
+
     it("completa igual si lo que queda es una carga retirada", async () => {
       tx.trip.findUnique.mockResolvedValue(
         baseTrip({

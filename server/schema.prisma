@@ -232,6 +232,9 @@ enum PaymentStatus {
   APPROVED
   REJECTED
   REFUNDED
+  // contracargo: quien pagó desconoció el cobro y MP le devolvió la plata.
+  // es final (el webhook no lo mueve más) y lo resuelve un admin
+  CHARGED_BACK
 }
 
 // una carga tiene hasta dos pagos: la seña que reserva el espacio y el saldo

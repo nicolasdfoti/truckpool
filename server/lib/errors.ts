@@ -196,6 +196,33 @@ export class BalancePendingError extends AppError {
   }
 }
 
+/** un pago con contracargo no se vuelve a cobrar: lo resuelve un admin */
+export class PaymentChargedBackError extends AppError {
+  constructor() {
+    super(
+      "ese pago tiene un contracargo en Mercado Pago: lo resuelve un admin",
+      409,
+      "PAYMENT_CHARGED_BACK"
+    );
+  }
+}
+
+/**
+ * Un saldo con contracargo no es un saldo "por pagar" (no se puede volver a
+ * cobrar): el viaje no se completa hasta que un admin lo resuelva.
+ */
+export class BalanceChargedBackError extends AppError {
+  constructor(count: number) {
+    super(
+      count === 1
+        ? "el saldo de 1 carga tiene un contracargo: lo resuelve un admin antes de completar el viaje"
+        : `los saldos de ${count} cargas tienen un contracargo: lo resuelve un admin antes de completar el viaje`,
+      409,
+      "BALANCE_CHARGED_BACK"
+    );
+  }
+}
+
 export class NothingToPayError extends AppError {
   constructor() {
     super("ese pago ya está abonado", 409, "PAYMENT_ALREADY_SETTLED");

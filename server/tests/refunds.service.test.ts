@@ -213,6 +213,25 @@ describe("processRefundRequest: intentos, tope y alertas", () => {
       },
     ]);
   });
+
+  it("una seña con contracargo no se devuelve: la plata ya volvió por MP (U3)", async () => {
+    vi.mocked(prisma.refundRequest.findUnique).mockResolvedValue(request() as never);
+    vi.mocked(prisma.payment.findUnique).mockResolvedValue({
+      ...seña(),
+      status: "CHARGED_BACK",
+    } as never);
+
+    const outcome = await processRefundRequest("i1", AHORA);
+
+    expect(refundPayment).not.toHaveBeenCalled();
+    expect(outcome).toEqual({ kind: "completed", paymentStatus: "CHARGED_BACK" });
+    expect(cierres()).toEqual([
+      {
+        where: { id: "rr1", status: "PROCESSING" },
+        data: { status: "COMPLETED", carrierDisconnectedAt: null },
+      },
+    ]);
+  });
 });
 
 describe("processRefundRequest: fletero desconectado de MP", () => {

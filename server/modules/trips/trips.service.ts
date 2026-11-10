@@ -36,6 +36,7 @@ import { notifyUsers } from "../../lib/notifications.js";
 import { endOfArgentinaDay, isTripDateAvailable } from "../../lib/dates.js";
 import {
   AlreadyReviewedError,
+  BalanceChargedBackError,
   BalancePendingError,
   CarrierNotVerifiedError,
   CargoItemNotCancellableError,
@@ -510,6 +511,15 @@ export async function updateTripStatus(
       // completar el viaje es cerrar la cuenta: no se puede hasta que todas
       // las cargas confirmadas tenga su saldo abonado.
       if (status === "COMPLETED") {
+        // un saldo con contracargo no se puede volver a cobrar: no es "por
+        // pagar", lo resuelve un admin (no hay herramienta todavía, ver L9)
+        const chargedBack = trip.cargoItems.filter(
+          (item) =>
+            item.status === "CONFIRMED" &&
+            item.payments.some((p) => p.type === "BALANCE" && p.status === "CHARGED_BACK")
+        );
+        if (chargedBack.length > 0) throw new BalanceChargedBackError(chargedBack.length);
+
         const pending = trip.cargoItems.filter(
           (item) => item.status === "CONFIRMED" && !isBalanceSettled(item)
         );

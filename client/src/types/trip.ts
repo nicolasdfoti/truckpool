@@ -1,6 +1,8 @@
 export type TripStatus = "OPEN" | "FULL" | "IN_TRANSIT" | "COMPLETED";
 export type CargoItemStatus = "PENDING" | "CONFIRMED" | "CANCELLED";
-export type PaymentStatus = "PENDING" | "APPROVED" | "REJECTED" | "REFUNDED";
+/** CHARGED_BACK: contracargo en Mercado Pago; no se vuelve a pagar, lo resuelve un admin. */
+export type PaymentStatus =
+  "PENDING" | "APPROVED" | "REJECTED" | "REFUNDED" | "CHARGED_BACK";
 /** DEPOSIT es la seña que reserva espacio; BALANCE, lo que falta al salir el viaje. */
 export type PaymentType = "DEPOSIT" | "BALANCE";
 
