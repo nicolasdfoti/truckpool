@@ -22,6 +22,13 @@ vi.mock("../lib/notifications.js", () => ({
   notifyUsers: vi.fn().mockResolvedValue(1),
 }));
 
+// aceptar una solicitud geocodifica origen y destino: sin este mock salía a
+// Nominatim de verdad y el test pasaba de 5 s cuando la red tardaba
+vi.mock("../lib/geocode.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/geocode.js")>();
+  return { ...actual, geocode: vi.fn().mockResolvedValue(null) };
+});
+
 type PrismaUser = Awaited<ReturnType<typeof prisma.user.findUnique>>;
 
 function baseUser(overrides: Partial<User> = {}): User {
