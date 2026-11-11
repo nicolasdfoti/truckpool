@@ -4643,6 +4643,37 @@ describe("addCargoItem", () => {
       expect(prisma.tripLocation.findFirst).not.toHaveBeenCalled();
     });
 
+    it("U8: la empresa que retiró su carga (CANCELLED) ya no ve el camión", async () => {
+      vi.mocked(prisma.trip.findUnique).mockResolvedValue(
+        tripInTransit({
+          cargoItems: [
+            { status: "CANCELLED", company: { id: "u2", name: "Granos del Litoral" } },
+          ],
+        }) as never
+      );
+
+      await expect(
+        tripsService.getTripLocation("t1", "u2", { history: true })
+      ).rejects.toMatchObject({ statusCode: 403, code: "FORBIDDEN" });
+      expect(prisma.tripLocation.findMany).not.toHaveBeenCalled();
+      expect(prisma.tripLocation.findFirst).not.toHaveBeenCalled();
+    });
+
+    it("U8: con una carga retirada y otra viva sigue siendo participante", async () => {
+      vi.mocked(prisma.trip.findUnique).mockResolvedValue(
+        tripInTransit({
+          cargoItems: [
+            { status: "CANCELLED", company: { id: "u2", name: "Granos del Litoral" } },
+            { status: "CONFIRMED", company: { id: "u2", name: "Granos del Litoral" } },
+          ],
+        }) as never
+      );
+      vi.mocked(prisma.tripLocation.findFirst).mockResolvedValue(baseLocation() as never);
+
+      const result = await tripsService.getTripLocation("t1", "u2", { history: false });
+      expect(result.location).toMatchObject({ id: "loc1" });
+    });
+
     it("devuelve null cuando el viaje todavía no tiene posiciones", async () => {
       vi.mocked(prisma.trip.findUnique).mockResolvedValue(tripInTransit() as never);
       vi.mocked(prisma.tripLocation.findFirst).mockResolvedValue(null);
@@ -5213,5 +5244,50 @@ describe("reorderTripStops (D2)", () => {
     ).resolves.toBeDefined();
     expect(tx.cargoItem.update).toHaveBeenCalledTimes(2);
     vi.mocked(notifyUsers).mockResolvedValue(1);
+  });
+});
+
+// U8: las paradas son para el fletero y las empresas con carga viva. Quien
+// retiró su carga (CANCELLED) deja de ver por dónde pasa el camión.
+describe("getTripStops: acceso", () => {
+  function viajeCon(
+    cargoItems: { status: string; company: { id: string; name: string } }[]
+  ) {
+    vi.mocked(prisma.trip.findUnique).mockResolvedValue(
+      baseTrip({
+        carrier: { id: "u1", name: "Flete" },
+        cargoItems,
+      }) as never
+    );
+  }
+
+  beforeEach(() => {
+    vi.mocked(prisma.trip.findUnique).mockReset();
+  });
+
+  it("la empresa con su única carga CANCELLED recibe 403", async () => {
+    viajeCon([{ status: "CANCELLED", company: { id: "c1", name: "Empresa Uno" } }]);
+
+    await expect(tripsService.getTripStops("t1", "c1")).rejects.toMatchObject({
+      statusCode: 403,
+      code: "FORBIDDEN",
+    });
+    // no llega a leer las paradas
+    expect(prisma.trip.findUnique).toHaveBeenCalledTimes(1);
+  });
+
+  it("la empresa con una carga viva las ve", async () => {
+    viajeCon([
+      { status: "CANCELLED", company: { id: "c1", name: "Empresa Uno" } },
+      { status: "PENDING", company: { id: "c1", name: "Empresa Uno" } },
+    ]);
+
+    await expect(tripsService.getTripStops("t1", "c1")).resolves.toBeInstanceOf(Array);
+  });
+
+  it("el fletero del viaje las ve aunque no quede ninguna carga viva", async () => {
+    viajeCon([{ status: "CANCELLED", company: { id: "c1", name: "Empresa Uno" } }]);
+
+    await expect(tripsService.getTripStops("t1", "u1")).resolves.toBeInstanceOf(Array);
   });
 });

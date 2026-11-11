@@ -1791,13 +1791,17 @@ export async function createReview(
 }
 
 /**
- * Mensajería del viaje: solo hablan el transportista del viaje y las empresas
- * con carga en él. Cualquier otro usuario no existe para esta conversación.
+ * Quiénes tienen algo que ver con el viaje: el transportista y las empresas con
+ * carga en él. `companyIds` incluye a las que retiraron todas sus cargas
+ * (CANCELLED); `activeCompanyIds` solo a las que tienen alguna carga viva.
+ * Ubicación y paradas son solo para las activas (U8): quien retiró su carga no
+ * sigue viendo por dónde anda el camión.
  */
 type TripParticipants = {
   carrier: { id: string; name: string };
   companies: { id: string; name: string }[];
   companyIds: string[];
+  activeCompanyIds: string[];
 };
 
 async function resolveParticipants(tripId: string): Promise<TripParticipants> {
@@ -1805,7 +1809,9 @@ async function resolveParticipants(tripId: string): Promise<TripParticipants> {
     where: { id: tripId },
     select: {
       carrier: { select: { id: true, name: true } },
-      cargoItems: { select: { company: { select: { id: true, name: true } } } },
+      cargoItems: {
+        select: { status: true, company: { select: { id: true, name: true } } },
+      },
     },
   });
   if (!trip) throw new TripNotFoundError();
@@ -1817,6 +1823,9 @@ async function resolveParticipants(tripId: string): Promise<TripParticipants> {
     carrier: trip.carrier,
     companies,
     companyIds: companies.map((company) => company.id),
+    activeCompanyIds: [
+      ...new Set(trip.cargoItems.filter(isActiveCargo).map((item) => item.company.id)),
+    ],
   };
 }
 
@@ -1827,6 +1836,18 @@ function assertParticipant(
 ) {
   const isCarrier = participants.carrier.id === userId;
   if (!isCarrier && !participants.companyIds.includes(userId)) {
+    throw new AppError(message, 403, "FORBIDDEN");
+  }
+}
+
+/** como assertParticipant, pero la empresa tiene que tener alguna carga viva */
+function assertActiveParticipant(
+  participants: TripParticipants,
+  userId: string,
+  message: string
+) {
+  const isCarrier = participants.carrier.id === userId;
+  if (!isCarrier && !participants.activeCompanyIds.includes(userId)) {
     throw new AppError(message, 403, "FORBIDDEN");
   }
 }
@@ -2070,10 +2091,9 @@ export async function getTripLocation(
   userId: string,
   options: { history: boolean }
 ) {
-  // mismo chequeo que la mensajería: el transportista del viaje y las empresas
-  // con carga en él.
+  // el transportista del viaje y las empresas con alguna carga viva en él
   const participants = await resolveParticipants(tripId);
-  assertParticipant(
+  assertActiveParticipant(
     participants,
     userId,
     "solo podés ver la ubicación de los viajes donde tenés carga o sos el transportista"
@@ -2101,7 +2121,7 @@ export async function getTripLocation(
 /**
  * Paradas ordenadas del viaje (pickups). Devuelve la lista final combinando
  * stopOrder manual y proyección automática sobre la ruta origen→destino.
- * Solo para participantes del viaje (carrier o empresas con carga).
+ * Solo para el transportista y las empresas con alguna carga viva en el viaje.
  */
 export type StopItem = {
   cargoItemId: string;
@@ -2117,7 +2137,11 @@ export type StopItem = {
 
 export async function getTripStops(tripId: string, userId: string): Promise<StopItem[]> {
   const participants = await resolveParticipants(tripId);
-  assertParticipant(participants, userId);
+  assertActiveParticipant(
+    participants,
+    userId,
+    "solo podés ver las paradas de los viajes donde tenés carga o sos el transportista"
+  );
 
   const trip = await prisma.trip.findUnique({
     where: { id: tripId },
