@@ -5288,6 +5288,9 @@ describe("getTripStops: acceso", () => {
   it("el fletero del viaje las ve aunque no quede ninguna carga viva", async () => {
     viajeCon([{ status: "CANCELLED", company: { id: "c1", name: "Empresa Uno" } }]);
 
+    // solo verifica que no hay 403: el mock devuelve las cargas sin aplicar el
+    // `where: { status: { not: "CANCELLED" } }` de la consulta, así que no puede
+    // comprobar que la lista llegue vacía.
     await expect(tripsService.getTripStops("t1", "u1")).resolves.toBeInstanceOf(Array);
   });
 });
