@@ -4710,6 +4710,19 @@ describe("addCargoItem", () => {
       expect(prisma.tripLocation.findMany).not.toHaveBeenCalled();
     });
 
+    it("sin historial pide la posición más reciente, no la primera (02#14)", async () => {
+      vi.mocked(prisma.trip.findUnique).mockResolvedValue(tripInTransit() as never);
+      vi.mocked(prisma.tripLocation.findFirst).mockResolvedValue(baseLocation() as never);
+
+      await tripsService.getTripLocation("t1", "u2", { history: false });
+
+      // mismo desempate por id que el historial, al revés
+      expect(prisma.tripLocation.findFirst).toHaveBeenCalledWith({
+        where: { tripId: "t1" },
+        orderBy: [{ recordedAt: "desc" }, { id: "desc" }],
+      });
+    });
+
     it("la empresa con carga en el viaje también lee la última posición", async () => {
       vi.mocked(prisma.trip.findUnique).mockResolvedValue(tripInTransit() as never);
       vi.mocked(prisma.tripLocation.findFirst).mockResolvedValue(baseLocation() as never);

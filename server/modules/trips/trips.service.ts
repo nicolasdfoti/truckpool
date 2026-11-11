@@ -2077,6 +2077,7 @@ export async function getTripManifest(
 // desempate por id: dos posiciones pueden caer en el mismo milisegundo y
 // queremos que "la última" sea siempre la misma.
 const LOCATION_ASC = [{ recordedAt: "asc" as const }, { id: "asc" as const }];
+const LOCATION_DESC = [{ recordedAt: "desc" as const }, { id: "desc" as const }];
 
 export function toLocationResponse(location: {
   id: string;
@@ -2142,9 +2143,10 @@ export async function getTripLocation(
     };
   }
 
+  // la última posición: con el orden ascendente, findFirst devolvía la primera
   const latest = await prisma.tripLocation.findFirst({
     where: { tripId },
-    orderBy: LOCATION_ASC,
+    orderBy: LOCATION_DESC,
   });
   return { location: latest ? toLocationResponse(latest) : null };
 }
