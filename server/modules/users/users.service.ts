@@ -171,7 +171,12 @@ export async function listCarriers() {
   }));
 }
 
-export async function getCarrierProfile(id: string) {
+/**
+ * Perfil público del fletero. El teléfono solo va a quien tiene sesión
+ * (02§2.1): sin cuenta se ve el perfil, pero no se puede levantar el contacto
+ * directo de todos los fleteros con un script.
+ */
+export async function getCarrierProfile(id: string, viewer: { id: string } | null) {
   const [carrier, aggregate] = await Promise.all([
     prisma.user.findUnique({
       where: { id },
@@ -213,7 +218,7 @@ export async function getCarrierProfile(id: string) {
     id: carrier.id,
     name: carrier.name,
     bio: carrier.bio,
-    phone: carrier.phone,
+    ...(viewer ? { phone: carrier.phone } : {}),
     isAvailableNow: carrier.isAvailableNow,
     trips: carrier.tripsAsCarrier.map(toTripSummary),
     ...toRatingSummary(aggregate._avg.rating, aggregate._count._all),

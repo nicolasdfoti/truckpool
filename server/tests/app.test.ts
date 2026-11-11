@@ -1813,7 +1813,7 @@ describe("carriers públicos", () => {
     expect(res.body.code).toBe("CARRIER_NOT_FOUND");
   });
 
-  it("GET /api/carriers/:id devuelve el perfil con viajes OPEN (200)", async () => {
+  function mockPerfilFletero() {
     vi.mocked(prisma.review.aggregate).mockResolvedValue({
       _avg: { rating: 4.5 },
       _count: { _all: 2 },
@@ -1841,13 +1841,16 @@ describe("carriers públicos", () => {
         ],
       }) as unknown as PrismaUserWithTrips & { reviewsReceived: unknown[] }
     );
+  }
+
+  it("GET /api/carriers/:id devuelve el perfil con viajes OPEN (200)", async () => {
+    mockPerfilFletero();
     const res = await request(app).get("/api/carriers/u1");
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({
       id: "u1",
       name: "Transportes Flete",
       bio: "fletero",
-      phone: "351-555",
       trips: [],
       ratingAvg: 4.5,
       ratingCount: 2,
@@ -1857,6 +1860,48 @@ describe("carriers públicos", () => {
       comment: "muy puntual",
       fromName: "Comercial Norte",
     });
+  });
+
+  // 02§2.1: el teléfono del fletero es para quien tiene cuenta, no para cualquiera
+  it("GET /api/carriers/:id sin sesión no trae el teléfono", async () => {
+    mockPerfilFletero();
+    const res = await request(app).get("/api/carriers/u1");
+    expect(res.status).toBe(200);
+    expect(res.body).not.toHaveProperty("phone");
+  });
+
+  it("GET /api/carriers/:id con sesión trae el teléfono", async () => {
+    mockPerfilFletero();
+    vi.mocked(prisma.revokedToken.findUnique).mockResolvedValue(null as never);
+    const res = await request(app)
+      .get("/api/carriers/u1")
+      .set("Authorization", `Bearer ${companyToken}`);
+    expect(res.status).toBe(200);
+    expect(res.body.phone).toBe("351-555");
+  });
+
+  it("GET /api/carriers/:id con token inválido responde como anónimo", async () => {
+    mockPerfilFletero();
+    const res = await request(app)
+      .get("/api/carriers/u1")
+      .set("Authorization", "Bearer no-es-un-jwt");
+    expect(res.status).toBe(200);
+    expect(res.body).not.toHaveProperty("phone");
+  });
+
+  it("GET /api/carriers/:id con un token cerrado responde como anónimo", async () => {
+    mockPerfilFletero();
+    vi.mocked(prisma.revokedToken.findUnique).mockResolvedValue({ jti: "x" } as never);
+    try {
+      const res = await request(app)
+        .get("/api/carriers/u1")
+        .set("Authorization", `Bearer ${companyToken}`);
+      expect(res.status).toBe(200);
+      expect(res.body).not.toHaveProperty("phone");
+    } finally {
+      // el resto del archivo usa los tokens como sesiones abiertas
+      vi.mocked(prisma.revokedToken.findUnique).mockResolvedValue(null as never);
+    }
   });
 });
 

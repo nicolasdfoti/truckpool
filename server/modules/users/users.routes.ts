@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { requireAuth, requireRole } from "../../lib/auth.js";
+import { optionalAuth, requireAuth, requireRole } from "../../lib/auth.js";
 import { validateBody } from "../../lib/validate.js";
 import * as usersController from "./users.controller.js";
 import {
@@ -89,7 +89,7 @@ usersRouter.patch(
 );
 
 carriersRouter.get("/", usersController.getCarriers);
-carriersRouter.get(paramId, usersController.getCarrierProfile);
+carriersRouter.get(paramId, optionalAuth, usersController.getCarrierProfile);
 
 adminRouter.get(
   "/stats",

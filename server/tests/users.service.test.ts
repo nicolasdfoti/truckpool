@@ -67,7 +67,7 @@ describe("users.service", () => {
       _count: { _all: 0 },
     } as never);
 
-    await expect(usersService.getCarrierProfile("nope")).rejects.toThrow(
+    await expect(usersService.getCarrierProfile("nope", null)).rejects.toThrow(
       CarrierNotFoundError
     );
   });
@@ -85,7 +85,7 @@ describe("users.service", () => {
       _count: { _all: 0 },
     } as never);
 
-    await expect(usersService.getCarrierProfile("u2")).rejects.toThrow(
+    await expect(usersService.getCarrierProfile("u2", null)).rejects.toThrow(
       CarrierNotFoundError
     );
   });
@@ -116,7 +116,7 @@ describe("users.service", () => {
       _count: { _all: 0 },
     } as never);
 
-    const profile = await usersService.getCarrierProfile("u1");
+    const profile = await usersService.getCarrierProfile("u1", { id: "u2" });
     expect(profile).toMatchObject({
       id: "u1",
       name: "Transportes Flete",
@@ -125,6 +125,22 @@ describe("users.service", () => {
     });
     expect(profile.trips).toHaveLength(1);
     expect(profile.trips[0]).toMatchObject({ id: "t1", capacityUsed: 0 });
+  });
+
+  it("getCarrierProfile no le da el teléfono a un anónimo (02§2.1)", async () => {
+    vi.mocked(prisma.user.findUnique).mockResolvedValue({
+      ...baseUser({ bio: "fletero", phone: "351-555" }),
+      tripsAsCarrier: [],
+      reviewsReceived: [],
+    } as PrismaUser & { tripsAsCarrier: unknown[]; reviewsReceived: unknown[] });
+    vi.mocked(prisma.review.aggregate).mockResolvedValue({
+      _avg: { rating: null },
+      _count: { _all: 0 },
+    } as never);
+
+    const profile = await usersService.getCarrierProfile("u1", null);
+    expect(profile).not.toHaveProperty("phone");
+    expect(profile).toMatchObject({ id: "u1", bio: "fletero" });
   });
 
   it("listMyTrips filtra por carrierId", async () => {
@@ -152,7 +168,7 @@ describe("users.service", () => {
       _count: { _all: 0 },
     } as never);
 
-    await usersService.getCarrierProfile("u1");
+    await usersService.getCarrierProfile("u1", null);
 
     const include = vi.mocked(prisma.user.findUnique).mock.calls[0]?.[0]?.include as {
       tripsAsCarrier: { where: unknown };
@@ -175,7 +191,7 @@ describe("users.service", () => {
       _count: { _all: 0 },
     } as never);
 
-    await usersService.getCarrierProfile("u1");
+    await usersService.getCarrierProfile("u1", null);
 
     const include = vi.mocked(prisma.user.findUnique).mock.calls[0]?.[0]?.include as {
       tripsAsCarrier: { where: { carrier?: unknown } };
@@ -360,7 +376,7 @@ describe("calificaciones de fleteros", () => {
       _count: { _all: 3 },
     } as never);
 
-    const profile = await usersService.getCarrierProfile("u1");
+    const profile = await usersService.getCarrierProfile("u1", null);
 
     expect(profile.ratingAvg).toBe(4.33);
     expect(profile.ratingCount).toBe(3);
@@ -383,7 +399,7 @@ describe("calificaciones de fleteros", () => {
       _count: { _all: 0 },
     } as never);
 
-    const profile = await usersService.getCarrierProfile("u1");
+    const profile = await usersService.getCarrierProfile("u1", null);
     expect(profile.ratingAvg).toBeNull();
     expect(profile.ratingCount).toBe(0);
     expect(profile.reviews).toEqual([]);
