@@ -211,6 +211,7 @@ Los de 03§5 no absorbidos. Validación: `npm run lint && npm run build` + e2e. 
 - [ ] QW7 error en admin · QW8 404 vs error + título de pestaña · QW10 anuncios de DnD en español · QW11 copy de `MP_NOT_CONFIGURED`.
 - [ ] QW13 fila de carga en mobile · QW15 contraste · QW16 `:focus-visible` global · QW17 campanita oculta a anónimos · QW18 solicitudes vencidas (el server ya las rechaza por L5).
 - [ ] `NotificationType` del client (`client/src/types/notification.ts`) sin `TRIP_REQUEST` ni `TRIP_REQUEST_RESPONSE`, que el enum del server sí tiene (`server/schema.prisma`). Hoy ningún `switch` ni mapa del client depende del tipo, así que no se ve; agregarlos antes de que alguno lo haga. Detectado al cerrar L4 (2026-11-10), anterior a L4.
+- [ ] Manifiesto PDF: las columnas «volumen» y «empresa» quedan pegadas («8 m³Comercial Norte», y en el encabezado «VOLUMENEMPRESA»). La columna de volumen va alineada a la derecha y la de empresa arranca justo donde termina, sin separación; falta un margen entre columnas — `lib/manifestPdf.ts` (`columns` de la tabla de cargas). Hallado al revisar el remito por rol de L2. Validación: renderizar el remito del fletero y el de una empresa y mirarlos.
 
 ### L9 — Cuentas y verificación · 1ª SEMANA · M
 Archivos: `users.{service,schemas}.ts`, `lib/mercadopago.ts`, `lib/auth.ts`, schema Prisma, `pages/AdminVerifications.tsx`, `pages/Login.tsx`.
