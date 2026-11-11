@@ -1876,12 +1876,32 @@ export function toMessageResponse(message: {
   };
 }
 
+/**
+ * Qué mensajes ve cada uno (U8): el fletero, los suyos con cada empresa; la
+ * empresa, solo su conversación con el fletero. Empresa↔empresa no existe.
+ * La empresa que retiró todas sus cargas conserva su conversación (D9): puede
+ * necesitar hablar del reembolso.
+ */
+function conversationWhere(participants: TripParticipants, userId: string) {
+  const carrierId = participants.carrier.id;
+  if (userId === carrierId) {
+    return { OR: [{ fromUserId: userId }, { toUserId: userId }] };
+  }
+  return {
+    OR: [
+      { fromUserId: userId, toUserId: carrierId },
+      { fromUserId: carrierId, toUserId: userId },
+    ],
+  };
+}
+
 export async function listTripMessages(tripId: string, userId: string) {
   const participants = await resolveParticipants(tripId);
   assertParticipant(participants, userId);
+  const isCarrier = participants.carrier.id === userId;
 
   const messages = await prisma.message.findMany({
-    where: { tripId },
+    where: { tripId, ...conversationWhere(participants, userId) },
     orderBy: { createdAt: "asc" },
     include: {
       fromUser: { select: { name: true } },
@@ -1892,9 +1912,11 @@ export async function listTripMessages(tripId: string, userId: string) {
   return {
     messages: messages.map(toMessageResponse),
     // para el selector del fletero cuando hay más de una empresa con carga
+    // (también las que retiraron su carga, D9). La empresa no se entera de
+    // qué otras empresas cargan en el viaje.
     participants: {
       carrier: participants.carrier,
-      companies: participants.companies,
+      companies: isCarrier ? participants.companies : [],
     },
   };
 }
@@ -1907,6 +1929,13 @@ export async function createTripMessage(
   const participants = await resolveParticipants(tripId);
   assertParticipant(participants, fromUserId);
 
+  if (input.toUserId === fromUserId) {
+    throw new AppError(
+      "no te podés mandar un mensaje a vos mismo",
+      400,
+      "INVALID_TARGET"
+    );
+  }
   const targetIsCarrier = participants.carrier.id === input.toUserId;
   const targetIsCompany = participants.companyIds.includes(input.toUserId);
   if (!targetIsCarrier && !targetIsCompany) {
@@ -1916,11 +1945,13 @@ export async function createTripMessage(
       "NOT_A_PARTICIPANT"
     );
   }
-  if (input.toUserId === fromUserId) {
+  // U8: la empresa solo habla con el fletero, nunca con otra empresa
+  const senderIsCarrier = participants.carrier.id === fromUserId;
+  if (!senderIsCarrier && !targetIsCarrier) {
     throw new AppError(
-      "no te podés mandar un mensaje a vos mismo",
-      400,
-      "INVALID_TARGET"
+      "solo podés escribirle al transportista del viaje",
+      403,
+      "FORBIDDEN"
     );
   }
 

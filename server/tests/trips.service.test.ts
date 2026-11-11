@@ -4059,11 +4059,16 @@ describe("addCargoItem", () => {
 
     function mockTripWithCompanies(
       companies: { id: string; name: string }[],
-      tripCarrier = carrier
+      tripCarrier = carrier,
+      // empresas que retiraron todas sus cargas (D9)
+      formerCompanies: { id: string; name: string }[] = []
     ) {
       (prisma.trip.findUnique as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
         carrier: tripCarrier,
-        cargoItems: companies.map((company) => ({ company })),
+        cargoItems: [
+          ...companies.map((company) => ({ status: "CONFIRMED", company })),
+          ...formerCompanies.map((company) => ({ status: "CANCELLED", company })),
+        ],
       });
     }
 
@@ -4113,9 +4118,10 @@ describe("addCargoItem", () => {
 
         const result = await tripsService.listTripMessages("t1", "u1");
 
+        // U8: el fletero lee sus conversaciones, no las que no lo incluyen
         expect(prisma.message.findMany).toHaveBeenCalledWith(
           expect.objectContaining({
-            where: { tripId: "t1" },
+            where: { tripId: "t1", OR: [{ fromUserId: "u1" }, { toUserId: "u1" }] },
             orderBy: { createdAt: "asc" },
           })
         );
@@ -4132,10 +4138,46 @@ describe("addCargoItem", () => {
         });
       });
 
-      it("una empresa con carga también puede verlos", async () => {
+      it("U8: la empresa lee solo su conversación con el fletero", async () => {
         mockTripWithCompanies([companyUno, companyDos]);
         const result = await tripsService.listTripMessages("t1", "c2");
+
+        expect(prisma.message.findMany).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: {
+              tripId: "t1",
+              OR: [
+                { fromUserId: "c2", toUserId: "u1" },
+                { fromUserId: "u1", toUserId: "c2" },
+              ],
+            },
+          })
+        );
         expect(result.messages).toEqual([]);
+        // tampoco se entera de qué otras empresas cargan en el viaje
+        expect(result.participants).toEqual({ carrier, companies: [] });
+      });
+
+      it("D9: la empresa que retiró su carga sigue leyendo su conversación", async () => {
+        mockTripWithCompanies([companyUno], carrier, [companyDos]);
+        await tripsService.listTripMessages("t1", "c2");
+
+        expect(prisma.message.findMany).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: {
+              tripId: "t1",
+              OR: [
+                { fromUserId: "c2", toUserId: "u1" },
+                { fromUserId: "u1", toUserId: "c2" },
+              ],
+            },
+          })
+        );
+      });
+
+      it("D9: el selector del fletero incluye a la que retiró su carga", async () => {
+        mockTripWithCompanies([companyUno], carrier, [companyDos]);
+        const result = await tripsService.listTripMessages("t1", "u1");
         expect(result.participants.companies).toEqual([companyUno, companyDos]);
       });
 
@@ -4211,6 +4253,51 @@ describe("addCargoItem", () => {
           tripsService.createTripMessage("t1", "u1", { body: "hola", toUserId: "c9" })
         ).rejects.toMatchObject({ statusCode: 403, code: "NOT_A_PARTICIPANT" });
         expect(prisma.message.create).not.toHaveBeenCalled();
+      });
+
+      it("U8: una empresa no le puede escribir a otra empresa del viaje", async () => {
+        mockTripWithCompanies([companyUno, companyDos]);
+
+        await expect(
+          tripsService.createTripMessage("t1", "c1", { body: "hola", toUserId: "c2" })
+        ).rejects.toMatchObject({ statusCode: 403, code: "FORBIDDEN" });
+        expect(prisma.message.create).not.toHaveBeenCalled();
+      });
+
+      it("D9: la empresa que retiró su carga le escribe al fletero", async () => {
+        mockTripWithCompanies([companyUno], carrier, [companyDos]);
+
+        const message = await tripsService.createTripMessage("t1", "c2", {
+          body: "¿cuándo vuelve la seña?",
+          toUserId: "u1",
+        });
+        expect(message).toMatchObject({ fromUserId: "c2", toUserId: "u1" });
+      });
+
+      it("D9: la empresa que retiró su carga no le escribe a otra empresa", async () => {
+        mockTripWithCompanies([companyUno], carrier, [companyDos]);
+
+        await expect(
+          tripsService.createTripMessage("t1", "c2", { body: "hola", toUserId: "c1" })
+        ).rejects.toMatchObject({ statusCode: 403, code: "FORBIDDEN" });
+        expect(prisma.message.create).not.toHaveBeenCalled();
+      });
+
+      it("D9: el fletero le contesta a la empresa que retiró su carga", async () => {
+        mockTripWithCompanies([companyUno], carrier, [companyDos]);
+
+        const message = await tripsService.createTripMessage("t1", "u1", {
+          body: "la seña ya se devolvió",
+          toUserId: "c2",
+        });
+        expect(message).toMatchObject({ fromUserId: "u1", toUserId: "c2" });
+      });
+
+      it("la empresa tampoco se puede escribir a sí misma", async () => {
+        mockTripWithCompanies([companyUno]);
+        await expect(
+          tripsService.createTripMessage("t1", "c1", { body: "hola", toUserId: "c1" })
+        ).rejects.toMatchObject({ statusCode: 400, code: "INVALID_TARGET" });
       });
 
       it("no te podés mandar un mensaje a vos mismo", async () => {
