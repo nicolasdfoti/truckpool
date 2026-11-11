@@ -1,6 +1,7 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
+import type { NextFunction, Request, Response } from "express";
 import jwt from "jsonwebtoken";
-import { signToken, verifyOAuthState } from "../lib/auth.js";
+import { optionalAuth, signToken, verifyOAuthState } from "../lib/auth.js";
 import { AppError } from "../lib/errors.js";
 import { LEGACY_DEV_SECRET } from "../lib/env.js";
 import type { Role } from "@prisma/client";
@@ -49,5 +50,31 @@ describe("secreto de sesión", () => {
     );
     // verifyOAuthState envuelve cualquier fallo en un AppError 400
     expect(() => verifyOAuthState("cualquiera")).toThrow(AppError);
+  });
+});
+
+describe("optionalAuth sin JWT_SECRET", () => {
+  it("corta con 500 en vez de seguir como anónimo", () => {
+    // un token que no se puede verificar porque falta el secreto es un error
+    // nuestro: seguir como anónimo escondería la mala configuración
+    process.env.JWT_SECRET = "un-secreto-de-verdad";
+    const token = signToken({ id: "u1", role: "COMPANY" as Role });
+    delete process.env.JWT_SECRET;
+
+    const req = { headers: { authorization: `Bearer ${token}` } } as Request;
+    const next = vi.fn();
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      optionalAuth(req, {} as Response, next as NextFunction);
+    } finally {
+      log.mockRestore();
+    }
+
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(next.mock.calls[0]?.[0]).toMatchObject({
+      statusCode: 500,
+      code: "INTERNAL_ERROR",
+    });
+    expect(req.user).toBeUndefined();
   });
 });
