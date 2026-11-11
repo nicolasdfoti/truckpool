@@ -254,10 +254,10 @@ export default function TripDetail() {
         ? [{ volume: trip.capacityUsed }]
         : [];
   const canAddCargo = user?.role === "COMPANY";
-  // la mensajería del viaje solo existe para el transportista del viaje y las
-  // empresas que tienen carga en él.
-  const hasCargoInTrip = trip.cargoItems.some((item) => item.companyId === user?.id);
-  const isParticipantInChat = Boolean(user) && (isCarrierOwner || hasCargoInTrip);
+  // la mensajería del viaje es del fletero y de las empresas con carga en él,
+  // también las que retiraron la suya: conservan su conversación con el
+  // fletero para hablar del reembolso (D9). Ubicación, paradas y mapa no.
+  const isParticipantInChat = Boolean(user) && trip.viewerAccess !== "ANONYMOUS";
   // el remito tiene sentido recién cuando el viaje arrancó o terminó:
   // mientras está abierto o lleno las cargas pueden cambiar.
   const canDownloadManifest =

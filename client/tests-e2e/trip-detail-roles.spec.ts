@@ -16,6 +16,7 @@ type CargoRow = {
 };
 
 const ROLES_TRIP = `/viajes/${E2E.rolesTripId}`;
+const TRANSIT_TRIP = `/viajes/${E2E.transitTripId}`;
 
 // 4 + 3 m³ vivos de 30: la carga retirada no cuenta
 const OCCUPANCY_LINE = "ya hay 2 cargas en este viaje (7 m³). quedan 23 m³ libres.";
@@ -193,4 +194,55 @@ test.describe("recorrido por rol", () => {
       expect(denied).toEqual([]);
     });
   }
+});
+
+test.describe("ex participante (D9)", () => {
+  test("viaje abierto: conserva el chat, sin paradas ni mapa", async ({ page }) => {
+    const denied = await openTrip(page, ROLES_TRIP, "formerCompany");
+    await expect(page.getByRole("heading", { name: "mensajes" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "paradas de retiro" })).toHaveCount(0);
+    await expect(page.locator(".leaflet-container")).toHaveCount(0);
+    await expect(page.getByText(ROUTE_TEXT_FOR_THIRD_PARTIES)).toBeVisible();
+    await expect(page.locator("body")).not.toContainText(E2E.departureAddress);
+    expect(denied).toEqual([]);
+  });
+
+  test("viaje en tránsito: escribe en el chat, sin ubicación ni remito", async ({
+    page,
+  }) => {
+    const denied = await openTrip(page, TRANSIT_TRIP, "formerCompany");
+    await expect(
+      page.getByText(E2E.transitCargo.former.description, { exact: true })
+    ).toBeVisible();
+    await expect(page.locator("body")).not.toContainText(
+      E2E.transitCargo.owner.description
+    );
+    await expect(page.getByRole("heading", { name: "ubicación del viaje" })).toHaveCount(
+      0
+    );
+    await expect(page.getByRole("button", { name: "descargar remito" })).toHaveCount(0);
+    await expect(page.locator(".leaflet-container")).toHaveCount(0);
+
+    // D9: lee y escribe su conversación con el fletero
+    const body = `E2E consulta por el reembolso ${Date.now()}`;
+    await page.getByLabel("mensaje", { exact: true }).fill(body);
+    await page.getByRole("button", { name: "enviar", exact: true }).click();
+    await expect(page.getByText(body)).toBeVisible();
+
+    // un ciclo del polling del chat (5 s), para ver que ninguna query da 401/403
+    await page.waitForTimeout(6000);
+    expect(denied).toEqual([]);
+  });
+
+  test("la dueña, en el mismo viaje, ve la ubicación y el remito", async ({ page }) => {
+    const denied = await openTrip(page, TRANSIT_TRIP, "company");
+    await expect(
+      page.getByRole("heading", { name: "ubicación del viaje" })
+    ).toBeVisible();
+    await expect(page.getByText(/última posición/)).toBeVisible();
+    const download = page.waitForEvent("download");
+    await page.getByRole("button", { name: "descargar remito" }).click();
+    expect((await download).suggestedFilename()).toMatch(/\.pdf$/);
+    expect(denied).toEqual([]);
+  });
 });

@@ -30,6 +30,8 @@ export type E2EUser = keyof typeof USERS;
 export const E2E = {
   rolesTripId: "e2e-trip-roles",
   reviewsTripId: "e2e-trip-reviews",
+  /** IN_TRANSIT: empresa@ con carga viva y e2e-ex@ con la suya retirada */
+  transitTripId: "e2e-trip-transit",
   departureAddress: "E2E Galpón Flete 100, Córdoba",
   cargo: {
     owner: {
@@ -47,6 +49,10 @@ export const E2E = {
       pickupAddress: "E2E Calle Ex 333, Bell Ville",
       volume: 2,
     },
+  },
+  transitCargo: {
+    owner: { description: "E2E carga en tránsito de la dueña" },
+    former: { description: "E2E carga en tránsito del ex participante" },
   },
   reviewComment: "E2E reseña: puntual y prolijo",
 } as const;

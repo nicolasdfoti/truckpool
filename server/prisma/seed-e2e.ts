@@ -11,6 +11,7 @@ import { generateTrackingCode } from "../lib/trackingCode.js";
 // los mismos ids y textos los usa client/tests-e2e/fixtures.ts
 const E2E_ROLES_TRIP_ID = "e2e-trip-roles";
 const E2E_REVIEWS_TRIP_ID = "e2e-trip-reviews";
+const E2E_TRANSIT_TRIP_ID = "e2e-trip-transit";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -73,6 +74,7 @@ async function main() {
 
   await deleteTrip(E2E_ROLES_TRIP_ID);
   await deleteTrip(E2E_REVIEWS_TRIP_ID);
+  await deleteTrip(E2E_TRANSIT_TRIP_ID);
 
   // viaje abierto con dos cargas vivas (empresa@ y e2e-segunda@) y una
   // retirada (e2e-ex@, ex participante, D9)
@@ -192,7 +194,69 @@ async function main() {
     },
   });
 
-  console.log(`seed e2e listo: ${E2E_ROLES_TRIP_ID}, ${E2E_REVIEWS_TRIP_ID}`);
+  // viaje en tránsito: ubicación y remito. empresa@ con carga viva (sin pagos:
+  // el e2e no toca el saldo) y e2e-ex@ con la suya retirada antes de salir (D9)
+  await prisma.trip.create({
+    data: {
+      id: E2E_TRANSIT_TRIP_ID,
+      origin: "Córdoba",
+      destination: "Rosario",
+      date: new Date(Date.now() - DAY_MS),
+      departureTime: "07:00",
+      truckType: "Semi",
+      capacityTotal: 25,
+      price: new Prisma.Decimal("2500.00"),
+      status: "IN_TRANSIT",
+      carrierId: carrier.id,
+      originLat: COORDS.cordoba.lat,
+      originLng: COORDS.cordoba.lng,
+      destLat: COORDS.rosario.lat,
+      destLng: COORDS.rosario.lng,
+    },
+  });
+  await prisma.cargoItem.create({
+    data: {
+      tripId: E2E_TRANSIT_TRIP_ID,
+      companyId: owner.id,
+      description: "E2E carga en tránsito de la dueña",
+      volume: 6,
+      priceShare: new Prisma.Decimal("600.00"),
+      depositAmount: new Prisma.Decimal("120.00"),
+      status: "CONFIRMED",
+      pickupAddress: "E2E Calle Tránsito 555, Villa María",
+      pickupLat: COORDS.villaMaria.lat,
+      pickupLng: COORDS.villaMaria.lng,
+      trackingCode: generateTrackingCode(),
+    },
+  });
+  await prisma.cargoItem.create({
+    data: {
+      tripId: E2E_TRANSIT_TRIP_ID,
+      companyId: former.id,
+      description: "E2E carga en tránsito del ex participante",
+      volume: 2,
+      priceShare: new Prisma.Decimal("200.00"),
+      depositAmount: new Prisma.Decimal("40.00"),
+      status: "CANCELLED",
+      cancelledAt: new Date(Date.now() - 2 * DAY_MS),
+      cancellationFeeAmount: new Prisma.Decimal("0.00"),
+      pickupAddress: "E2E Calle Tránsito Ex 666, Bell Ville",
+      pickupLat: COORDS.bellVille.lat,
+      pickupLng: COORDS.bellVille.lng,
+      trackingCode: generateTrackingCode(),
+    },
+  });
+  await prisma.tripLocation.create({
+    data: {
+      tripId: E2E_TRANSIT_TRIP_ID,
+      lat: COORDS.villaMaria.lat,
+      lng: COORDS.villaMaria.lng,
+    },
+  });
+
+  console.log(
+    `seed e2e listo: ${E2E_ROLES_TRIP_ID}, ${E2E_REVIEWS_TRIP_ID}, ${E2E_TRANSIT_TRIP_ID}`
+  );
 }
 
 main()
