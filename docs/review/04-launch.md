@@ -235,6 +235,7 @@ Tests: `tests/users.service.test.ts`, `tests/app.test.ts`.
 - [ ] Detalle en dos columnas con panel fijo "Tu carga"/"Antes de salir" y barra de estado; barra fija abajo en mobile — 03/Detalle#4, 03/Confirmar#3.
 - [ ] Publicar en 2 columnas con checklist de requisitos; "aceptar solicitud" lleva a `/viajes/nuevo` precargado — 03/Publicar#2-4, 03/Solicitudes#2-4.
 - [ ] Paradas: misma numeración en mapa y lista, "Orden guardado"; targets táctiles ≥ 44 px — 03/Paradas#2-3, 03§3.
+- [ ] Mapa de origen y destino para quien no participa del viaje (anónimo, otra empresa, ex participante): desde L3 ven solo el texto «sale de X y llega a Y…», porque el detalle no trae `originLat/Lng` ni `destLat/Lng` y `/route` les da 401/403. Requiere sumar esas coordenadas a `toTripDetailResponse` (son de la ciudad, no del depósito) — U7, decisión 2026-11-11.
 
 ### L11 — Deuda técnica · DESPUÉS · M
 - [ ] Partir `trips.service.ts` (cargas, mensajes, ubicación, paradas, tracking, reembolsos); unificar `round2` y el retry P2034; `balanceOf` a `lib/` — 01§3.
@@ -258,6 +259,9 @@ L10 → L11.
   como anónimo, empresa, fletero y admin;
 - flujos de plata de punta a punta: reservar, pagar seña, retorno del pago (`/pagos/retorno`),
   retirar la carga, salir (IN_TRANSIT) y cancelar el viaje;
+- chequeo manual (sin e2e: reservar exige `flete@` con MP conectado y Nominatim): al reservar
+  una carga en `/viajes/:id`, la sección «paradas de retiro» aparece con la parada nueva sin
+  recargar la página, y al retirarla se actualiza (L3, `useAddCargoItem`/`useCancelCargoItem`);
 - los chequeos de `03-diseno.md` en cada pantalla: estados vacío, de carga y de error, copy,
   contraste, foco, targets táctiles y consistencia visual (03§3);
 - los hallazgos se clasifican con la escala de 03 (P1/P2/P3). Antes del deploy se arreglan solo
