@@ -2,21 +2,42 @@ import { useEffect, useState } from "react";
 
 const PALETTE = ["#F58220", "#0B3D5C", "#2E8B57", "#F2B705", "#993C1D"];
 
-export type CargoFillItem = { label: string; volume: number };
+/** un tramo de la barra; sin `label` es ocupación sin nombre (vista de terceros) */
+export type CargoFillItem = { label?: string; volume: number };
 
 type Props = {
   capacityTotal: number;
   items: CargoFillItem[];
+  /** cargas vivas del viaje (para terceros, la barra es un solo tramo) */
+  cargoCount: number;
   className?: string;
 };
 
+/** "7" o "2,5": los m³ como se leen en castellano */
+function formatM3(n: number) {
+  return n.toLocaleString("es-AR", { maximumFractionDigits: 1 });
+}
+
+function occupancyLine(cargoCount: number, used: number, capacityTotal: number) {
+  const free = `quedan ${formatM3(Math.max(0, capacityTotal - used))} m³ libres.`;
+  if (cargoCount === 0) return `todavía no hay cargas en este viaje. ${free}`;
+  const cargas = cargoCount === 1 ? "1 carga" : `${cargoCount} cargas`;
+  return `ya hay ${cargas} en este viaje (${formatM3(used)} m³). ${free}`;
+}
+
 /**
- * Franja que se llena con cada CargoItem del viaje. Se usa tanto en el hero
- * (con datos de ejemplo) como en TripDetail (con datos reales de la API).
+ * Franja que se llena con las cargas del viaje (TripDetail). Cada tramo lleva
+ * la etiqueta que el rol puede ver: la descripción para el fletero y para la
+ * carga propia, "otra carga" para las ajenas, y ninguna para terceros (U7).
  * En pantallas chicas, las etiquetas inline se reemplazan por una leyenda
  * debajo de la barra para no romper el layout con texto recortado.
  */
-export function CargoFillDiagram({ capacityTotal, items, className = "" }: Props) {
+export function CargoFillDiagram({
+  capacityTotal,
+  items,
+  cargoCount,
+  className = "",
+}: Props) {
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
@@ -27,13 +48,13 @@ export function CargoFillDiagram({ capacityTotal, items, className = "" }: Props
   const used = items.reduce((sum, i) => sum + i.volume, 0);
   const usedPct =
     capacityTotal > 0 ? Math.min(100, Math.round((used / capacityTotal) * 100)) : 0;
-  const freePct = Math.max(0, 100 - usedPct);
 
   const segments = items.map((item, i) => ({
     ...item,
     pct: capacityTotal > 0 ? (item.volume / capacityTotal) * 100 : 0,
     color: PALETTE[i % PALETTE.length],
   }));
+  const labeled = segments.filter((seg) => seg.label);
 
   return (
     <div className={className}>
@@ -46,7 +67,7 @@ export function CargoFillDiagram({ capacityTotal, items, className = "" }: Props
         <div className="flex h-full w-full">
           {segments.map((seg, i) => (
             <div
-              key={seg.label + i}
+              key={i}
               className="relative flex h-full items-end justify-start overflow-hidden transition-[width] ease-out"
               style={{
                 width: mounted ? `${seg.pct}%` : "0%",
@@ -55,16 +76,18 @@ export function CargoFillDiagram({ capacityTotal, items, className = "" }: Props
                 transitionDelay: `${i * 220}ms`,
               }}
             >
-              <span
-                className="hidden whitespace-nowrap px-2 pb-1.5 text-[11px] font-medium text-white transition-opacity sm:inline"
-                style={{
-                  transitionDelay: `${i * 220 + 500}ms`,
-                  transitionDuration: "300ms",
-                  opacity: mounted ? 1 : 0,
-                }}
-              >
-                {seg.label}
-              </span>
+              {seg.label && (
+                <span
+                  className="hidden whitespace-nowrap px-2 pb-1.5 text-[11px] font-medium text-white transition-opacity sm:inline"
+                  style={{
+                    transitionDelay: `${i * 220 + 500}ms`,
+                    transitionDuration: "300ms",
+                    opacity: mounted ? 1 : 0,
+                  }}
+                >
+                  {seg.label}
+                </span>
+              )}
             </div>
           ))}
         </div>
@@ -74,13 +97,10 @@ export function CargoFillDiagram({ capacityTotal, items, className = "" }: Props
         />
       </div>
 
-      {segments.length > 0 && (
+      {labeled.length > 0 && (
         <ul className="mt-3 flex flex-wrap gap-x-4 gap-y-1 sm:hidden">
-          {segments.map((seg, i) => (
-            <li
-              key={seg.label + i}
-              className="flex items-center gap-1.5 text-xs text-ink-soft"
-            >
+          {labeled.map((seg, i) => (
+            <li key={i} className="flex items-center gap-1.5 text-xs text-ink-soft">
               <span
                 className="h-2 w-2 shrink-0 rounded-full"
                 style={{ backgroundColor: seg.color }}
@@ -92,10 +112,7 @@ export function CargoFillDiagram({ capacityTotal, items, className = "" }: Props
       )}
 
       <p className="mt-3 text-[13px] leading-relaxed text-ink-muted">
-        {items.length === 0
-          ? "todavía no hay carga cargada en este viaje."
-          : `${items.length === 1 ? "una empresa" : `${items.length} empresas`} comparten este viaje.`}{" "}
-        el {freePct}% que queda libre se sigue pudiendo ofertar.
+        {occupancyLine(cargoCount, used, capacityTotal)}
       </p>
     </div>
   );

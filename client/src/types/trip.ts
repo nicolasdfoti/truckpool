@@ -50,10 +50,6 @@ export type Trip = {
   depositPercent: number;
   /** comisión de plataforma sobre cada priceShare confirmado (default 10%) */
   platformFeePercent: number;
-  /** punto exacto de salida (depósito/galpón), distinto del origin general */
-  departureAddress: string | null;
-  departureLat: number | null;
-  departureLng: number | null;
 };
 
 export type TripInput = {
@@ -164,10 +160,32 @@ export type CreateReviewInput = {
   comment?: string;
 };
 
-export type TripDetail = Trip & {
-  carrierId: string;
+/**
+ * Quién mira el detalle, según el backend (U7):
+ * - CARRIER_OWNER: el fletero del viaje, ve todo;
+ * - PARTICIPANT: empresa con carga viva, ve las suyas completas y las ajenas
+ *   solo como volumen (`otherCargo`);
+ * - FORMER_PARTICIPANT: empresa que retiró todas sus cargas, ve las suyas;
+ * - ANONYMOUS: el resto (también admin y otros fleteros), solo agregados.
+ */
+export type TripViewerAccess =
+  "ANONYMOUS" | "PARTICIPANT" | "FORMER_PARTICIPANT" | "CARRIER_OWNER";
+
+export type TripDetail = Omit<Trip, "platformFeePercent"> & {
+  /**
+   * el detalle de L2 no la manda (el resumen del listado sí): mientras tanto
+   * la UI cae al 10 % por defecto
+   */
+  platformFeePercent?: number;
+  /** cantidad de cargas vivas del viaje: el agregado que ven todos */
+  cargoCount: number;
+  viewerAccess: TripViewerAccess;
+  /** las cargas que quien mira puede ver completas (vacío para terceros) */
   cargoItems: CargoItem[];
-  carrierName: string;
+  /** las cargas vivas de otras empresas, solo para la empresa participante */
+  otherCargo: { volume: number }[];
+  /** punto exacto de salida: solo para el fletero y sus empresas con carga viva */
+  departureAddress?: string | null;
   reviews: Review[];
 };
 

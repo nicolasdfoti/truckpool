@@ -239,6 +239,20 @@ export default function TripDetail() {
 
   const remaining = trip.capacityTotal - trip.capacityUsed;
   const isCarrierOwner = user?.role === "CARRIER" && user.id === trip.carrierId;
+  // U7: el fletero y la empresa ven la descripción de lo que pueden ver
+  // completo; las cargas ajenas son "otra carga", y a terceros solo les llega
+  // el total ocupado, sin nombres.
+  const seesCargoList = trip.viewerAccess !== "ANONYMOUS";
+  const visibleCargo = trip.cargoItems.filter((c) => c.status !== "CANCELLED");
+  const occupancyItems =
+    trip.viewerAccess === "CARRIER_OWNER" || trip.viewerAccess === "PARTICIPANT"
+      ? [
+          ...visibleCargo.map((c) => ({ label: c.description, volume: c.volume })),
+          ...trip.otherCargo.map((c) => ({ label: "otra carga", volume: c.volume })),
+        ]
+      : trip.capacityUsed > 0
+        ? [{ volume: trip.capacityUsed }]
+        : [];
   const canAddCargo = user?.role === "COMPANY";
   // la mensajería del viaje solo existe para el transportista del viaje y las
   // empresas que tienen carga en él.
@@ -381,12 +395,8 @@ export default function TripDetail() {
         <div className="mt-8 rounded-[10px] border border-surface-line bg-surface p-6">
           <CargoFillDiagram
             capacityTotal={trip.capacityTotal}
-            items={trip.cargoItems
-              .filter((c) => c.status !== "CANCELLED")
-              .map((c) => ({
-                label: c.description,
-                volume: c.volume,
-              }))}
+            cargoCount={trip.cargoCount}
+            items={occupancyItems}
           />
         </div>
 
@@ -530,182 +540,195 @@ export default function TripDetail() {
           <p className="mt-2 text-sm text-ink-muted">{downloadManifest.error.message}</p>
         )}
 
-        <section className="mt-8">
-          <h2 className="font-display text-[17px] font-medium">cargas del viaje</h2>
-          {trip.cargoItems.length === 0 && (
-            <p className="mt-2 text-sm text-ink-muted">
-              todavía no hay carga asignada a este viaje.
-            </p>
-          )}
-          <ul className="mt-3 space-y-3">
-            {trip.cargoItems.map((item) => {
-              const deposit = item.depositPayment;
-              const balance = item.balancePayment;
-              const balanceAmount = round2(item.priceShare - item.depositAmount);
-              const isCancelled = item.status === "CANCELLED";
-              const isCompany = user?.id === item.companyId;
-              const depositApproved = deposit?.status === "APPROVED";
-              // un contracargo no se vuelve a pagar: lo resuelve un admin
-              const chargedBack =
-                deposit?.status === "CHARGED_BACK" || balance?.status === "CHARGED_BACK";
-              // el saldo solo existe con el viaje en camino y la carga
-              // confirmada: antes de eso todavía no hay nada que cobrar.
-              const balanceDue =
-                item.status === "CONFIRMED" &&
-                trip.status === "IN_TRANSIT" &&
-                balanceAmount > 0;
-              const showDepositPayButton =
-                isCompany &&
-                !isCancelled &&
-                item.status === "PENDING" &&
-                !depositApproved &&
-                !chargedBack;
-              const showBalancePayButton =
-                isCompany &&
-                balanceDue &&
-                balance?.status !== "APPROVED" &&
-                balance?.status !== "CHARGED_BACK";
-              const showPayButton = showDepositPayButton || showBalancePayButton;
-              // se retira lo pendiente o confirmado (hasta la salida, con la misma
-              // penalidad) mientras el viaje no arrancó: el botón vive al lado
-              // de las otras acciones.
-              const showCancelButton =
-                isCompany &&
-                (item.status === "PENDING" || item.status === "CONFIRMED") &&
-                canCancelTrip;
-              return (
-                <li
-                  key={item.id}
-                  className="flex items-center justify-between gap-4 rounded-[10px] border border-line bg-white p-4"
-                >
-                  <div className="flex items-center gap-3">
-                    {depositApproved && (
-                      <span className="inline-flex items-center rounded-full bg-brand px-3 py-1 text-xs font-medium text-white">
-                        seña pagada
-                      </span>
-                    )}
-                    {balance?.status === "APPROVED" && (
-                      <span className="inline-flex items-center rounded-full bg-brand px-3 py-1 text-xs font-medium text-white">
-                        saldo pagado
-                      </span>
-                    )}
-                    {!showPayButton && (
-                      <span
-                        className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${CARGO_STATUS_STYLES[item.status]}`}
-                      >
-                        {CARGO_STATUS_LABELS[item.status]}
-                      </span>
-                    )}
-                    <div>
-                      <p className="text-sm font-medium">{item.description}</p>
-                      <p className="text-[13px] text-ink-muted">
-                        {item.volume.toFixed(1)} m³ · {currency(item.priceShare)} del
-                        viaje
-                      </p>
-                      {user?.role === "CARRIER" &&
-                        user?.id === trip.carrierId &&
-                        carrierNetOf(item) !== null && (
-                          <p className="text-[12px] text-success-deep font-medium">
-                            tu neto: {currency(carrierNetOf(item) ?? 0)} (comisión{" "}
-                            {trip.platformFeePercent ?? 10}%)
-                          </p>
-                        )}
-                      {item.pickupAddress && (
-                        <p className="text-[12px] text-ink-muted font-mono">
-                          retiro: {item.pickupAddress}
-                        </p>
+        {seesCargoList && (
+          <section className="mt-8">
+            <h2 className="font-display text-[17px] font-medium">cargas del viaje</h2>
+            {trip.cargoItems.length === 0 && (
+              <p className="mt-2 text-sm text-ink-muted">
+                todavía no hay carga asignada a este viaje.
+              </p>
+            )}
+            <ul className="mt-3 space-y-3" aria-label="cargas del viaje">
+              {trip.cargoItems.map((item) => {
+                const deposit = item.depositPayment;
+                const balance = item.balancePayment;
+                const balanceAmount = round2(item.priceShare - item.depositAmount);
+                const isCancelled = item.status === "CANCELLED";
+                const isCompany = user?.id === item.companyId;
+                const depositApproved = deposit?.status === "APPROVED";
+                // un contracargo no se vuelve a pagar: lo resuelve un admin
+                const chargedBack =
+                  deposit?.status === "CHARGED_BACK" ||
+                  balance?.status === "CHARGED_BACK";
+                // el saldo solo existe con el viaje en camino y la carga
+                // confirmada: antes de eso todavía no hay nada que cobrar.
+                const balanceDue =
+                  item.status === "CONFIRMED" &&
+                  trip.status === "IN_TRANSIT" &&
+                  balanceAmount > 0;
+                const showDepositPayButton =
+                  isCompany &&
+                  !isCancelled &&
+                  item.status === "PENDING" &&
+                  !depositApproved &&
+                  !chargedBack;
+                const showBalancePayButton =
+                  isCompany &&
+                  balanceDue &&
+                  balance?.status !== "APPROVED" &&
+                  balance?.status !== "CHARGED_BACK";
+                const showPayButton = showDepositPayButton || showBalancePayButton;
+                // se retira lo pendiente o confirmado (hasta la salida, con la misma
+                // penalidad) mientras el viaje no arrancó: el botón vive al lado
+                // de las otras acciones.
+                const showCancelButton =
+                  isCompany &&
+                  (item.status === "PENDING" || item.status === "CONFIRMED") &&
+                  canCancelTrip;
+                return (
+                  <li
+                    key={item.id}
+                    className="flex items-center justify-between gap-4 rounded-[10px] border border-line bg-white p-4"
+                  >
+                    <div className="flex items-center gap-3">
+                      {depositApproved && (
+                        <span className="inline-flex items-center rounded-full bg-brand px-3 py-1 text-xs font-medium text-white">
+                          seña pagada
+                        </span>
                       )}
-                      {item.trackingCode && (
-                        <p className="text-[12px] text-ink-muted font-mono">
-                          código: {item.trackingCode}
-                        </p>
+                      {balance?.status === "APPROVED" && (
+                        <span className="inline-flex items-center rounded-full bg-brand px-3 py-1 text-xs font-medium text-white">
+                          saldo pagado
+                        </span>
                       )}
-                      {showDepositPayButton && (
-                        <p className="text-[13px] text-ink-muted">
-                          seña de {currency(item.depositAmount)} para reservar el lugar ·
-                          quedan {currency(balanceAmount)} al salir
-                        </p>
-                      )}
-                      {balanceDue &&
-                        balance?.status !== "APPROVED" &&
-                        balance?.status !== "CHARGED_BACK" && (
-                          <p className="text-[13px] text-ink-muted">
-                            saldo de {currency(balanceAmount)} pendiente
-                          </p>
-                        )}
-                      {chargedBack && (
-                        <p className="text-[13px] text-ink-muted">
-                          el pago tiene un contracargo en Mercado Pago: lo revisa un
-                          admin.
-                        </p>
-                      )}
-                      {showDepositPayButton && deposit?.status === "REJECTED" && (
-                        <p className="text-[13px] text-ink-muted">
-                          el pago anterior fue rechazado, probá de nuevo.
-                        </p>
-                      )}
-                      {isCancelled && (
-                        <p className="text-[13px] text-ink-muted">
-                          {cancellationNote(item)}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                  {showPayButton || showCancelButton ? (
-                    <div className="flex items-center gap-2">
-                      {showCancelButton && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          disabled={cancelCargoItem.isPending}
-                          onClick={async () => {
-                            if (await confirmCancellation(item, trip)) {
-                              cancelCargoItem.mutate(item.id);
-                            }
-                          }}
+                      {!showPayButton && (
+                        <span
+                          className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${CARGO_STATUS_STYLES[item.status]}`}
                         >
-                          {cancelCargoItem.isPending ? "retirando…" : "retirar carga"}
-                        </Button>
+                          {CARGO_STATUS_LABELS[item.status]}
+                        </span>
                       )}
-                      {showPayButton && (
+                      <div>
+                        <p className="text-sm font-medium">{item.description}</p>
+                        <p className="text-[13px] text-ink-muted">
+                          {item.volume.toFixed(1)} m³ · {currency(item.priceShare)} del
+                          viaje
+                        </p>
+                        {user?.role === "CARRIER" &&
+                          user?.id === trip.carrierId &&
+                          carrierNetOf(item) !== null && (
+                            <p className="text-[12px] text-success-deep font-medium">
+                              tu neto: {currency(carrierNetOf(item) ?? 0)} (comisión{" "}
+                              {trip.platformFeePercent ?? 10}%)
+                            </p>
+                          )}
+                        {item.pickupAddress && (
+                          <p className="text-[12px] text-ink-muted font-mono">
+                            retiro: {item.pickupAddress}
+                          </p>
+                        )}
+                        {item.trackingCode && (
+                          <p className="text-[12px] text-ink-muted font-mono">
+                            código: {item.trackingCode}
+                          </p>
+                        )}
+                        {showDepositPayButton && (
+                          <p className="text-[13px] text-ink-muted">
+                            seña de {currency(item.depositAmount)} para reservar el lugar
+                            · quedan {currency(balanceAmount)} al salir
+                          </p>
+                        )}
+                        {balanceDue &&
+                          balance?.status !== "APPROVED" &&
+                          balance?.status !== "CHARGED_BACK" && (
+                            <p className="text-[13px] text-ink-muted">
+                              saldo de {currency(balanceAmount)} pendiente
+                            </p>
+                          )}
+                        {chargedBack && (
+                          <p className="text-[13px] text-ink-muted">
+                            el pago tiene un contracargo en Mercado Pago: lo revisa un
+                            admin.
+                          </p>
+                        )}
+                        {showDepositPayButton && deposit?.status === "REJECTED" && (
+                          <p className="text-[13px] text-ink-muted">
+                            el pago anterior fue rechazado, probá de nuevo.
+                          </p>
+                        )}
+                        {isCancelled && (
+                          <p className="text-[13px] text-ink-muted">
+                            {cancellationNote(item)}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                    {showPayButton || showCancelButton ? (
+                      <div className="flex items-center gap-2">
+                        {showCancelButton && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            disabled={cancelCargoItem.isPending}
+                            onClick={async () => {
+                              if (await confirmCancellation(item, trip)) {
+                                cancelCargoItem.mutate(item.id);
+                              }
+                            }}
+                          >
+                            {cancelCargoItem.isPending ? "retirando…" : "retirar carga"}
+                          </Button>
+                        )}
+                        {showPayButton && (
+                          <Button
+                            variant="primary"
+                            size="sm"
+                            disabled={createPaymentPreference.isPending}
+                            onClick={() =>
+                              createPaymentPreference.mutate({
+                                cargoItemId: item.id,
+                                type: showBalancePayButton ? "BALANCE" : "DEPOSIT",
+                              })
+                            }
+                          >
+                            {createPaymentPreference.isPending
+                              ? "generando link…"
+                              : showBalancePayButton
+                                ? `pagar saldo ${currency(balanceAmount)}`
+                                : `pagar seña ${currency(item.depositAmount)}`}
+                          </Button>
+                        )}
+                      </div>
+                    ) : (
+                      item.status === "PENDING" &&
+                      depositApproved &&
+                      canConfirm(item.companyId) && (
                         <Button
                           variant="primary"
                           size="sm"
-                          disabled={createPaymentPreference.isPending}
-                          onClick={() =>
-                            createPaymentPreference.mutate({
-                              cargoItemId: item.id,
-                              type: showBalancePayButton ? "BALANCE" : "DEPOSIT",
-                            })
-                          }
+                          disabled={confirmCargoItem.isPending}
+                          onClick={() => confirmCargoItem.mutate(item.id)}
                         >
-                          {createPaymentPreference.isPending
-                            ? "generando link…"
-                            : showBalancePayButton
-                              ? `pagar saldo ${currency(balanceAmount)}`
-                              : `pagar seña ${currency(item.depositAmount)}`}
+                          confirmar carga
                         </Button>
-                      )}
-                    </div>
-                  ) : (
-                    item.status === "PENDING" &&
-                    depositApproved &&
-                    canConfirm(item.companyId) && (
-                      <Button
-                        variant="primary"
-                        size="sm"
-                        disabled={confirmCargoItem.isPending}
-                        onClick={() => confirmCargoItem.mutate(item.id)}
-                      >
-                        confirmar carga
-                      </Button>
-                    )
-                  )}
+                      )
+                    )}
+                  </li>
+                );
+              })}
+              {/* las cargas de otras empresas: solo el volumen (U7) */}
+              {trip.otherCargo.map((other, i) => (
+                <li
+                  key={`otra-${i}`}
+                  className="rounded-[10px] border border-line bg-white p-4 text-[13px] text-ink-muted"
+                >
+                  otra carga ·{" "}
+                  {other.volume.toLocaleString("es-AR", { maximumFractionDigits: 1 })} m³
                 </li>
-              );
-            })}
-          </ul>
-        </section>
+              ))}
+            </ul>
+          </section>
+        )}
 
         {actionError && <p className="mt-4 text-[13px] text-danger">{actionError}</p>}
 
@@ -717,7 +740,8 @@ export default function TripDetail() {
 
             {reviewStatus.reviewed ? (
               <p className="mt-2 text-[13px] text-ink-muted">
-                ya calificaste a {trip.carrierName}. gracias por sumar datos para los demás.
+                ya calificaste a {trip.carrierName}. gracias por sumar datos para los
+                demás.
               </p>
             ) : (
               <form onSubmit={handleSubmitReview} className="mt-4">
@@ -904,12 +928,11 @@ export default function TripDetail() {
               {stopDistanceError}
             </p>
             <p className="mt-3 text-xs text-ink-muted">
-              Por favor, elegí una dirección de retiro más cercana al recorrido del
-              viaje.
+              Por favor, elegí una dirección de retiro más cercana al recorrido del viaje.
             </p>
           </Modal>
         )}
-      {tripStartedError && (
+        {tripStartedError && (
           <Modal
             isOpen={!!tripStartedError}
             onClose={() => setTripStartedError(null)}
@@ -919,8 +942,8 @@ export default function TripDetail() {
               {tripStartedError}
             </p>
             <p className="mt-3 text-xs text-ink-muted">
-              Un viaje deja de aceptar cargas nuevas el día de su salida. Podés
-              seguir consultando el viaje y las cargas que ya tenés en él.
+              Un viaje deja de aceptar cargas nuevas el día de su salida. Podés seguir
+              consultando el viaje y las cargas que ya tenés en él.
             </p>
           </Modal>
         )}
