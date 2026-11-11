@@ -2367,7 +2367,7 @@ describe("addCargoItem", () => {
         baseTrip({ carrier: { name: "Flete" }, reviews: [] })
       );
 
-      await tripsService.getTripById("t1");
+      await tripsService.getTripById("t1", null);
 
       expect(prisma.cargoItem.findMany).not.toHaveBeenCalled();
       expect(prisma.$transaction).not.toHaveBeenCalled();
@@ -2384,7 +2384,7 @@ describe("addCargoItem", () => {
       (prisma.trip.findUnique as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(
         baseTrip({ carrier: { name: "Flete" }, reviews: [], ...overrides })
       );
-      return tripsService.getTripById("t1");
+      return tripsService.getTripById("t1", null);
     }
 
     it("el detalle de un viaje de mañana llega con acceptsCargo", async () => {

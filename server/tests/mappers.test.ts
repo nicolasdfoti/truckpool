@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { Prisma } from "@prisma/client";
-import { toCargoItemResponse } from "../lib/mappers.js";
+import { toCargoItemResponse, toTripSummary } from "../lib/mappers.js";
 
 // D7 (c): la comisión es solo sobre lo efectivamente cobrado. MP devuelve la
 // comisión en proporción a lo reembolsado (verificado con pago real, ver D7 en
@@ -133,5 +133,85 @@ describe("toPaymentResponse: comisión neta derivada de lo devuelto (D7 c)", () 
     expect(
       repartoDe(seña({ platformFeeAmount: null, carrierAmount: null }))
     ).toMatchObject({ netPlatformFeeAmount: null, netCarrierAmount: null });
+  });
+});
+
+// U7: DTOs por whitelist. Un campo nuevo en el modelo no sale en la respuesta
+// hasta que alguien lo agrega al mapper a propósito.
+describe("mappers por whitelist (U7)", () => {
+  it("toCargoItemResponse no deja pasar un campo que no está en la lista", () => {
+    const item = {
+      ...(carga(seña()) as unknown as Record<string, unknown>),
+      legacyTrackingCode: "TP-SECRETO-C1",
+      campoNuevo: "no debería salir",
+    } as unknown as Parameters<typeof toCargoItemResponse>[0];
+
+    expect(Object.keys(toCargoItemResponse(item)).sort()).toEqual([
+      "balancePayment",
+      "cancellationFeeAmount",
+      "cancelledAt",
+      "companyId",
+      "companyName",
+      "createdAt",
+      "depositAmount",
+      "depositPayment",
+      "description",
+      "id",
+      "pickupAddress",
+      "pickupLat",
+      "pickupLng",
+      "priceShare",
+      "status",
+      "stopOrder",
+      "trackingCode",
+      "tripId",
+      "volume",
+    ]);
+  });
+
+  it("toTripSummary no publica el punto exacto de salida", () => {
+    const trip = {
+      id: "t1",
+      origin: "Córdoba",
+      destination: "Rosario",
+      date: new Date("2026-12-01T10:00:00.000Z"),
+      departureTime: "08:30",
+      truckType: "Semi",
+      capacityTotal: 20,
+      price: new Prisma.Decimal(1000),
+      status: "OPEN",
+      carrierId: "u1",
+      carrier: { name: "Flete" },
+      features: [],
+      depositPercent: 20,
+      platformFeePercent: 10,
+      departureAddress: "Galpón 5000",
+      departureLat: -31.45,
+      departureLng: -64.2,
+      originLat: -31.42,
+      originLng: -64.18,
+      destLat: -32.94,
+      destLng: -60.65,
+      cargoItems: [],
+    } as unknown as Parameters<typeof toTripSummary>[0];
+
+    expect(Object.keys(toTripSummary(trip)).sort()).toEqual([
+      "acceptsCargo",
+      "capacityTotal",
+      "capacityUsed",
+      "carrierId",
+      "carrierName",
+      "date",
+      "departureTime",
+      "depositPercent",
+      "destination",
+      "features",
+      "id",
+      "origin",
+      "platformFeePercent",
+      "price",
+      "status",
+      "truckType",
+    ]);
   });
 });

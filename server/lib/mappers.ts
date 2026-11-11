@@ -82,10 +82,8 @@ export function toTripSummary(trip: TripWithCargo) {
     // la comisión que se lleva la plataforma en este viaje. No es secreto:
     // sale de multiplicar el priceShare, que ya es público.
     platformFeePercent: trip.platformFeePercent,
-    // punto exacto de salida (depósito/galpón), distinto del origin general
-    departureAddress: trip.departureAddress,
-    departureLat: trip.departureLat,
-    departureLng: trip.departureLng,
+    // el punto exacto de salida (depósito/galpón) no va en el resumen: es
+    // público y la dirección del fletero solo la ven él y sus empresas (U7).
   };
 }
 
@@ -155,12 +153,23 @@ function toPaymentResponse(payment: Payment) {
   };
 }
 
+/**
+ * La carga completa: solo para el fletero del viaje y la empresa dueña. Por
+ * whitelist (U7): un campo nuevo del modelo no sale hasta que se agrega acá.
+ */
 export function toCargoItemResponse(item: CargoItemWithPayments) {
-  const { payments, company, ...rest } = item;
+  const { payments, company } = item;
   const deposit = payments?.find((p) => p.type === "DEPOSIT");
   const balance = payments?.find((p) => p.type === "BALANCE");
   return {
-    ...rest,
+    id: item.id,
+    tripId: item.tripId,
+    companyId: item.companyId,
+    description: item.description,
+    volume: item.volume,
+    status: item.status,
+    createdAt: item.createdAt,
+    cancelledAt: item.cancelledAt,
     priceShare: Number(item.priceShare),
     depositAmount: Number(item.depositAmount),
     cancellationFeeAmount:
@@ -177,6 +186,98 @@ export function toCargoItemResponse(item: CargoItemWithPayments) {
     pickupLng: item.pickupLng,
     trackingCode: item.trackingCode,
     stopOrder: item.stopOrder,
+  };
+}
+
+/**
+ * Quién mira el detalle de un viaje (U7). Sale de la sesión y del propio viaje,
+ * nunca del cliente:
+ * - CARRIER_OWNER: el fletero del viaje, ve todo;
+ * - PARTICIPANT: una empresa con alguna carga viva, ve las suyas completas y las
+ *   ajenas solo como volumen;
+ * - FORMER_PARTICIPANT: una empresa que retiró todas sus cargas, ve las suyas
+ *   (con el reembolso) y nada de las demás;
+ * - ANONYMOUS: el resto, también el ADMIN y otros fleteros (el admin necesita
+ *   su propia vista, L9): solo los agregados del viaje.
+ */
+export type TripViewerAccess =
+  "ANONYMOUS" | "CARRIER_OWNER" | "PARTICIPANT" | "FORMER_PARTICIPANT";
+
+export function tripViewerAccess(
+  trip: {
+    carrierId: string;
+    cargoItems: { companyId: string; status: CargoItemStatus }[];
+  },
+  viewer: { id: string } | null
+): TripViewerAccess {
+  if (!viewer) return "ANONYMOUS";
+  if (viewer.id === trip.carrierId) return "CARRIER_OWNER";
+  const own = trip.cargoItems.filter((item) => item.companyId === viewer.id);
+  if (own.some(isActiveCargo)) return "PARTICIPANT";
+  if (own.length > 0) return "FORMER_PARTICIPANT";
+  return "ANONYMOUS";
+}
+
+export type TripDetailSource = Trip & {
+  cargoItems: CargoItemWithPayments[];
+  carrier: { name: string };
+};
+
+/**
+ * Detalle de un viaje según quién lo mira (U7). Todos ven el viaje y sus
+ * agregados (m³ ocupados y cantidad de cargas vivas); lo demás depende de
+ * `tripViewerAccess`. Las claves `cargoItems` y `otherCargo` van siempre, vacías
+ * si no corresponde, para que el cliente no tenga que preguntar si existen.
+ */
+export function toTripDetailResponse<R>(
+  trip: TripDetailSource,
+  viewer: { id: string } | null,
+  reviews: R[]
+) {
+  const access = tripViewerAccess(trip, viewer);
+  const active = trip.cargoItems.filter(isActiveCargo);
+
+  const cargoItems =
+    access === "CARRIER_OWNER"
+      ? trip.cargoItems
+      : access === "PARTICIPANT" || access === "FORMER_PARTICIPANT"
+        ? trip.cargoItems.filter((item) => item.companyId === viewer?.id)
+        : [];
+  // las ajenas, solo para la empresa con carga viva: el volumen y nada más
+  // (la ciudad de retiro llega con pickupCity, L6)
+  const otherCargo =
+    access === "PARTICIPANT"
+      ? active
+          .filter((item) => item.companyId !== viewer?.id)
+          .map((item) => ({ volume: item.volume }))
+      : [];
+  const seesDeparture = access === "CARRIER_OWNER" || access === "PARTICIPANT";
+
+  return {
+    id: trip.id,
+    origin: trip.origin,
+    destination: trip.destination,
+    date: trip.date,
+    departureTime: trip.departureTime,
+    truckType: trip.truckType,
+    capacityTotal: trip.capacityTotal,
+    capacityUsed: activeVolume(trip.cargoItems),
+    cargoCount: active.length,
+    price: Number(trip.price),
+    status: trip.status,
+    // misma bandera que manda en el listado: el cliente la usa para no
+    // ofrecer el formulario de carga.
+    acceptsCargo: tripAcceptsCargo(trip),
+    carrierId: trip.carrierId,
+    carrierName: trip.carrier.name,
+    depositPercent: trip.depositPercent,
+    features: trip.features,
+    reviews,
+    viewerAccess: access,
+    // el punto exacto de salida, solo para el fletero y sus empresas activas
+    ...(seesDeparture ? { departureAddress: trip.departureAddress } : {}),
+    cargoItems: cargoItems.map(toCargoItemResponse),
+    otherCargo,
   };
 }
 

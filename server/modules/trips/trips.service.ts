@@ -8,8 +8,8 @@ import {
   isActiveCargo,
   toCargoItemResponse,
   toCargoQuoteResponse,
+  toTripDetailResponse,
   toTripSummary,
-  tripAcceptsCargo,
 } from "../../lib/mappers.js";
 import { geocode, haversineKm, type LatLng } from "../../lib/geocode.js";
 import { fetchRouteGeometry } from "../../lib/routing.js";
@@ -372,11 +372,15 @@ async function releaseTripReservations(
   );
 }
 
-export async function getTripById(id: string) {
+/** detalle del viaje según quién lo mira (U7, ver toTripDetailResponse) */
+export async function getTripById(id: string, viewer: { id: string } | null) {
   const trip = await prisma.trip.findUnique({
     where: { id },
     include: {
-      cargoItems: { include: { payments: true, company: { select: { name: true } } } },
+      cargoItems: {
+        include: { payments: true, company: { select: { name: true } } },
+        orderBy: { createdAt: "asc" },
+      },
       carrier: { select: { name: true } },
       reviews: {
         orderBy: { createdAt: "desc" },
@@ -389,27 +393,7 @@ export async function getTripById(id: string) {
   });
   if (!trip) throw new TripNotFoundError();
 
-  return {
-    id: trip.id,
-    origin: trip.origin,
-    destination: trip.destination,
-    date: trip.date,
-    departureTime: trip.departureTime,
-    truckType: trip.truckType,
-    capacityTotal: trip.capacityTotal,
-    capacityUsed: activeVolume(trip.cargoItems),
-    price: Number(trip.price),
-    status: trip.status,
-    // misma bandera que manda en el listado y en la respuesta de detalle: el
-    // cliente la usa para no ofrecer el formulario de carga.
-    acceptsCargo: tripAcceptsCargo(trip),
-    carrierId: trip.carrierId,
-    depositPercent: trip.depositPercent,
-    cargoItems: trip.cargoItems.map(toCargoItemResponse),
-    carrierName: trip.carrier.name,
-    features: trip.features,
-    reviews: trip.reviews.map(toReviewResponse),
-  };
+  return toTripDetailResponse(trip, viewer, trip.reviews.map(toReviewResponse));
 }
 
 /**

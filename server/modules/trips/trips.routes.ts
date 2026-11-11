@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { requireAuth, requireRole } from "../../lib/auth.js";
+import { optionalAuth, requireAuth, requireRole } from "../../lib/auth.js";
 import { validateBody, validateQuery } from "../../lib/validate.js";
 import * as tripsController from "./trips.controller.js";
 import {
@@ -57,7 +57,8 @@ tripsRouter.post(
   validateBody(createLocationSchema),
   tripsController.postTripLocation
 );
-tripsRouter.get("/:id", tripsController.getTrip);
+// público, pero cada rol ve lo suyo (U7): la sesión es opcional
+tripsRouter.get("/:id", optionalAuth, tripsController.getTrip);
 tripsRouter.post(
   "/",
   requireAuth,

@@ -101,7 +101,8 @@ export async function getGeocode(_req: Request, res: Response) {
 }
 
 export async function getTrip(req: Request, res: Response) {
-  const trip = await tripsService.getTripById(getParam(req, "id"));
+  // `req.user` lo pone optionalAuth solo con una sesión válida (U7)
+  const trip = await tripsService.getTripById(getParam(req, "id"), req.user ?? null);
   res.json(trip);
 }
 

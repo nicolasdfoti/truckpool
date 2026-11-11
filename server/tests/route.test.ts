@@ -531,7 +531,7 @@ describe("createTrip y el punto exacto de salida", () => {
     });
 
     const { createTrip } = await import("../modules/trips/trips.service.js");
-    const trip = await createTrip("u1", {
+    await createTrip("u1", {
       origin: "Córdoba",
       destination: "Rosario",
       departureAddress: "galpón sin geocodificar",
@@ -546,8 +546,14 @@ describe("createTrip y el punto exacto de salida", () => {
 
     // el geocode se intentó (best-effort) y el viaje se creó igual
     expect(geocode).toHaveBeenCalledWith("galpón sin geocodificar");
-    expect(trip.departureAddress).toBe("galpón sin geocodificar");
-    expect(trip.departureLat).toBeNull();
+    // se guarda la dirección sin coordenadas (el resumen ya no las devuelve, U7)
+    expect(vi.mocked(prisma.trip.create).mock.calls[0]?.[0]).toMatchObject({
+      data: {
+        departureAddress: "galpón sin geocodificar",
+        departureLat: null,
+        departureLng: null,
+      },
+    });
   });
 
   it("guarda las coordenadas del departureAddress cuando el geocode responde", async () => {
