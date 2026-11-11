@@ -1,13 +1,19 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
+import { retryUnlessDenied } from "../lib/queryRetry";
 import type { StopItem, PublicTracking } from "../types/trip";
 
-/** paradas ordenadas del viaje (pickups) — solo participantes */
+/**
+ * paradas ordenadas del viaje (pickups): solo el fletero y las empresas con
+ * carga viva. La página no la monta para el resto; si igual llega un 403 (la
+ * empresa retiró su carga en otra pestaña), no se reintenta.
+ */
 export function useTripStops(tripId: string) {
   return useQuery({
     queryKey: ["tripStops", tripId],
     queryFn: () => api.get<StopItem[]>(`/trips/${tripId}/stops`),
     enabled: Boolean(tripId),
+    retry: retryUnlessDenied,
   });
 }
 

@@ -224,8 +224,13 @@ export type TripLocationResponse = {
   track?: TripLocationPoint[];
 };
 
-/** Parada (pickup) de una carga en el viaje, ya ordenada */
-export type StopItem = {
+/**
+ * Parada (pickup) de una carga en el viaje, ya ordenada (U19). `FULL` es la
+ * parada completa: para el fletero todas, para la empresa las suyas. `OTHER` es
+ * la de otra empresa: solo el lugar en el orden y el volumen.
+ */
+export type FullStopItem = {
+  kind: "FULL";
   cargoItemId: string;
   pickupAddress: string;
   pickupLat: number | null;
@@ -233,9 +238,12 @@ export type StopItem = {
   trackingCode: string;
   description: string;
   volume: number;
-  status: string;
+  status: CargoItemStatus;
   stopOrder: number;
 };
+
+export type StopItem =
+  FullStopItem | { kind: "OTHER"; stopOrder: number; volume: number };
 
 /** Tracking público por código — info limitada sin exponer datos sensibles */
 export type PublicTracking = {

@@ -130,3 +130,39 @@ test.describe("ocupación y cargas por rol", () => {
     await expect(list.getByText(/otra carga/)).toHaveCount(0);
   });
 });
+
+test.describe("paradas por rol", () => {
+  for (const [label, user] of [
+    ["anónimo", null],
+    ["otra empresa", "otherCompany"],
+    ["ex participante", "formerCompany"],
+  ] as const) {
+    test(`${label}: no ve paradas ni las pide`, async ({ page }) => {
+      const denied = await openTrip(page, ROLES_TRIP, user);
+      await expect(
+        page.getByRole("heading", { name: "paradas de retiro" })
+      ).not.toBeVisible();
+      expect(denied.filter((entry) => entry.includes("/stops"))).toEqual([]);
+    });
+  }
+
+  test("empresa dueña: su parada completa y la ajena como otra parada", async ({
+    page,
+  }) => {
+    await openTrip(page, ROLES_TRIP, "company");
+    const stops = page.getByRole("region", { name: "paradas del viaje" });
+    await expect(stops.getByText(cargo.owner.pickupAddress)).toBeVisible();
+    await expect(stops.getByText("otra parada · 3 m³")).toBeVisible();
+    // la empresa no reordena: sin manijas de arrastre
+    await expect(stops.getByRole("button", { name: /^mover/ })).toHaveCount(0);
+    await expectHidden(page, cargo.second);
+  });
+
+  test("fletero: todas las paradas, reordenables", async ({ page }) => {
+    await openTrip(page, ROLES_TRIP, "carrier");
+    const stops = page.getByRole("region", { name: "paradas del viaje" });
+    await expect(stops.getByText(cargo.owner.pickupAddress)).toBeVisible();
+    await expect(stops.getByText(cargo.second.pickupAddress)).toBeVisible();
+    await expect(stops.getByRole("button", { name: /^mover/ })).toHaveCount(2);
+  });
+});

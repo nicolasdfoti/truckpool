@@ -243,6 +243,8 @@ export default function TripDetail() {
   // completo; las cargas ajenas son "otra carga", y a terceros solo les llega
   // el total ocupado, sin nombres.
   const seesCargoList = trip.viewerAccess !== "ANONYMOUS";
+  const seesStops =
+    trip.viewerAccess === "CARRIER_OWNER" || trip.viewerAccess === "PARTICIPANT";
   const visibleCargo = trip.cargoItems.filter((c) => c.status !== "CANCELLED");
   const occupancyItems =
     trip.viewerAccess === "CARRIER_OWNER" || trip.viewerAccess === "PARTICIPANT"
@@ -400,13 +402,19 @@ export default function TripDetail() {
           />
         </div>
 
-        {/* Paradas (pickups) del viaje */}
-        <section className="mt-8" aria-labelledby="stops-heading">
-          <h2 id="stops-heading" className="font-display text-[17px] font-medium">
-            paradas de retiro
-          </h2>
-          <TripStops />
-        </section>
+        {/* Paradas (pickups): solo el fletero y las empresas con carga viva (U19).
+            Al resto el endpoint le da 403, así que ni se pide. */}
+        {seesStops && (
+          <section className="mt-8" aria-labelledby="stops-heading">
+            <h2 id="stops-heading" className="font-display text-[17px] font-medium">
+              paradas de retiro
+            </h2>
+            <TripStops
+              tripId={trip.id}
+              canReorder={trip.viewerAccess === "CARRIER_OWNER"}
+            />
+          </section>
+        )}
 
         {/* Recorrido completo: salida, paradas en orden y llegada. */}
         <section className="mt-8" aria-labelledby="route-heading">

@@ -16,6 +16,8 @@ export function useCancelCargoItem(tripId: string) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["trip", tripId] });
       queryClient.invalidateQueries({ queryKey: ["trips"] });
+      // la parada de la carga retirada sale del recorrido
+      queryClient.invalidateQueries({ queryKey: ["tripStops", tripId] });
     },
   });
 }

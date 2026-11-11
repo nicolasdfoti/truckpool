@@ -11,6 +11,8 @@ export function useAddCargoItem(tripId: string) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["trip", tripId] });
       queryClient.invalidateQueries({ queryKey: ["trips"] });
+      // la carga nueva es una parada más (y la empresa pasa a verlas)
+      queryClient.invalidateQueries({ queryKey: ["tripStops", tripId] });
     },
   });
 }
