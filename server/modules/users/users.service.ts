@@ -10,6 +10,7 @@ import {
 import {
   CARRIER_CAN_CHARGE,
   toCargoItemResponse,
+  toCarrierReviewResponse,
   toTripSummary,
 } from "../../lib/mappers.js";
 import { endOfArgentinaDay } from "../../lib/dates.js";
@@ -199,7 +200,6 @@ export async function getCarrierProfile(id: string, viewer: { id: string } | nul
           orderBy: { createdAt: "desc" },
           take: RECENT_REVIEWS,
           include: {
-            fromUser: { select: { name: true } },
             trip: { select: { id: true, origin: true, destination: true } },
           },
         },
@@ -222,14 +222,8 @@ export async function getCarrierProfile(id: string, viewer: { id: string } | nul
     isAvailableNow: carrier.isAvailableNow,
     trips: carrier.tripsAsCarrier.map(toTripSummary),
     ...toRatingSummary(aggregate._avg.rating, aggregate._count._all),
-    reviews: carrier.reviewsReceived.map((review) => ({
-      id: review.id,
-      rating: review.rating,
-      comment: review.comment,
-      createdAt: review.createdAt,
-      fromName: review.fromUser.name,
-      trip: review.trip,
-    })),
+    // sin quién calificó (L2 ítem 10)
+    reviews: carrier.reviewsReceived.map(toCarrierReviewResponse),
   };
 }
 

@@ -218,9 +218,63 @@ export function tripViewerAccess(
   return "ANONYMOUS";
 }
 
+/**
+ * Reseña tal como sale de la base (con la relación al fletero). `fromUserId`
+ * se usa para calcular `viewerReviewed`, pero nunca sale en la respuesta.
+ */
+export type ReviewRow = {
+  id: string;
+  tripId: string;
+  fromUserId: string;
+  toUserId: string;
+  rating: number;
+  comment: string | null;
+  createdAt: Date;
+  toUser?: { name: string } | null;
+};
+
+/**
+ * Reseña en el detalle del viaje (L2 ítem 10): sin `fromUserId` ni `fromName`,
+ * para que nadie pueda ver qué empresas mandaron carga en un viaje leyendo
+ * quién lo calificó. El destinatario es siempre el fletero, que ya es público.
+ */
+export function toReviewResponse(review: ReviewRow) {
+  return {
+    id: review.id,
+    tripId: review.tripId,
+    toUserId: review.toUserId,
+    toName: review.toUser?.name ?? "",
+    rating: review.rating,
+    comment: review.comment,
+    createdAt: review.createdAt,
+  };
+}
+
+/** reseña en el perfil del fletero: el viaje sí, la empresa que calificó no */
+export function toCarrierReviewResponse(review: {
+  id: string;
+  rating: number;
+  comment: string | null;
+  createdAt: Date;
+  trip: { id: string; origin: string; destination: string };
+}) {
+  return {
+    id: review.id,
+    rating: review.rating,
+    comment: review.comment,
+    createdAt: review.createdAt,
+    trip: {
+      id: review.trip.id,
+      origin: review.trip.origin,
+      destination: review.trip.destination,
+    },
+  };
+}
+
 export type TripDetailSource = Trip & {
   cargoItems: CargoItemWithPayments[];
   carrier: { name: string };
+  reviews: ReviewRow[];
 };
 
 /**
@@ -229,10 +283,9 @@ export type TripDetailSource = Trip & {
  * `tripViewerAccess`. Las claves `cargoItems` y `otherCargo` van siempre, vacías
  * si no corresponde, para que el cliente no tenga que preguntar si existen.
  */
-export function toTripDetailResponse<R>(
+export function toTripDetailResponse(
   trip: TripDetailSource,
-  viewer: { id: string } | null,
-  reviews: R[]
+  viewer: { id: string } | null
 ) {
   const access = tripViewerAccess(trip, viewer);
   const active = trip.cargoItems.filter(isActiveCargo);
@@ -272,8 +325,12 @@ export function toTripDetailResponse<R>(
     carrierName: trip.carrier.name,
     depositPercent: trip.depositPercent,
     features: trip.features,
-    reviews,
+    reviews: trip.reviews.map(toReviewResponse),
     viewerAccess: access,
+    // si quien mira ya calificó el viaje: reemplaza comparar review.fromUserId
+    viewerReviewed: viewer
+      ? trip.reviews.some((review) => review.fromUserId === viewer.id)
+      : false,
     // el punto exacto de salida, solo para el fletero y sus empresas activas
     ...(seesDeparture ? { departureAddress: trip.departureAddress } : {}),
     cargoItems: cargoItems.map(toCargoItemResponse),

@@ -383,9 +383,11 @@ describe("calificaciones de fleteros", () => {
     expect(profile.reviews[0]).toMatchObject({
       rating: 5,
       comment: "cargó y descargó sin dramas",
-      fromName: "Comercial Norte",
       trip: { origin: "Rosario", destination: "Córdoba" },
     });
+    // sin quién calificó (L2 ítem 10)
+    expect(profile.reviews[0]).not.toHaveProperty("fromName");
+    expect(JSON.stringify(profile.reviews)).not.toContain("Comercial Norte");
   });
 
   it("getCarrierProfile devuelve ratingAvg null cuando no hay reseñas", async () => {

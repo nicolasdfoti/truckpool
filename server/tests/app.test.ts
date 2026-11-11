@@ -1856,11 +1856,12 @@ describe("carriers públicos", () => {
       ratingAvg: 4.5,
       ratingCount: 2,
     });
-    expect(res.body.reviews[0]).toMatchObject({
-      rating: 5,
-      comment: "muy puntual",
-      fromName: "Comercial Norte",
-    });
+    expect(res.body.reviews[0]).toMatchObject({ rating: 5, comment: "muy puntual" });
+    // sin quién calificó (L2 ítem 10): la reseña es del viaje, no de la empresa
+    expect(Object.keys(res.body.reviews[0]).sort()).toEqual(
+      ["comment", "createdAt", "id", "rating", "trip"].sort()
+    );
+    expect(JSON.stringify(res.body.reviews)).not.toContain("Comercial Norte");
   });
 
   // 02§2.1: el teléfono del fletero es para quien tiene cuenta, no para cualquiera
@@ -2005,12 +2006,13 @@ describe("POST /api/trips/:id/reviews", () => {
 
     expect(res.status).toBe(201);
     expect(res.body).toMatchObject({
-      fromUserId: "u2",
       toUserId: "u1",
       rating: 5,
-      fromName: "Comercial Norte",
       toName: "Transportes Flete",
     });
+    // misma forma que en el detalle: sin fromUserId ni fromName
+    expect(res.body).not.toHaveProperty("fromUserId");
+    expect(res.body).not.toHaveProperty("fromName");
   });
 
   it("ignora un toUserId que manda el cliente y califica al fletero del viaje", async () => {
@@ -2442,6 +2444,7 @@ describe("GET /api/trips/:id por rol (U7)", () => {
     "status",
     "truckType",
     "viewerAccess",
+    "viewerReviewed",
   ];
   const CLAVES_PARTICIPANTE = [...CLAVES_BASE, "departureAddress"].sort();
   const CLAVES_CARGA = [
@@ -2561,6 +2564,74 @@ describe("GET /api/trips/:id por rol (U7)", () => {
     const body = await pedir("no-es-un-jwt");
     expect(body.viewerAccess).toBe("ANONYMOUS");
     expect(body.cargoItems).toEqual([]);
+  });
+
+  describe("reseñas sin quién calificó (L2 ítem 10)", () => {
+    // el mismo viaje, ya completado, con la reseña de Comercial Norte
+    const completado = {
+      ...viaje,
+      status: "COMPLETED" as const,
+      reviews: [
+        {
+          id: "r-norte",
+          tripId: "t-roles",
+          fromUserId: "c-norte",
+          toUserId: "u1",
+          rating: 5,
+          comment: "puntual y prolijo",
+          createdAt: new Date("2026-12-02T10:00:00.000Z"),
+          fromUser: { name: "Comercial Norte" },
+          toUser: { name: "Transportes Flete" },
+        },
+      ],
+    };
+
+    async function pedirCompletado(token?: string) {
+      vi.mocked(prisma.trip.findUnique).mockResolvedValue(completado as never);
+      vi.mocked(prisma.revokedToken.findUnique).mockResolvedValue(null as never);
+      const req = request(app).get("/api/trips/t-roles");
+      const res = token ? await req.set("Authorization", `Bearer ${token}`) : await req;
+      expect(res.status).toBe(200);
+      return res.body;
+    }
+
+    const CLAVES_RESENA = [
+      "comment",
+      "createdAt",
+      "id",
+      "rating",
+      "toName",
+      "toUserId",
+      "tripId",
+    ];
+
+    it.each([
+      ["anónimo", undefined],
+      ["otra empresa del viaje", "acero"],
+      ["fletero dueño", "carrier"],
+    ])("%s ve la reseña sin el id ni el nombre de la empresa", async (_rol, quien) => {
+      const token =
+        quien === "acero"
+          ? signToken({ id: "c-acero", role: "COMPANY" })
+          : quien === "carrier"
+            ? carrierToken
+            : undefined;
+      const body = await pedirCompletado(token);
+
+      expect(body.reviews).toHaveLength(1);
+      expect(claves(body.reviews[0])).toEqual(CLAVES_RESENA);
+      expect(body.reviews[0]).toMatchObject({ rating: 5, comment: "puntual y prolijo" });
+      expect(JSON.stringify(body.reviews)).not.toContain("c-norte");
+      expect(JSON.stringify(body.reviews)).not.toContain("Comercial Norte");
+      expect(body.viewerReviewed).toBe(false);
+    });
+
+    it("la empresa que calificó lo sabe por viewerReviewed", async () => {
+      const body = await pedirCompletado(norteToken);
+
+      expect(body.viewerReviewed).toBe(true);
+      expect(claves(body.reviews[0])).toEqual(CLAVES_RESENA);
+    });
   });
 });
 

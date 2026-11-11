@@ -1,6 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { Prisma } from "@prisma/client";
-import { toCargoItemResponse, toTripSummary } from "../lib/mappers.js";
+import {
+  toCarrierReviewResponse,
+  toCargoItemResponse,
+  toReviewResponse,
+  toTripSummary,
+} from "../lib/mappers.js";
 
 // D7 (c): la comisión es solo sobre lo efectivamente cobrado. MP devuelve la
 // comisión en proporción a lo reembolsado (verificado con pago real, ver D7 en
@@ -167,6 +172,50 @@ describe("mappers por whitelist (U7)", () => {
       "tripId",
       "volume",
     ]);
+  });
+
+  // L2 ítem 10: las reseñas no dicen qué empresa calificó
+  const resena = {
+    id: "r1",
+    tripId: "t1",
+    fromUserId: "c-norte",
+    toUserId: "u1",
+    rating: 5,
+    comment: "puntual",
+    createdAt: new Date("2026-12-02T10:00:00.000Z"),
+    fromUser: { name: "Comercial Norte" },
+    toUser: { name: "Transportes Flete" },
+    trip: { id: "t1", origin: "Córdoba", destination: "Rosario" },
+    campoNuevo: "no debería salir",
+  };
+
+  it("toReviewResponse no trae fromUserId ni fromName", () => {
+    const review = toReviewResponse(resena);
+
+    expect(Object.keys(review).sort()).toEqual([
+      "comment",
+      "createdAt",
+      "id",
+      "rating",
+      "toName",
+      "toUserId",
+      "tripId",
+    ]);
+    expect(JSON.stringify(review)).not.toContain("c-norte");
+    expect(JSON.stringify(review)).not.toContain("Comercial Norte");
+  });
+
+  it("toCarrierReviewResponse (perfil del fletero) tampoco", () => {
+    const review = toCarrierReviewResponse(resena);
+
+    expect(Object.keys(review).sort()).toEqual([
+      "comment",
+      "createdAt",
+      "id",
+      "rating",
+      "trip",
+    ]);
+    expect(JSON.stringify(review)).not.toContain("Comercial Norte");
   });
 
   it("toTripSummary no publica el punto exacto de salida", () => {

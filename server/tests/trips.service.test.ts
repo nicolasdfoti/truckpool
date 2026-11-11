@@ -3986,17 +3986,12 @@ describe("addCargoItem", () => {
           rating: 5,
           comment: "puntual",
         },
-        include: {
-          fromUser: { select: { name: true } },
-          toUser: { select: { name: true } },
-        },
+        // el nombre de la empresa ya no se pide: no sale en la respuesta (ítem 10)
+        include: { toUser: { select: { name: true } } },
       });
-      expect(review).toMatchObject({
-        fromUserId: "u2",
-        toUserId: "u1",
-        fromName: "Comercial Norte",
-        toName: "Transportes Flete",
-      });
+      expect(review).toMatchObject({ toUserId: "u1", toName: "Transportes Flete" });
+      expect(review).not.toHaveProperty("fromUserId");
+      expect(review).not.toHaveProperty("fromName");
     });
 
     it("cada empresa del viaje califica al fletero aunque haya varias", async () => {

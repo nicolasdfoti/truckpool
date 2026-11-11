@@ -8,6 +8,7 @@ import {
   isActiveCargo,
   toCargoItemResponse,
   toCargoQuoteResponse,
+  toReviewResponse,
   toStopResponse,
   toTripDetailResponse,
   toTripSummary,
@@ -387,16 +388,13 @@ export async function getTripById(id: string, viewer: { id: string } | null) {
       carrier: { select: { name: true } },
       reviews: {
         orderBy: { createdAt: "desc" },
-        include: {
-          fromUser: { select: { name: true } },
-          toUser: { select: { name: true } },
-        },
+        include: { toUser: { select: { name: true } } },
       },
     },
   });
   if (!trip) throw new TripNotFoundError();
 
-  return toTripDetailResponse(trip, viewer, trip.reviews.map(toReviewResponse));
+  return toTripDetailResponse(trip, viewer);
 }
 
 /**
@@ -1675,30 +1673,6 @@ export async function addCargoItem(
   return created.response;
 }
 
-export function toReviewResponse(review: {
-  id: string;
-  tripId: string;
-  fromUserId: string;
-  toUserId: string;
-  rating: number;
-  comment: string | null;
-  createdAt: Date;
-  fromUser?: { name: string } | null;
-  toUser?: { name: string } | null;
-}) {
-  return {
-    id: review.id,
-    tripId: review.tripId,
-    fromUserId: review.fromUserId,
-    toUserId: review.toUserId,
-    rating: review.rating,
-    comment: review.comment,
-    createdAt: review.createdAt,
-    fromName: review.fromUser?.name ?? "",
-    toName: review.toUser?.name ?? "",
-  };
-}
-
 /**
  * Calificación de una empresa al fletero que llevó su carga. Solo al completar
  * el viaje, solo la empresa con carga activa en él y una sola vez.
@@ -1763,10 +1737,7 @@ export async function createReview(
       rating: input.rating,
       comment: input.comment && input.comment.length > 0 ? input.comment : null,
     },
-    include: {
-      fromUser: { select: { name: true } },
-      toUser: { select: { name: true } },
-    },
+    include: { toUser: { select: { name: true } } },
   });
   return toReviewResponse(review);
 }
