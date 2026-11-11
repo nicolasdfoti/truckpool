@@ -106,6 +106,8 @@ migración Prisma (tracking). Tests: `tests/trips.service.test.ts`, `tests/app.t
 - [ ] `trackingCode` aleatorio ≥ 80 bits (`TP-` + base32), migración de los existentes, fuera de `/route` — U9 — `trips.service.ts:930` — tests: formato/unicidad; `/route` no lo trae; `/api/tracking/:code` válido e inválido (hoy 0 tests).
 - [ ] `GET /carriers/:id` sin `phone` para anónimos — 02§2.1 — `users.service.ts:201` — test: anónimo no recibe `phone`.
 - [ ] `getTripLocation` sin historial devuelve la última posición — 01§2, 02#14 — `trips.service.ts:1514,1581` — test: el mock verifica `orderBy: desc`.
+- [ ] Manifiesto PDF por rol (opción a): la empresa recibe un remito solo con su carga y los totales del viaje; el fletero, el completo. Hoy cualquier empresa con carga viva recibe descripción, volumen, `priceShare` y nombre de las demás (hallado al revisar el ítem del DTO) — U7 — `getTripManifest` en `trips.service.ts`, `lib/manifestPdf.ts` — test: el PDF de la empresa A no trae datos de B; el del fletero trae todas.
+- [ ] Reseñas sin quién calificó: en el detalle del viaje y en el perfil del fletero se sacan `fromUserId` y `fromName` (hoy un anónimo ve qué empresas mandaron carga en un viaje completado); `viewerReviewed` le dice a la empresa logueada si ya calificó ese viaje — U7 — `toReviewResponse` en `trips.service.ts`, `getCarrierProfile` en `users.service.ts` — test: snapshot de claves de la reseña; `viewerReviewed` true solo para la empresa que la escribió.
 
 ### L3 — Vista por rol en el cliente · BLOQUEANTE · M
 Archivos: `pages/TripDetail.tsx`, `components/CargoFillDiagram.tsx`, `components/TripStops.tsx`,
@@ -115,6 +117,7 @@ Tests: e2e nuevo `tests-e2e/trip-detail-roles.spec.ts` (anónimo / otra empresa 
 - [ ] Paradas: ocultas a no participantes, `retry: false` en 401/403/404, invalidar `stops` al reservar — U19 — `TripStops.tsx:111,175`.
 - [ ] `/rastrear`: `retry: false` en 404, botón vuelve a "buscar", error sin el formato del código — U9, 03/Rastrear#1-3.
 - [ ] El fletero dueño no ve "sumar carga a este viaje" — 03/Confirmar#4, QW17.
+- [ ] Reseñas sin nombre de la empresa (de L2): `useTripReviewStatus` usa `trip.viewerReviewed` en vez de comparar `review.fromUserId`; `TripDetail.tsx` y `CarrierProfile.tsx` muestran una etiqueta fija en vez de `fromName`. No usar "empresa verificada": las empresas no pasan por verificación (solo los fleteros). Propuesta: "empresa que mandó carga en este viaje" (detalle) y "empresa que viajó con este fletero" (perfil) — `hooks/useTripReviewStatus.ts:27`, `TripDetail.tsx:792`, `CarrierProfile.tsx:129`.
 - [ ] e2e: el anónimo no ve descripción, dirección, monto ni código ajenos; tracking inexistente responde en < 2 s.
 
 ### L4 — Ciclo de vida de cargas · BLOQUEANTE · L
