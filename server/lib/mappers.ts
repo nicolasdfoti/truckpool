@@ -281,6 +281,55 @@ export function toTripDetailResponse<R>(
   };
 }
 
+/**
+ * Una parada del recorrido (U19). `FULL` es la parada completa: para el fletero
+ * todas, para la empresa las suyas. `OTHER` es la parada de otra empresa: solo
+ * el lugar en el orden y el volumen (la ciudad llega con pickupCity, L6).
+ */
+export type StopItem =
+  | {
+      kind: "FULL";
+      cargoItemId: string;
+      pickupAddress: string;
+      pickupLat: number | null;
+      pickupLng: number | null;
+      trackingCode: string;
+      description: string;
+      volume: number;
+      status: CargoItemStatus;
+      stopOrder: number;
+    }
+  | { kind: "OTHER"; stopOrder: number; volume: number };
+
+export function toStopResponse(
+  item: {
+    id: string;
+    pickupAddress: string;
+    pickupLat: number | null;
+    pickupLng: number | null;
+    trackingCode: string;
+    description: string;
+    volume: number;
+    status: CargoItemStatus;
+  },
+  stopOrder: number,
+  kind: StopItem["kind"]
+): StopItem {
+  if (kind === "OTHER") return { kind, stopOrder, volume: item.volume };
+  return {
+    kind,
+    cargoItemId: item.id,
+    pickupAddress: item.pickupAddress,
+    pickupLat: item.pickupLat,
+    pickupLng: item.pickupLng,
+    trackingCode: item.trackingCode,
+    description: item.description,
+    volume: item.volume,
+    status: item.status,
+    stopOrder,
+  };
+}
+
 /** cotización de una carga antes de reservar: los montos de `cargoPrice` en pesos */
 export function toCargoQuoteResponse(
   quote: CargoPrice,

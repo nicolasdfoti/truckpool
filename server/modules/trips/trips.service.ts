@@ -8,8 +8,10 @@ import {
   isActiveCargo,
   toCargoItemResponse,
   toCargoQuoteResponse,
+  toStopResponse,
   toTripDetailResponse,
   toTripSummary,
+  type StopItem,
 } from "../../lib/mappers.js";
 import { geocode, haversineKm, type LatLng } from "../../lib/geocode.js";
 import { fetchRouteGeometry } from "../../lib/routing.js";
@@ -2139,19 +2141,9 @@ export async function getTripLocation(
  * Paradas ordenadas del viaje (pickups). Devuelve la lista final combinando
  * stopOrder manual y proyección automática sobre la ruta origen→destino.
  * Solo para el transportista y las empresas con alguna carga viva en el viaje.
+ * El fletero ve todas completas; la empresa, las suyas completas y las ajenas
+ * como "otra parada", con el orden y el volumen (U19, ver toStopResponse).
  */
-export type StopItem = {
-  cargoItemId: string;
-  pickupAddress: string;
-  pickupLat: number | null;
-  pickupLng: number | null;
-  trackingCode: string;
-  description: string;
-  volume: number;
-  status: string;
-  stopOrder: number;
-};
-
 export async function getTripStops(tripId: string, userId: string): Promise<StopItem[]> {
   const participants = await resolveParticipants(tripId);
   assertActiveParticipant(
@@ -2159,6 +2151,7 @@ export async function getTripStops(tripId: string, userId: string): Promise<Stop
     userId,
     "solo podés ver las paradas de los viajes donde tenés carga o sos el transportista"
   );
+  const isCarrier = participants.carrier.id === userId;
 
   const trip = await prisma.trip.findUnique({
     where: { id: tripId },
@@ -2171,6 +2164,7 @@ export async function getTripStops(tripId: string, userId: string): Promise<Stop
         where: { status: { not: "CANCELLED" } },
         select: {
           id: true,
+          companyId: true,
           pickupAddress: true,
           pickupLat: true,
           pickupLng: true,
@@ -2202,17 +2196,13 @@ export async function getTripStops(tripId: string, userId: string): Promise<Stop
   );
 
   return trip.cargoItems
-    .map((item) => ({
-      cargoItemId: item.id,
-      pickupAddress: item.pickupAddress,
-      pickupLat: item.pickupLat,
-      pickupLng: item.pickupLng,
-      trackingCode: item.trackingCode,
-      description: item.description,
-      volume: item.volume,
-      status: item.status,
-      stopOrder: order.get(item.id) ?? 0,
-    }))
+    .map((item) =>
+      toStopResponse(
+        item,
+        order.get(item.id) ?? 0,
+        isCarrier || item.companyId === userId ? "FULL" : "OTHER"
+      )
+    )
     .sort((a, b) => a.stopOrder - b.stopOrder);
 }
 

@@ -5394,3 +5394,107 @@ describe("getTripStops: acceso", () => {
     await expect(tripsService.getTripStops("t1", "u1")).resolves.toBeInstanceOf(Array);
   });
 });
+
+// U19: cada empresa ve su parada completa y las ajenas solo como "otra parada",
+// con el orden y el volumen. El fletero ve todas.
+describe("getTripStops por rol (U19)", () => {
+  function parada(o: {
+    id: string;
+    companyId: string;
+    description: string;
+    pickupAddress: string;
+    trackingCode: string;
+    volume: number;
+    stopOrder: number;
+  }) {
+    return {
+      id: o.id,
+      companyId: o.companyId,
+      company: { id: o.companyId, name: `Empresa ${o.companyId}` },
+      status: "CONFIRMED",
+      description: o.description,
+      pickupAddress: o.pickupAddress,
+      pickupLat: -32.95,
+      pickupLng: -60.65,
+      trackingCode: o.trackingCode,
+      volume: o.volume,
+      stopOrder: o.stopOrder,
+    };
+  }
+
+  beforeEach(() => {
+    vi.mocked(prisma.trip.findUnique).mockReset();
+    // el mismo objeto sirve para resolveParticipants y para la consulta de paradas
+    vi.mocked(prisma.trip.findUnique).mockResolvedValue(
+      baseTrip({
+        carrier: { id: "u1", name: "Flete" },
+        originLat: null,
+        originLng: null,
+        destLat: null,
+        destLng: null,
+        cargoItems: [
+          parada({
+            id: "ci-norte",
+            companyId: "c-norte",
+            description: "Cajas de cerámicos",
+            pickupAddress: "Bv. Oroño 1200, Rosario",
+            trackingCode: "TP-NORTE-C1",
+            volume: 5,
+            stopOrder: 2,
+          }),
+          parada({
+            id: "ci-acero",
+            companyId: "c-acero",
+            description: "Bobinas de acero",
+            pickupAddress: "Av. Pellegrini 900, Rosario",
+            trackingCode: "TP-ACERO-C2",
+            volume: 4,
+            stopOrder: 1,
+          }),
+        ],
+      }) as never
+    );
+  });
+
+  const CLAVES_COMPLETA = [
+    "cargoItemId",
+    "description",
+    "kind",
+    "pickupAddress",
+    "pickupLat",
+    "pickupLng",
+    "status",
+    "stopOrder",
+    "trackingCode",
+    "volume",
+  ];
+
+  it("la empresa ve su parada completa y la ajena solo con orden y volumen", async () => {
+    const stops = await tripsService.getTripStops("t1", "c-norte");
+
+    expect(stops).toHaveLength(2);
+    // el orden del recorrido se mantiene: la ajena es la 1.ª
+    expect(stops[0]).toEqual({ kind: "OTHER", stopOrder: 1, volume: 4 });
+    expect(Object.keys(stops[1]!).sort()).toEqual(CLAVES_COMPLETA);
+    expect(stops[1]).toMatchObject({
+      kind: "FULL",
+      cargoItemId: "ci-norte",
+      pickupAddress: "Bv. Oroño 1200, Rosario",
+      trackingCode: "TP-NORTE-C1",
+      stopOrder: 2,
+    });
+
+    const json = JSON.stringify(stops);
+    for (const ajeno of ["ci-acero", "c-acero", "Bobinas", "Pellegrini", "TP-ACERO"]) {
+      expect(json).not.toContain(ajeno);
+    }
+  });
+
+  it("el fletero ve todas las paradas completas", async () => {
+    const stops = await tripsService.getTripStops("t1", "u1");
+
+    expect(stops.map((s) => s.kind)).toEqual(["FULL", "FULL"]);
+    for (const stop of stops) expect(Object.keys(stop).sort()).toEqual(CLAVES_COMPLETA);
+    expect(stops.map((s) => s.stopOrder)).toEqual([1, 2]);
+  });
+});
