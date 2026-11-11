@@ -1,21 +1,24 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
+import { retryUnlessDenied } from "../lib/queryRetry";
 import type { TripRoute, TripRouteGeometry } from "../types/trip";
 
 /**
- * Recorrido completo del viaje (partida → paradas de retiro en orden →
- * destino). Es público, como el resto del detalle del viaje.
+ * Recorrido del viaje (partida → paradas de retiro en orden → destino). Con
+ * sesión y solo para el fletero y las empresas con carga viva (U7): al resto
+ * el server le responde 401/403, así que la página no lo pide (`enabled`).
  *
- * No cambia solo: una carga nueva o el fletero reordenando las paradas lo
- * cambian, y eso ya invalida ["trip", id] en la página de detalle. Con
- * staleTime largo no lo volvemos a pedir en cada render.
+ * No cambia solo: reservar, retirar una carga o reordenar las paradas lo
+ * cambian, y esas mutaciones lo invalidan. Con staleTime largo no lo volvemos a
+ * pedir en cada render.
  */
-export function useTripRoute(tripId: string) {
+export function useTripRoute(tripId: string, enabled = true) {
   return useQuery({
     queryKey: ["trip-route", tripId],
     queryFn: () => api.get<TripRoute>(`/trips/${tripId}/route`),
-    enabled: Boolean(tripId),
+    enabled: enabled && Boolean(tripId),
     staleTime: 60 * 1000,
+    retry: retryUnlessDenied,
   });
 }
 
@@ -28,11 +31,11 @@ export function useTripRoute(tripId: string) {
  * igual. Por eso la query no re-lanza; si falla, `geometry` queda en null y el
  * mapa cae al fallback silencioso.
  */
-export function useTripRouteGeometry(tripId: string) {
+export function useTripRouteGeometry(tripId: string, enabled = true) {
   return useQuery({
     queryKey: ["trip-route-geometry", tripId],
     queryFn: () => api.get<TripRouteGeometry>(`/trips/${tripId}/route-geometry`),
-    enabled: Boolean(tripId),
+    enabled: enabled && Boolean(tripId),
     staleTime: 5 * 60 * 1000,
     // si OSRM no respondió, no insistimos en cada mount: la geometría real es
     // un extra, el recorrido ya se está dibujando sin ella

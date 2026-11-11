@@ -19,6 +19,8 @@ const ROLES_TRIP = `/viajes/${E2E.rolesTripId}`;
 
 // 4 + 3 m³ vivos de 30: la carga retirada no cuenta
 const OCCUPANCY_LINE = "ya hay 2 cargas en este viaje (7 m³). quedan 23 m³ libres.";
+const ROUTE_TEXT_FOR_THIRD_PARTIES =
+  "sale de Córdoba y llega a Rosario. el mapa con las paradas lo ven el fletero y las empresas con carga en el viaje.";
 
 /** las cargas del viaje de roles con todos sus datos, leídas como el fletero */
 let cargo: { owner: CargoRow; second: CargoRow; former: CargoRow };
@@ -165,4 +167,30 @@ test.describe("paradas por rol", () => {
     await expect(stops.getByText(cargo.second.pickupAddress)).toBeVisible();
     await expect(stops.getByRole("button", { name: /^mover/ })).toHaveCount(2);
   });
+});
+
+test.describe("recorrido por rol", () => {
+  for (const [label, user] of [
+    ["anónimo", null],
+    ["otra empresa", "otherCompany"],
+  ] as const) {
+    test(`${label}: origen y destino, sin mapa ni 401/403`, async ({ page }) => {
+      const denied = await openTrip(page, ROLES_TRIP, user);
+      await expect(page.getByText(ROUTE_TEXT_FOR_THIRD_PARTIES)).toBeVisible();
+      await expect(page.locator(".leaflet-container")).toHaveCount(0);
+      expect(denied).toEqual([]);
+    });
+  }
+
+  for (const [label, user] of [
+    ["empresa dueña", "company"],
+    ["fletero", "carrier"],
+  ] as const) {
+    test(`${label}: mapa del recorrido y punto de salida`, async ({ page }) => {
+      const denied = await openTrip(page, ROLES_TRIP, user);
+      await expect(page.locator(".leaflet-container")).toHaveCount(1);
+      await expect(page.getByText(`sale desde ${E2E.departureAddress}`)).toBeVisible();
+      expect(denied).toEqual([]);
+    });
+  }
 });

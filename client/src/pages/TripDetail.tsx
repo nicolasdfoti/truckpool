@@ -160,25 +160,25 @@ export default function TripDetail() {
   const createPaymentPreference = useCreatePaymentPreference(id ?? "");
   const createReview = useCreateReview(id ?? "");
   const reviewStatus = useTripReviewStatus(trip, user);
-  // el mapa solo aparece con el viaje en tránsito, y solo lo ven los que tienen
-  // algo que ver con él (el fletero y las empresas con carga).
+  // U7/U8: recorrido, paradas, ubicación y remito son del fletero dueño y de
+  // las empresas con carga viva. Al resto (también el ex participante, D9) el
+  // server le responde 401/403, así que ni se piden.
+  const isActiveViewer =
+    trip?.viewerAccess === "CARRIER_OWNER" || trip?.viewerAccess === "PARTICIPANT";
+  // el mapa de ubicación solo aparece con el viaje en tránsito
   const isInTransit = trip?.status === "IN_TRANSIT";
-  const canSeeLocation =
-    isInTransit &&
-    Boolean(user) &&
-    (user?.id === trip?.carrierId ||
-      trip?.cargoItems.some((item) => item.companyId === user?.id));
+  const canSeeLocation = isInTransit && isActiveViewer;
   const { data: tripLocation } = useTripLocation(id ?? "", {
     enabled: canSeeLocation,
     isInTransit: Boolean(isInTransit),
   });
-  // El recorrido (partida → paradas → destino) es público y no depende de que
-  // el viaje esté en tránsito: se ve desde que se publica, que es justo cuando
-  // la empresa quiere ver dónde pasa a buscar su carga.
-  const { data: tripRoute } = useTripRoute(id ?? "");
+  // El recorrido (partida → paradas → destino) no depende de que el viaje esté
+  // en tránsito: se ve desde que la empresa reserva, que es justo cuando quiere
+  // ver dónde pasa a buscar su carga.
+  const { data: tripRoute } = useTripRoute(id ?? "", isActiveViewer);
   // La geometría real es un extra: si OSRM no responde, la query queda vacía y
   // el mapa del recorrido dibuja las rectas entre los puntos, sin avisar.
-  const { data: tripRouteGeometry } = useTripRouteGeometry(id ?? "");
+  const { data: tripRouteGeometry } = useTripRouteGeometry(id ?? "", isActiveViewer);
 
   const [description, setDescription] = useState("");
   const [volume, setVolume] = useState("");
@@ -243,8 +243,6 @@ export default function TripDetail() {
   // completo; las cargas ajenas son "otra carga", y a terceros solo les llega
   // el total ocupado, sin nombres.
   const seesCargoList = trip.viewerAccess !== "ANONYMOUS";
-  const seesStops =
-    trip.viewerAccess === "CARRIER_OWNER" || trip.viewerAccess === "PARTICIPANT";
   const visibleCargo = trip.cargoItems.filter((c) => c.status !== "CANCELLED");
   const occupancyItems =
     trip.viewerAccess === "CARRIER_OWNER" || trip.viewerAccess === "PARTICIPANT"
@@ -263,7 +261,7 @@ export default function TripDetail() {
   // el remito tiene sentido recién cuando el viaje arrancó o terminó:
   // mientras está abierto o lleno las cargas pueden cambiar.
   const canDownloadManifest =
-    isParticipantInChat && (trip.status === "IN_TRANSIT" || trip.status === "COMPLETED");
+    isActiveViewer && (trip.status === "IN_TRANSIT" || trip.status === "COMPLETED");
   const canConfirm = (companyId: string) =>
     (user?.role === "CARRIER" && user.id === trip.carrierId) ||
     (user?.role === "COMPANY" && user.id === companyId);
@@ -404,7 +402,7 @@ export default function TripDetail() {
 
         {/* Paradas (pickups): solo el fletero y las empresas con carga viva (U19).
             Al resto el endpoint le da 403, así que ni se pide. */}
-        {seesStops && (
+        {isActiveViewer && (
           <section className="mt-8" aria-labelledby="stops-heading">
             <h2 id="stops-heading" className="font-display text-[17px] font-medium">
               paradas de retiro
@@ -421,11 +419,18 @@ export default function TripDetail() {
           <h2 id="route-heading" className="font-display text-[17px] font-medium">
             recorrido del viaje
           </h2>
-          <p className="mt-1 text-[13px] text-ink-muted">
-            los números son el orden en el que se pasan los puntos.
-          </p>
-          {tripRoute ? (
+          {!isActiveViewer ? (
+            // sin mapa: el detalle no trae coordenadas y /route es solo para
+            // participantes (el mapa de origen y destino queda para L10)
+            <p className="mt-1 text-[13px] text-ink-muted">
+              sale de {trip.origin} y llega a {trip.destination}. el mapa con las paradas
+              lo ven el fletero y las empresas con carga en el viaje.
+            </p>
+          ) : tripRoute ? (
             <>
+              <p className="mt-1 text-[13px] text-ink-muted">
+                los números son el orden en el que se pasan los puntos.
+              </p>
               <LazyTripRouteMap
                 className="mt-3 h-80"
                 route={tripRoute}
@@ -447,7 +452,12 @@ export default function TripDetail() {
               )}
             </>
           ) : (
-            <div className="mt-3 h-80 animate-pulse rounded-[10px] border border-line bg-canvas" />
+            <>
+              <p className="mt-1 text-[13px] text-ink-muted">
+                los números son el orden en el que se pasan los puntos.
+              </p>
+              <div className="mt-3 h-80 animate-pulse rounded-[10px] border border-line bg-canvas" />
+            </>
           )}
         </section>
 

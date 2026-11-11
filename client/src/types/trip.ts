@@ -80,7 +80,6 @@ export type RoutePoint = {
   lat: number;
   lng: number;
   cargoItemId: string | null;
-  trackingCode: string | null;
 };
 
 export type TripRoute = {
