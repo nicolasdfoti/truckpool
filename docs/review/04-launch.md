@@ -242,13 +242,24 @@ Tests: `tests/users.service.test.ts`, `tests/app.test.ts`.
 ## 3. Orden y dependencias
 ```
 D1, D3, D4, D5 decididas ──► antes de L4/L6/L7
-L1 ──► L4 ──┬──► L7 ──► (prueba MP sandbox de punta a punta) ──► LANZAMIENTO ──► L8, L9 ──► L10, L11
+L1 ──► L4 ──┬──► L7 ──► revisión de diseño ──► (prueba MP sandbox de punta a punta) ──► LANZAMIENTO ──► L8, L9 ──► L10, L11
 L2 ──► L3 ──┘      ▲
 R1, R2 ────────────┘ (e2e de L3/L7)        L5, L6: independientes, en cualquier hueco antes
 ```
-Secuencia: **L1 → L4 → L2 → L3 → L5 (+R4) → L6 → L7** → gate → L8 → L9 → L10 → L11.
+Secuencia: **L1 → L4 → L2 → L3 → L5 (+R4) → L6 → L7 → revisión de diseño** → gate → L8 → L9 →
+L10 → L11.
+**Revisión de diseño** (etapa entre L7 y el gate, con todos los BLOQUEANTE ya hechos):
+- recorrido completo con Playwright en desktop (1440×900) y mobile (390×844), con capturas,
+  como anónimo, empresa, fletero y admin;
+- flujos de plata de punta a punta: reservar, pagar seña, retorno del pago (`/pagos/retorno`),
+  retirar la carga, salir (IN_TRANSIT) y cancelar el viaje;
+- los chequeos de `03-diseno.md` en cada pantalla: estados vacío, de carga y de error, copy,
+  contraste, foco, targets táctiles y consistencia visual (03§3);
+- los hallazgos se clasifican con la escala de 03 (P1/P2/P3). Antes del deploy se arreglan solo
+  los P1 y P2; los P3 van a L8 (si son quick wins) o a L10.
 L11 al final porque mueve archivos que tocan L1–L4. **Gate**: todos los BLOQUEANTE tildados;
-server `npm test`/`typecheck`/`lint`; client `lint`/`build`; e2e verdes; homologación MP; pago
+revisión de diseño sin P1 ni P2 abiertos; server `npm test`/`typecheck`/`lint`; client
+`lint`/`build`; e2e verdes; homologación MP; pago
 real con montos chicos (seña, saldo, retiro a 30 h → 50 %, salida con una PENDING).
 En esa prueba, revisar también en el historial de notificaciones del sandbox si los
 reintentos de MP llegan con el `ts` original firmado (B3): si es así, ampliar la ventana
