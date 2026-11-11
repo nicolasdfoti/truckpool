@@ -24,6 +24,7 @@ import { refundPayment } from "../lib/mercadopago.js";
 import { salidaEn } from "./helpers/salida.js";
 import { cargoPrice } from "../lib/pricing.js";
 import { CARRIER_CAN_CHARGE } from "../lib/mappers.js";
+import { TRACKING_CODE_PATTERN } from "../lib/trackingCode.js";
 
 // Los avisos son best-effort: en los tests de trips lo que importa es a Quién
 // se avisa y con qué tipo/title, nunca que el email salga. Por eso el módulo de
@@ -1990,6 +1991,23 @@ describe("addCargoItem", () => {
       });
 
       expect(result.volume).toBe(10);
+    });
+
+    it("guarda un trackingCode aleatorio con el formato nuevo (U9)", async () => {
+      vi.mocked(fetchRouteGeometry).mockResolvedValue(null);
+
+      await tripsService.addCargoItem("t1", "c1", {
+        description: "Maquinaria",
+        pickupAddress: "Córdoba, Córdoba",
+        volume: 10,
+      });
+
+      const data = tx.cargoItem.create.mock.calls[0]?.[0]?.data as {
+        trackingCode: string;
+      };
+      // ya no sale del id del viaje ni del orden de la carga (TP-{tripId}-C{n})
+      expect(data.trackingCode).toMatch(TRACKING_CODE_PATTERN);
+      expect(data.trackingCode).not.toMatch(/-C\d+$/);
     });
 
     it("falla con STOP_TOO_FAR_FROM_ROUTE cuando el pickup está lejos del trayecto (distancia > 8 km)", async () => {

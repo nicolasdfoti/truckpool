@@ -1,6 +1,7 @@
 import bcrypt from "bcryptjs";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
+import { generateTrackingCode } from "../lib/trackingCode.js";
 
 async function main() {
   const password = await bcrypt.hash("truckpool123", 10);
@@ -109,7 +110,7 @@ async function main() {
         pickupAddress: "Córdoba, Córdoba",
         pickupLat: coordsOf("Córdoba")?.lat ?? null,
         pickupLng: coordsOf("Córdoba")?.lng ?? null,
-        trackingCode: "TP-SEED-C1",
+        trackingCode: generateTrackingCode(),
       },
     });
     await prisma.payment.create({

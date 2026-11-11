@@ -15,6 +15,7 @@ import {
 } from "../../lib/mappers.js";
 import { geocode, haversineKm, type LatLng } from "../../lib/geocode.js";
 import { fetchRouteGeometry } from "../../lib/routing.js";
+import { generateTrackingCode, normalizeTrackingCode } from "../../lib/trackingCode.js";
 import { point, lineString, pointToLineDistance } from "@turf/turf";
 import {
   cargoPrice,
@@ -1396,11 +1397,6 @@ type CargoAddedEmail = {
   capacityTotal: number;
 };
 
-function generateTrackingCode(tripId: string, cargoIndex: number): string {
-  const suffix = tripId.slice(-4).toUpperCase();
-  return `TP-${suffix}-C${cargoIndex}`;
-}
-
 /**
  * Calcula el orden de parada proyectando cada pickup sobre la línea recta
  * origen→destino del viaje (producto punto normalizado). Los items con
@@ -1595,9 +1591,8 @@ export async function addCargoItem(
             }
           }
 
-          // trackingCode: TP-{ultimos4TripId}-C{n} donde n es el orden dentro del viaje
-          const cargoIndex = trip.cargoItems.length + 1;
-          const trackingCode = generateTrackingCode(tripId, cargoIndex);
+          // aleatorio (U9): el formato viejo se podía adivinar desde el id del viaje
+          const trackingCode = generateTrackingCode();
 
           const item = await tx.cargoItem.create({
             data: {
@@ -1657,7 +1652,7 @@ export async function addCargoItem(
       }
       // trackingCode unique constraint violation (P2002)
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
-        // reintentar generando un nuevo código (poco probable pero posible en concurrencia extrema)
+        // reintentar generando un nuevo código (con 80 bits, prácticamente imposible)
         continue;
       }
       throw err;
@@ -2654,27 +2649,61 @@ export type PublicTracking = {
   cargoStatus: string;
 };
 
-export async function getPublicTracking(
-  trackingCode: string
-): Promise<PublicTracking | null> {
-  const item = await prisma.cargoItem.findUnique({
-    where: { trackingCode },
-    include: {
-      trip: {
-        select: {
-          origin: true,
-          destination: true,
-          date: true,
-          departureTime: true,
-          status: true,
-        },
-      },
-    },
-  });
-  if (!item) return null;
+/** con el viaje así, el código viejo deja de andar (el nuevo sigue) */
+const LEGACY_CODE_EXPIRED: ReadonlySet<string> = new Set(["COMPLETED", "CANCELLED"]);
 
+const PUBLIC_TRACKING_INCLUDE = {
+  trip: {
+    select: {
+      origin: true,
+      destination: true,
+      date: true,
+      departureTime: true,
+      status: true,
+    },
+  },
+} as const;
+
+export async function getPublicTracking(
+  input: string
+): Promise<PublicTracking | null> {
+  const code = normalizeTrackingCode(input);
+  if (!code) return null;
+
+  const item = await prisma.cargoItem.findUnique({
+    where: { trackingCode: code },
+    include: PUBLIC_TRACKING_INCLUDE,
+  });
+  if (item) return toPublicTracking(item, item.trackingCode);
+
+  // códigos de antes de U9: valen hasta que el viaje termina o se cancela
+  const legacy = await prisma.cargoItem.findUnique({
+    where: { legacyTrackingCode: code },
+    include: PUBLIC_TRACKING_INCLUDE,
+  });
+  if (!legacy?.legacyTrackingCode || LEGACY_CODE_EXPIRED.has(legacy.trip.status)) {
+    return null;
+  }
+  // se responde con el código buscado: quien tiene el viejo no se entera del nuevo
+  return toPublicTracking(legacy, legacy.legacyTrackingCode);
+}
+
+function toPublicTracking(
+  item: {
+    description: string;
+    status: string;
+    trip: {
+      origin: string;
+      destination: string;
+      date: Date;
+      departureTime: string | null;
+      status: string;
+    };
+  },
+  trackingCode: string
+): PublicTracking {
   return {
-    trackingCode: item.trackingCode,
+    trackingCode,
     description: item.description,
     status: item.status,
     trip: {

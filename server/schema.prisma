@@ -214,8 +214,13 @@ model CargoItem {
   // geocodificación del pickup (best-effort, igual que Trip)
   pickupLat     Float?
   pickupLng     Float?
-  // código de seguimiento público, corto y legible: TP-{tripId.slice(-4)}-C{n}
+  // código de seguimiento público: TP-XXXX-XXXX-XXXX-XXXX, 80 bits aleatorios
+  // en base32 Crockford (lib/trackingCode.ts, U9)
   trackingCode  String  @unique
+  // el código con el formato viejo (TP-{tripId.slice(-4)}-C{n}) de las cargas
+  // creadas antes de U9. Sigue andando en el tracking público mientras el
+  // viaje no esté COMPLETED ni CANCELLED, para no romper los ya compartidos.
+  legacyTrackingCode String? @unique
   // orden de parada manual (null = cálculo automático por proyección sobre la
   // línea origen-destino del viaje). Si el carrier lo reordena, persiste aquí.
   stopOrder     Int?
