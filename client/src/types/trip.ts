@@ -171,12 +171,7 @@ export type CreateReviewInput = {
 export type TripViewerAccess =
   "ANONYMOUS" | "PARTICIPANT" | "FORMER_PARTICIPANT" | "CARRIER_OWNER";
 
-export type TripDetail = Omit<Trip, "platformFeePercent"> & {
-  /**
-   * el detalle de L2 no la manda (el resumen del listado sí): mientras tanto
-   * la UI cae al 10 % por defecto
-   */
-  platformFeePercent?: number;
+export type TripDetail = Trip & {
   /** cantidad de cargas vivas del viaje: el agregado que ven todos */
   cargoCount: number;
   viewerAccess: TripViewerAccess;

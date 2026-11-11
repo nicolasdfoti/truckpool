@@ -619,7 +619,7 @@ export default function TripDetail() {
                           carrierNetOf(item) !== null && (
                             <p className="text-[12px] text-success-deep font-medium">
                               tu neto: {currency(carrierNetOf(item) ?? 0)} (comisión{" "}
-                              {trip.platformFeePercent ?? 10}%)
+                              {trip.platformFeePercent}%)
                             </p>
                           )}
                         {item.pickupAddress && (
