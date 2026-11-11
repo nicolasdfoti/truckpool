@@ -1575,7 +1575,7 @@ export async function addCargoItem(
 
           // validar distancia del pickup al trayecto del viaje (si tenemos coordenadas y geometría)
           if (pickupCoords) {
-            const routeGeometry = await getTripRouteGeometry(tripId);
+            const routeGeometry = await getFullRouteGeometry(tripId);
             if (routeGeometry && routeGeometry.length >= 2) {
               const pickupPoint = point([pickupCoords.lng, pickupCoords.lat]);
               const routeLine = lineString(routeGeometry);
@@ -2341,7 +2341,6 @@ export type RoutePoint = {
   lat: number;
   lng: number;
   cargoItemId: string | null;
-  trackingCode: string | null;
 };
 
 export type TripRoute = {
@@ -2359,19 +2358,17 @@ export type TripRoute = {
 type RouteCandidate = Omit<RoutePoint, "order">;
 
 /**
- * El recorrido completo del viaje, en el orden en que el camión lo recorre:
- * punto exacto de partida (o el origin general si el fletero no indicó uno),
- * cada pickup de carga viva en su stopOrder, y el destino.
- *
- * Sin auth: el mapa del viaje es público, como el resto de /trips/:id.
- *
- * Los puntos sin coordenadas quedan afuera (no se pueden dibujar) y
- * `incomplete` avisale al cliente que drew una versión recortada.
+ * Qué paradas entran en el recorrido: todas (fletero dueño, y la validación
+ * interna de distancia de addCargoItem) o solo las de una empresa.
  */
-export async function getTripRoute(tripId: string): Promise<TripRoute> {
+type RouteScope = { kind: "FULL" } | { kind: "COMPANY"; companyId: string };
+
+async function loadRouteTrip(tripId: string) {
   const trip = await prisma.trip.findUnique({
     where: { id: tripId },
     select: {
+      status: true,
+      carrierId: true,
       origin: true,
       destination: true,
       originLat: true,
@@ -2381,14 +2378,16 @@ export async function getTripRoute(tripId: string): Promise<TripRoute> {
       departureAddress: true,
       departureLat: true,
       departureLng: true,
+      // todas las cargas, con su estado: el filtro de vivas se hace acá abajo
+      // para poder distinguir al ex participante de un tercero
       cargoItems: {
-        where: { status: { not: "CANCELLED" } },
         select: {
           id: true,
+          companyId: true,
+          status: true,
           pickupAddress: true,
           pickupLat: true,
           pickupLng: true,
-          trackingCode: true,
           description: true,
           stopOrder: true,
         },
@@ -2397,10 +2396,48 @@ export async function getTripRoute(tripId: string): Promise<TripRoute> {
     },
   });
   if (!trip) throw new TripNotFoundError();
+  return trip;
+}
 
-  // el stopOrder se calcula con la línea origin→destino (Fase 14C): el
-  // departureAddress es un refinamiento del punto de partida, no cambia el
-  // criterio con el que ya está familiarizado el fletero.
+type RouteTrip = Awaited<ReturnType<typeof loadRouteTrip>>;
+
+/**
+ * Qué parte del recorrido le toca a quien mira (U7): el fletero dueño lo ve
+ * entero; una empresa con carga viva, la salida, sus retiros y el destino.
+ * Cualquier otro (ex participante, empresa sin carga, otro fletero) → 403.
+ */
+function routeScopeFor(trip: RouteTrip, viewerId: string): RouteScope {
+  if (trip.carrierId === viewerId) return { kind: "FULL" };
+  const hasActiveCargo = trip.cargoItems.some(
+    (item) => item.companyId === viewerId && isActiveCargo(item)
+  );
+  if (!hasActiveCargo) {
+    throw new AppError(
+      "solo podés ver el recorrido de los viajes donde tenés carga " +
+        "o sos el transportista",
+      403,
+      "FORBIDDEN"
+    );
+  }
+  return { kind: "COMPANY", companyId: viewerId };
+}
+
+/**
+ * El recorrido en el orden en que el camión lo hace: punto exacto de partida
+ * (o el origin general si el fletero no indicó uno), cada pickup visible en su
+ * stopOrder, y el destino.
+ *
+ * Los puntos sin coordenadas quedan afuera (no se pueden dibujar) e
+ * `incomplete` le avisa al cliente que dibujó una versión recortada. Solo
+ * cuentan los puntos que el scope deja ver: una parada ajena sin coordenadas
+ * no se delata.
+ */
+function buildTripRoute(tripId: string, trip: RouteTrip, scope: RouteScope): TripRoute {
+  const live = trip.cargoItems.filter(isActiveCargo);
+
+  // el stopOrder se calcula con la línea origin→destino (Fase 14C) y sobre
+  // todas las cargas vivas: así la empresa ve sus retiros en el mismo orden
+  // relativo que el fletero.
   const order = calculateStopOrder(
     {
       originLat: trip.originLat,
@@ -2408,13 +2445,16 @@ export async function getTripRoute(tripId: string): Promise<TripRoute> {
       destLat: trip.destLat,
       destLng: trip.destLng,
     },
-    trip.cargoItems.map((c) => ({
+    live.map((c) => ({
       id: c.id,
       pickupLat: c.pickupLat,
       pickupLng: c.pickupLng,
       stopOrder: c.stopOrder,
     }))
   );
+
+  const visible =
+    scope.kind === "FULL" ? live : live.filter((c) => c.companyId === scope.companyId);
 
   const candidates: RouteCandidate[] = [];
 
@@ -2430,7 +2470,6 @@ export async function getTripRoute(tripId: string): Promise<TripRoute> {
       lat: trip.departureLat as number,
       lng: trip.departureLng as number,
       cargoItemId: null,
-      trackingCode: null,
     });
   } else if (trip.originLat !== null && trip.originLng !== null) {
     candidates.push({
@@ -2440,11 +2479,10 @@ export async function getTripRoute(tripId: string): Promise<TripRoute> {
       lat: trip.originLat,
       lng: trip.originLng,
       cargoItemId: null,
-      trackingCode: null,
     });
   }
 
-  const stops: RouteCandidate[] = trip.cargoItems
+  const stops: RouteCandidate[] = visible
     .map((c) => ({
       kind: "PICKUP" as const,
       label: `retiro ${c.description}`,
@@ -2452,7 +2490,6 @@ export async function getTripRoute(tripId: string): Promise<TripRoute> {
       lat: c.pickupLat as number,
       lng: c.pickupLng as number,
       cargoItemId: c.id,
-      trackingCode: c.trackingCode,
     }))
     .filter((s) => s.lat !== null && s.lat !== undefined && s.lng !== null && s.lng !== undefined)
     .sort(
@@ -2469,7 +2506,6 @@ export async function getTripRoute(tripId: string): Promise<TripRoute> {
       lat: trip.destLat,
       lng: trip.destLng,
       cargoItemId: null,
-      trackingCode: null,
     });
   }
 
@@ -2479,7 +2515,10 @@ export async function getTripRoute(tripId: string): Promise<TripRoute> {
   }));
 
   const drawn = points.length;
-  const expected = (hasExactDeparture || trip.originLat !== null ? 1 : 0) + trip.cargoItems.length + (trip.destLat !== null ? 1 : 0);
+  const expected =
+    (hasExactDeparture || trip.originLat !== null ? 1 : 0) +
+    visible.length +
+    (trip.destLat !== null ? 1 : 0);
 
   return {
     tripId,
@@ -2490,9 +2529,21 @@ export async function getTripRoute(tripId: string): Promise<TripRoute> {
 }
 
 /**
- * Caché en memoria de la geometría por viaje.
+ * GET /trips/:id/route: el recorrido que le toca ver a `viewerId` (ver
+ * routeScopeFor). Ningún punto lleva trackingCode (U9): el código se ve en las
+ * paradas y en el detalle de la propia carga.
+ */
+export async function getTripRoute(tripId: string, viewerId: string): Promise<TripRoute> {
+  const trip = await loadRouteTrip(tripId);
+  return buildTripRoute(tripId, trip, routeScopeFor(trip, viewerId));
+}
+
+/**
+ * Caché en memoria de la geometría, por viaje y por scope: la del fletero (el
+ * recorrido completo) y la de cada empresa (solo sus puntos) van en entradas
+ * separadas, para que nadie reciba una geometría calculada con paradas ajenas.
  *
- * La clave incluye los propios puntos y el estado del viaje: si una carga entra
+ * La firma incluye los propios puntos y el estado del viaje: si una carga entra
  * o se retira, o el fletero cambia el estado, la firma cambia y la geometría se
  * vuelve a pedir. Un viaje que no cambia reutiliza la respuesta en vez de pegarle
  * a OSRM en cada request.
@@ -2513,6 +2564,12 @@ function routeSignature(
   return JSON.stringify([status, route.departureIsExact, route.points.map((p) => [p.lat, p.lng])]);
 }
 
+function geometryCacheKey(tripId: string, scope: RouteScope): string {
+  return scope.kind === "FULL"
+    ? `${tripId}|full`
+    : `${tripId}|company:${scope.companyId}`;
+}
+
 export function clearRouteGeometryCache() {
   routeGeometryCache.clear();
 }
@@ -2522,24 +2579,21 @@ export function routeGeometryCacheSize() {
 }
 
 /**
- * Geometría de la ruta real (calles) del viaje, o null si OSRM no respondió,
- * tardó más de 5s, o el recorrido tiene menos de dos puntos. Nunca throw: el
- * frontend dibuja líneas rectas en ese caso.
+ * Geometría de la ruta real (calles) del recorrido, o null si OSRM no respondió,
+ * tardó más de 5s, o el recorrido tiene menos de dos puntos. Nunca throw por
+ * OSRM: el frontend dibuja líneas rectas en ese caso.
  */
-export async function getTripRouteGeometry(
-  tripId: string
+async function routeGeometryFor(
+  tripId: string,
+  trip: RouteTrip,
+  scope: RouteScope
 ): Promise<[number, number][] | null> {
-  const trip = await prisma.trip.findUnique({
-    where: { id: tripId },
-    select: { status: true },
-  });
-  if (!trip) throw new TripNotFoundError();
-
-  const route = await getTripRoute(tripId);
+  const route = buildTripRoute(tripId, trip, scope);
   if (route.points.length < 2) return null;
 
+  const key = geometryCacheKey(tripId, scope);
   const signature = routeSignature(route, trip.status);
-  const cached = routeGeometryCache.get(tripId);
+  const cached = routeGeometryCache.get(key);
   if (cached && cached.signature === signature) return cached.geometry;
 
   const geometry = await fetchRouteGeometry(
@@ -2550,9 +2604,35 @@ export async function getTripRouteGeometry(
     const oldest = routeGeometryCache.keys().next().value as string | undefined;
     if (oldest !== undefined) routeGeometryCache.delete(oldest);
   }
-  routeGeometryCache.set(tripId, { signature, geometry });
+  routeGeometryCache.set(key, { signature, geometry });
 
   return geometry;
+}
+
+/**
+ * GET /trips/:id/route-geometry: la geometría del recorrido que le toca ver a
+ * `viewerId`. A una empresa se le calcula solo con la salida, sus retiros y el
+ * destino; no con la ruta completa recortada, que dejaría ver por dónde pasa
+ * el camión a buscar las otras cargas.
+ */
+export async function getTripRouteGeometry(
+  tripId: string,
+  viewerId: string
+): Promise<[number, number][] | null> {
+  const trip = await loadRouteTrip(tripId);
+  return routeGeometryFor(tripId, trip, routeScopeFor(trip, viewerId));
+}
+
+/**
+ * Geometría del recorrido completo, sin chequeo de acceso. Solo para uso
+ * interno (la validación de distancia de addCargoItem); nunca se devuelve
+ * a un cliente.
+ */
+export async function getFullRouteGeometry(
+  tripId: string
+): Promise<[number, number][] | null> {
+  const trip = await loadRouteTrip(tripId);
+  return routeGeometryFor(tripId, trip, { kind: "FULL" });
 }
 
 /**

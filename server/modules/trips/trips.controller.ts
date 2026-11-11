@@ -295,10 +295,13 @@ export async function reorderTripStops(req: Request, res: Response) {
 
 /**
  * GET /api/trips/:id/route — recorrido del viaje en orden: punto de partida,
- * cada pickup de carga viva, y el destino. Sin auth (es el mapa público del viaje).
+ * los pickups que le tocan a quien mira, y el destino. Con sesión (U7).
  */
 export async function getTripRoute(req: Request, res: Response) {
-  const route = await tripsService.getTripRoute(getParam(req, "id"));
+  if (!req.user) {
+    throw new AppError("no autenticado", 401, "UNAUTHORIZED");
+  }
+  const route = await tripsService.getTripRoute(getParam(req, "id"), req.user.id);
   res.json(route);
 }
 
@@ -308,7 +311,13 @@ export async function getTripRoute(req: Request, res: Response) {
  * tardó o no pudo resolver: el front cae a líneas rectas sin molestar al usuario.
  */
 export async function getTripRouteGeometry(req: Request, res: Response) {
-  const geometry = await tripsService.getTripRouteGeometry(getParam(req, "id"));
+  if (!req.user) {
+    throw new AppError("no autenticado", 401, "UNAUTHORIZED");
+  }
+  const geometry = await tripsService.getTripRouteGeometry(
+    getParam(req, "id"),
+    req.user.id
+  );
   res.json({ geometry });
 }
 

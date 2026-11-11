@@ -2,11 +2,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   getTripRoute,
   getTripRouteGeometry,
+  getFullRouteGeometry,
   clearRouteGeometryCache,
   routeGeometryCacheSize,
 } from "../modules/trips/trips.service.js";
 import { fetchRouteGeometry } from "../lib/routing.js";
-import { TripNotFoundError } from "../lib/errors.js";
+import { AppError, TripNotFoundError } from "../lib/errors.js";
+import { signToken } from "../lib/auth.js";
 import { prisma } from "../lib/prisma.js";
 import { geocode } from "../lib/geocode.js";
 
@@ -26,10 +28,14 @@ vi.mock("../lib/prisma", () => ({
     trip: { findUnique: vi.fn(), create: vi.fn() },
     cargoItem: { findMany: vi.fn() },
     user: { findUnique: vi.fn() },
+    revokedToken: { findUnique: vi.fn().mockResolvedValue(null) },
   },
 }));
 
 type Mock = ReturnType<typeof vi.fn>;
+
+/** el fletero dueño de los viajes de los fixtures */
+const FLETERO = "u1";
 
 /**
  * Un viaje Córdoba → Rosario: el origen general está en el centro de Córdoba y
@@ -38,6 +44,8 @@ type Mock = ReturnType<typeof vi.fn>;
  */
 function routeTrip(overrides: Record<string, unknown> = {}) {
   return {
+    status: "OPEN",
+    carrierId: "u1",
     origin: "Córdoba",
     destination: "Rosario",
     originLat: -31.4201,
@@ -64,6 +72,8 @@ function cargoItem(overrides: Record<string, unknown> = {}) {
     trackingCode: "TP-T1-C1",
     description: "cajas",
     stopOrder: null,
+    status: "CONFIRMED",
+    companyId: "c1",
     ...overrides,
   };
 }
@@ -112,7 +122,7 @@ describe("getTripRoute", () => {
       })
     );
 
-    const route = await getTripRoute("t1");
+    const route = await getTripRoute("t1", FLETERO);
 
     expect(route.tripId).toBe("t1");
     expect(route.points.map((p) => p.kind)).toEqual([
@@ -136,7 +146,7 @@ describe("getTripRoute", () => {
       })
     );
 
-    const route = await getTripRoute("t1");
+    const route = await getTripRoute("t1", FLETERO);
 
     expect(route.departureIsExact).toBe(true);
     expect(at(route.points, 0).kind).toBe("DEPARTURE");
@@ -149,7 +159,7 @@ describe("getTripRoute", () => {
     // el fletero escribió la dirección pero el geocode no la resolvió
     mockTrip(routeTrip({ departureAddress: "galpón sin geocodificar" }));
 
-    const route = await getTripRoute("t1");
+    const route = await getTripRoute("t1", FLETERO);
 
     expect(route.departureIsExact).toBe(false);
     expect(at(route.points, 0).address).toBe("Córdoba");
@@ -173,7 +183,7 @@ describe("getTripRoute", () => {
       })
     );
 
-    const route = await getTripRoute("t1");
+    const route = await getTripRoute("t1", FLETERO);
 
     expect(at(route.points, 1).address).toBe("San Nicolás");
     expect(at(route.points, 2).address).toBe("San Francisco");
@@ -190,7 +200,7 @@ describe("getTripRoute", () => {
       })
     );
 
-    const route = await getTripRoute("t1");
+    const route = await getTripRoute("t1", FLETERO);
 
     expect(route.points.map((p) => p.address)).not.toContain("lugar inexistente");
     expect(route.incomplete).toBe(true);
@@ -201,27 +211,129 @@ describe("getTripRoute", () => {
   it("sin pickup: solo partida y destino", async () => {
     mockTrip(routeTrip());
 
-    const route = await getTripRoute("t1");
+    const route = await getTripRoute("t1", FLETERO);
 
     expect(route.points).toHaveLength(2);
     expect(route.incomplete).toBe(false);
   });
 
-  it("devuelve la carga y el tracking code de cada parada", async () => {
+  it("devuelve la carga de cada parada, pero no su tracking code (U9)", async () => {
     mockTrip(
       routeTrip({ cargoItems: [cargoItem({ id: "i1", trackingCode: "TP-T1-C7" })] })
     );
 
-    const route = await getTripRoute("t1");
+    const route = await getTripRoute("t1", FLETERO);
 
     expect(at(route.points, 1).cargoItemId).toBe("i1");
-    expect(at(route.points, 1).trackingCode).toBe("TP-T1-C7");
+    for (const point of route.points) expect(point).not.toHaveProperty("trackingCode");
+    expect(JSON.stringify(route)).not.toContain("TP-T1-C7");
+  });
+
+  it("deja fuera las cargas canceladas", async () => {
+    mockTrip(
+      routeTrip({
+        cargoItems: [
+          cargoItem({ id: "i1" }),
+          cargoItem({ id: "i2", pickupAddress: "retirada", status: "CANCELLED" }),
+        ],
+      })
+    );
+
+    const route = await getTripRoute("t1", FLETERO);
+
+    expect(route.points.map((p) => p.address)).not.toContain("retirada");
+    expect(route.incomplete).toBe(false);
   });
 
   it("lanza TripNotFoundError si el viaje no existe", async () => {
     mockTrip(null);
 
-    await expect(getTripRoute("nope")).rejects.toBeInstanceOf(TripNotFoundError);
+    await expect(getTripRoute("nope", FLETERO)).rejects.toBeInstanceOf(TripNotFoundError);
+  });
+});
+
+describe("getTripRoute por rol (U7)", () => {
+  // c1 tiene carga viva en San Francisco; c2, en San Nicolás; c-ex retiró la
+  // suya (CANCELLED) y quedó como ex participante.
+  function viajeConTresEmpresas() {
+    return routeTrip({
+      departureAddress: "Av. Colón 1234, Córdoba",
+      departureLat: -31.4189,
+      departureLng: -64.1811,
+      cargoItems: [
+        cargoItem({ id: "i-c1", companyId: "c1", description: "cajas de c1" }),
+        cargoItem({
+          id: "i-c2",
+          companyId: "c2",
+          pickupAddress: "Galpón secreto de c2, San Nicolás",
+          pickupLat: -32.426,
+          pickupLng: -61.853,
+          trackingCode: "TP-T1-C2",
+          description: "acero de c2",
+        }),
+        cargoItem({
+          id: "i-ex",
+          companyId: "c-ex",
+          pickupAddress: "Depósito de c-ex",
+          status: "CANCELLED",
+        }),
+      ],
+    });
+  }
+
+  it("la empresa ve la salida, su retiro y el destino; nada de las otras", async () => {
+    mockTrip(viajeConTresEmpresas());
+
+    const route = await getTripRoute("t1", "c1");
+
+    expect(route.points.map((p) => [p.order, p.kind, p.address])).toEqual([
+      [1, "DEPARTURE", "Av. Colón 1234, Córdoba"],
+      [2, "PICKUP", "San Francisco"],
+      [3, "DESTINATION", "Rosario"],
+    ]);
+    expect(at(route.points, 1).cargoItemId).toBe("i-c1");
+    const json = JSON.stringify(route);
+    for (const ajeno of [
+      "i-c2",
+      "Galpón secreto",
+      "acero de c2",
+      "TP-T1-C2",
+      "-61.853",
+    ]) {
+      expect(json).not.toContain(ajeno);
+    }
+    expect(route.incomplete).toBe(false);
+  });
+
+  it("una parada ajena sin coordenadas no marca incomplete para la empresa", async () => {
+    const trip = viajeConTresEmpresas();
+    (trip.cargoItems as Array<Record<string, unknown>>)[1]!.pickupLat = null;
+    mockTrip(trip);
+
+    const route = await getTripRoute("t1", "c1");
+
+    expect(route.incomplete).toBe(false);
+  });
+
+  it("el fletero dueño ve todas las paradas vivas", async () => {
+    mockTrip(viajeConTresEmpresas());
+
+    const route = await getTripRoute("t1", FLETERO);
+
+    expect(route.points.map((p) => p.cargoItemId)).toEqual([null, "i-c1", "i-c2", null]);
+  });
+
+  it.each([
+    ["el ex participante", "c-ex"],
+    ["una empresa sin carga", "c9"],
+    ["otro fletero", "u7"],
+  ])("%s recibe 403", async (_quien, viewerId) => {
+    mockTrip(viajeConTresEmpresas());
+
+    const error = await getTripRoute("t1", viewerId).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(AppError);
+    expect(error).toMatchObject({ statusCode: 403, code: "FORBIDDEN" });
   });
 });
 
@@ -248,7 +360,7 @@ describe("getTripRouteGeometry", () => {
       [-60.6505, -32.9442],
     ]);
 
-    const geometry = await getTripRouteGeometry("t1");
+    const geometry = await getTripRouteGeometry("t1", FLETERO);
 
     expect(geometry).toEqual([
       [-64.1888, -31.4201],
@@ -272,7 +384,7 @@ describe("getTripRouteGeometry", () => {
       destLng: null,
     });
 
-    const geometry = await getTripRouteGeometry("t1");
+    const geometry = await getTripRouteGeometry("t1", FLETERO);
 
     expect(geometry).toBeNull();
     expect(fetchRouteGeometry).not.toHaveBeenCalled();
@@ -285,9 +397,9 @@ describe("getTripRouteGeometry", () => {
       [-60.6, -32.9],
     ]);
 
-    await getTripRouteGeometry("t1");
-    await getTripRouteGeometry("t1");
-    await getTripRouteGeometry("t1");
+    await getTripRouteGeometry("t1", FLETERO);
+    await getTripRouteGeometry("t1", FLETERO);
+    await getTripRouteGeometry("t1", FLETERO);
 
     // tres requests al endpoint, un solo fetch a OSRM
     expect(fetchRouteGeometry).toHaveBeenCalledTimes(1);
@@ -299,10 +411,10 @@ describe("getTripRouteGeometry", () => {
       [-64.1, -31.4],
       [-60.6, -32.9],
     ]);
-    await getTripRouteGeometry("t1");
+    await getTripRouteGeometry("t1", FLETERO);
 
     mockTripWithStatus(routeTrip({ status: "IN_TRANSIT" }));
-    await getTripRouteGeometry("t1");
+    await getTripRouteGeometry("t1", FLETERO);
 
     expect(fetchRouteGeometry).toHaveBeenCalledTimes(2);
   });
@@ -313,12 +425,12 @@ describe("getTripRouteGeometry", () => {
       [-64.1, -31.4],
       [-60.6, -32.9],
     ]);
-    await getTripRouteGeometry("t1");
+    await getTripRouteGeometry("t1", FLETERO);
 
     mockTripWithStatus(
       routeTrip({ status: "OPEN", cargoItems: [cargoItem({ id: "i1" })] })
     );
-    await getTripRouteGeometry("t1");
+    await getTripRouteGeometry("t1", FLETERO);
 
     expect(fetchRouteGeometry).toHaveBeenCalledTimes(2);
   });
@@ -327,7 +439,7 @@ describe("getTripRouteGeometry", () => {
     mockTripWithStatus(routeTrip({ status: "OPEN" }));
     vi.mocked(fetchRouteGeometry).mockResolvedValue(null);
 
-    const geometry = await getTripRouteGeometry("t1");
+    const geometry = await getTripRouteGeometry("t1", FLETERO);
 
     expect(geometry).toBeNull();
   });
@@ -336,8 +448,8 @@ describe("getTripRouteGeometry", () => {
     mockTripWithStatus(routeTrip({ status: "OPEN" }));
     vi.mocked(fetchRouteGeometry).mockResolvedValue(null);
 
-    await getTripRouteGeometry("t1");
-    await getTripRouteGeometry("t1");
+    await getTripRouteGeometry("t1", FLETERO);
+    await getTripRouteGeometry("t1", FLETERO);
 
     // un null también se cachea: repetir el fetch solo gasta llamadas
     expect(fetchRouteGeometry).toHaveBeenCalledTimes(1);
@@ -354,16 +466,107 @@ describe("getTripRouteGeometry", () => {
       (prisma.trip.findUnique as unknown as Mock).mockResolvedValue(
         routeTrip({ status: "OPEN", id: `t${i}` })
       );
-      await getTripRouteGeometry(`t${i}`);
+      await getTripRouteGeometry(`t${i}`, FLETERO);
     }
 
     expect(routeGeometryCacheSize()).toBeLessThanOrEqual(500);
   });
 
+  it("a la empresa le calcula la geometría solo con sus puntos", async () => {
+    mockTripWithStatus(
+      routeTrip({
+        cargoItems: [
+          cargoItem({ id: "i-c1", companyId: "c1" }),
+          cargoItem({
+            id: "i-c2",
+            companyId: "c2",
+            pickupLat: -32.426,
+            pickupLng: -61.853,
+          }),
+        ],
+      })
+    );
+
+    await getTripRouteGeometry("t1", "c1");
+
+    expect(vi.mocked(fetchRouteGeometry)).toHaveBeenCalledWith([
+      { lat: -31.4201, lng: -64.1888 },
+      { lat: -31.923, lng: -63.021 },
+      { lat: -32.9442, lng: -60.6505 },
+    ]);
+  });
+
+  it("la caché separa la geometría del fletero de la de cada empresa", async () => {
+    mockTripWithStatus(
+      routeTrip({
+        cargoItems: [
+          cargoItem({ id: "i-c1", companyId: "c1" }),
+          cargoItem({
+            id: "i-c2",
+            companyId: "c2",
+            pickupLat: -32.426,
+            pickupLng: -61.853,
+          }),
+        ],
+      })
+    );
+    vi.mocked(fetchRouteGeometry).mockImplementation(async (points) =>
+      points.map((p) => [p.lng, p.lat] as [number, number])
+    );
+
+    const delFletero = await getTripRouteGeometry("t1", FLETERO);
+    const deC1 = await getTripRouteGeometry("t1", "c1");
+    await getTripRouteGeometry("t1", "c1");
+
+    // la empresa no recibe la geometría completa cacheada por el fletero
+    expect(delFletero).toHaveLength(4);
+    expect(deC1).toHaveLength(3);
+    expect(fetchRouteGeometry).toHaveBeenCalledTimes(2);
+  });
+
+  it("a un no participante le responde 403 sin pedirle nada a OSRM", async () => {
+    mockTripWithStatus(routeTrip({ cargoItems: [cargoItem({ companyId: "c1" })] }));
+
+    await expect(getTripRouteGeometry("t1", "c9")).rejects.toMatchObject({
+      statusCode: 403,
+      code: "FORBIDDEN",
+    });
+    expect(fetchRouteGeometry).not.toHaveBeenCalled();
+  });
+
   it("lanza TripNotFoundError si el viaje no existe", async () => {
     mockTripWithStatus(null);
 
-    await expect(getTripRouteGeometry("nope")).rejects.toBeInstanceOf(TripNotFoundError);
+    await expect(getTripRouteGeometry("nope", FLETERO)).rejects.toBeInstanceOf(
+      TripNotFoundError
+    );
+  });
+});
+
+describe("getFullRouteGeometry (validación de distancia en addCargoItem)", () => {
+  it("usa todas las paradas vivas, sin filtrar por quién mira", async () => {
+    mockTrip(
+      routeTrip({
+        cargoItems: [
+          cargoItem({ id: "i-c1", companyId: "c1" }),
+          cargoItem({
+            id: "i-c2",
+            companyId: "c2",
+            pickupLat: -32.426,
+            pickupLng: -61.853,
+          }),
+        ],
+      })
+    );
+
+    await getFullRouteGeometry("t1");
+
+    expect(vi.mocked(fetchRouteGeometry)).toHaveBeenCalledWith([
+      { lat: -31.4201, lng: -64.1888 },
+      { lat: -31.923, lng: -63.021 },
+      { lat: -32.426, lng: -61.853 },
+      { lat: -32.9442, lng: -60.6505 },
+    ]);
   });
 });
 
@@ -448,9 +651,9 @@ describe("fetchRouteGeometry (mockeado, sin tocar la red)", () => {
   });
 });
 
-describe("endpoints HTTP del recorrido (públicos)", () => {
+describe("endpoints HTTP del recorrido (con sesión, U7)", () => {
   // A diferencia del resto de la suite, acá se levanta el app real: lo que se
-  // prueba es que /route y /route-geometry están montados y no piden auth.
+  // prueba es cómo están montados /route y /route-geometry y qué piden.
   // Prisma, geocode y routing ya están mockeados para toda la suite.
   async function http() {
     const { app } = await import("../src/app.js");
@@ -458,27 +661,66 @@ describe("endpoints HTTP del recorrido (públicos)", () => {
     return { app, request };
   }
 
-  it("GET /api/trips/:id/route responde el recorrido sin token", async () => {
+  const fletero = `Bearer ${signToken({ id: FLETERO, role: "CARRIER" })}`;
+  const ajena = `Bearer ${signToken({ id: "c9", role: "COMPANY" })}`;
+
+  it.each(["route", "route-geometry"])(
+    "GET /api/trips/:id/%s sin token → 401",
+    async (path) => {
+      mockTrip(routeTrip({ cargoItems: [cargoItem({ id: "i1" })] }));
+      const { app, request } = await http();
+
+      const res = await request(app).get(`/api/trips/t1/${path}`);
+
+      expect(res.status).toBe(401);
+      expect(res.body.code).toBe("UNAUTHORIZED");
+      expect(prisma.trip.findUnique).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(["route", "route-geometry"])(
+    "GET /api/trips/:id/%s de una empresa sin carga → 403",
+    async (path) => {
+      mockTrip(routeTrip({ cargoItems: [cargoItem({ id: "i1" })] }));
+      const { app, request } = await http();
+
+      const res = await request(app)
+        .get(`/api/trips/t1/${path}`)
+        .set("Authorization", ajena);
+
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe("FORBIDDEN");
+    }
+  );
+
+  it("GET /api/trips/:id/route responde el recorrido al fletero", async () => {
     mockTrip(routeTrip({ cargoItems: [cargoItem({ id: "i1" })] }));
     const { app, request } = await http();
 
-    const res = await request(app).get("/api/trips/t1/route");
+    const res = await request(app)
+      .get("/api/trips/t1/route")
+      .set("Authorization", fletero);
 
     expect(res.status).toBe(200);
     expect(res.body.tripId).toBe("t1");
     expect(res.body.points).toHaveLength(3);
     expect(res.body.points[0]).toMatchObject({ order: 1, kind: "DEPARTURE" });
+    expect(Object.keys(res.body.points[1]).sort()).toEqual(
+      ["address", "cargoItemId", "kind", "label", "lat", "lng", "order"].sort()
+    );
   });
 
-  it("GET /api/trips/:id/route-geometry responde { geometry } sin token", async () => {
-    mockTrip(routeTrip({ status: "OPEN", cargoItems: [cargoItem({ id: "i1" })] }));
+  it("GET /api/trips/:id/route-geometry responde { geometry } al fletero", async () => {
+    mockTrip(routeTrip({ cargoItems: [cargoItem({ id: "i1" })] }));
     vi.mocked(fetchRouteGeometry).mockResolvedValue([
       [-64.1888, -31.4201],
       [-60.6505, -32.9442],
     ]);
     const { app, request } = await http();
 
-    const res = await request(app).get("/api/trips/t1/route-geometry");
+    const res = await request(app)
+      .get("/api/trips/t1/route-geometry")
+      .set("Authorization", fletero);
 
     expect(res.status).toBe(200);
     expect(res.body.geometry).toEqual([
@@ -490,11 +732,13 @@ describe("endpoints HTTP del recorrido (públicos)", () => {
   it("route-geometry responde 200 con geometry null cuando OSRM no está", async () => {
     // el front distingue "sin geometría" de "error": si esto fuera un 500, la
     // pantalla del recorrido se rompería en vez de dibujar rectas.
-    mockTrip(routeTrip({ status: "OPEN", cargoItems: [cargoItem({ id: "i1" })] }));
+    mockTrip(routeTrip({ cargoItems: [cargoItem({ id: "i1" })] }));
     vi.mocked(fetchRouteGeometry).mockResolvedValue(null);
     const { app, request } = await http();
 
-    const res = await request(app).get("/api/trips/t1/route-geometry");
+    const res = await request(app)
+      .get("/api/trips/t1/route-geometry")
+      .set("Authorization", fletero);
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ geometry: null });
@@ -504,9 +748,9 @@ describe("endpoints HTTP del recorrido (públicos)", () => {
     mockTrip(null);
     const { app, request } = await http();
 
-    await expect(request(app).get("/api/trips/nope/route")).resolves.toMatchObject({
-      status: 404,
-    });
+    await expect(
+      request(app).get("/api/trips/nope/route").set("Authorization", fletero)
+    ).resolves.toMatchObject({ status: 404 });
   });
 });
 
