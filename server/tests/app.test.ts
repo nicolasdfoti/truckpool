@@ -2368,7 +2368,8 @@ describe("GET /api/trips/:id por rol (U7)", () => {
     capacityTotal: 20,
     price: new Prisma.Decimal(450000),
     depositPercent: 20,
-    platformFeePercent: 10,
+    // distinta del 10 % por defecto: así se ve que sale del viaje
+    platformFeePercent: 12,
     status: "OPEN" as const,
     carrierId: "u1",
     carrier: { name: "Transportes Flete" },
@@ -2439,6 +2440,7 @@ describe("GET /api/trips/:id por rol (U7)", () => {
     "id",
     "origin",
     "otherCargo",
+    "platformFeePercent",
     "price",
     "reviews",
     "status",
@@ -2508,6 +2510,7 @@ describe("GET /api/trips/:id por rol (U7)", () => {
     // la retirada no cuenta: 2 cargas vivas, 5 + 4 m³
     expect(body.cargoCount).toBe(2);
     expect(body.capacityUsed).toBe(9);
+    expect(body.platformFeePercent).toBe(12);
     noContiene(body, [
       ...secretosDe.norte,
       ...secretosDe.acero,

@@ -324,6 +324,9 @@ export function toTripDetailResponse(
     carrierId: trip.carrierId,
     carrierName: trip.carrier.name,
     depositPercent: trip.depositPercent,
+    // la comisión no es secreta (sale del priceShare, ver toTripSummary): el
+    // fletero la ve en su neto por carga
+    platformFeePercent: trip.platformFeePercent,
     features: trip.features,
     reviews: trip.reviews.map(toReviewResponse),
     viewerAccess: access,
