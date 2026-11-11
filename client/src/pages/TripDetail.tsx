@@ -831,7 +831,9 @@ export default function TripDetail() {
                 >
                   <div className="flex items-center gap-2">
                     <RatingStars value={review.rating} size={14} />
-                    <span className="text-[13px] font-medium">{review.fromName}</span>
+                    <span className="text-[13px] font-medium">
+                      empresa que mandó carga en este viaje
+                    </span>
                     <span className="text-[13px] text-ink-muted">→ {review.toName}</span>
                   </div>
                   {review.comment && (

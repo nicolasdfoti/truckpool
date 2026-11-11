@@ -142,15 +142,14 @@ export type CargoItem = {
   stopOrder: number | null;
 };
 
+/** sin la empresa que calificó (L2): la reseña no delata quién mandó carga */
 export type Review = {
   id: string;
   tripId: string;
-  fromUserId: string;
   toUserId: string;
   rating: number;
   comment: string | null;
   createdAt: string;
-  fromName: string;
   toName: string;
 };
 
@@ -181,6 +180,8 @@ export type TripDetail = Trip & {
   /** punto exacto de salida: solo para el fletero y sus empresas con carga viva */
   departureAddress?: string | null;
   reviews: Review[];
+  /** si quien mira ya calificó este viaje */
+  viewerReviewed: boolean;
 };
 
 export type TripMessage = {

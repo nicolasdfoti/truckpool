@@ -126,7 +126,9 @@ export default function CarrierProfile() {
                     >
                       <div className="flex flex-wrap items-center gap-2">
                         <RatingStars value={review.rating} size={14} />
-                        <span className="text-[13px] font-medium">{review.fromName}</span>
+                        <span className="text-[13px] font-medium">
+                          empresa que viajó con este fletero
+                        </span>
                         <span className="text-[13px] text-ink-muted">
                           · {review.trip.origin} → {review.trip.destination} ·{" "}
                           {formatReviewDate(review.createdAt)}

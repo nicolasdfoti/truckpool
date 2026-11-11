@@ -23,9 +23,8 @@ export function useTripReviewStatus(
     const hasCargo = trip.cargoItems.some(
       (item) => item.companyId === user.id && item.status !== "CANCELLED"
     );
-    const reviewed = trip.reviews.some(
-      (review) => review.fromUserId === user.id && review.toUserId === trip.carrierId
-    );
+    // la reseña no dice quién la escribió: el server avisa si fue quien mira
+    const reviewed = trip.viewerReviewed;
 
     return {
       canReview: trip.status === "COMPLETED" && hasCargo && !reviewed,

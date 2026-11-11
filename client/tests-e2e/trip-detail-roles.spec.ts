@@ -17,6 +17,7 @@ type CargoRow = {
 
 const ROLES_TRIP = `/viajes/${E2E.rolesTripId}`;
 const TRANSIT_TRIP = `/viajes/${E2E.transitTripId}`;
+const REVIEWS_TRIP = `/viajes/${E2E.reviewsTripId}`;
 
 // 4 + 3 m³ vivos de 30: la carga retirada no cuenta
 const OCCUPANCY_LINE = "ya hay 2 cargas en este viaje (7 m³). quedan 23 m³ libres.";
@@ -244,5 +245,33 @@ test.describe("ex participante (D9)", () => {
     await page.getByRole("button", { name: "descargar remito" }).click();
     expect((await download).suggestedFilename()).toMatch(/\.pdf$/);
     expect(denied).toEqual([]);
+  });
+});
+
+test.describe("reseñas sin la empresa que calificó", () => {
+  test("anónimo: etiqueta fija en el detalle", async ({ page }) => {
+    await openTrip(page, REVIEWS_TRIP, null);
+    const review = page.getByRole("listitem").filter({ hasText: E2E.reviewComment });
+    await expect(review.getByText("empresa que mandó carga en este viaje")).toBeVisible();
+    await expect(page.locator("body")).not.toContainText("Comercial Norte");
+  });
+
+  test("anónimo: etiqueta fija en el perfil del fletero", async ({ page }) => {
+    const trip = await apiGet<{ carrierId: string }>(
+      `/trips/${E2E.reviewsTripId}`,
+      "carrier"
+    );
+    await page.goto(`/fleteros/${trip.carrierId}`);
+    const review = page.getByRole("listitem").filter({ hasText: E2E.reviewComment });
+    await expect(review.getByText("empresa que viajó con este fletero")).toBeVisible();
+    await expect(page.locator("body")).not.toContainText("Comercial Norte");
+  });
+
+  test("la empresa que calificó ve que ya calificó", async ({ page }) => {
+    await openTrip(page, REVIEWS_TRIP, "company");
+    await expect(page.getByText("ya calificaste a")).toBeVisible();
+    await expect(page.getByRole("button", { name: "enviar calificación" })).toHaveCount(
+      0
+    );
   });
 });
