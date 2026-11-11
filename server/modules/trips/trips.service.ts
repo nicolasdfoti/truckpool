@@ -1979,7 +1979,11 @@ export async function markTripMessagesRead(tripId: string, userId: string) {
 
 /**
  * Remito/manifiesto del viaje en PDF. Solo lo pueden pedir el transportista
- * del viaje y las empresas con carga en él.
+ * del viaje y las empresas con carga viva en él.
+ *
+ * El fletero recibe el remito completo. Una empresa, solo su carga y los
+ * totales del viaje (m³ ocupados y cantidad de cargas): nada de lo que llevan,
+ * quiénes son ni cuánto pagan las demás (L2 ítem 9, U7).
  */
 export async function getTripManifest(
   tripId: string,
@@ -2025,6 +2029,10 @@ export async function getTripManifest(
     );
   }
 
+  // las cargas retiradas no van al remito: es el documento de lo que viaja.
+  const live = trip.cargoItems.filter(isActiveCargo);
+  const listed = isCarrier ? live : live.filter((item) => item.company.id === userId);
+
   const manifest: ManifestTrip = {
     id: trip.id,
     origin: trip.origin,
@@ -2036,8 +2044,10 @@ export async function getTripManifest(
     price: Number(trip.price),
     status: trip.status,
     carrierName: trip.carrier.name,
-    // las cargas retiradas no van al remito: es el documento de lo que viaja.
-    cargoItems: trip.cargoItems.filter(isActiveCargo).map((item) => ({
+    scope: isCarrier ? "FULL" : "COMPANY",
+    usedVolume: live.reduce((sum, item) => sum + item.volume, 0),
+    cargoCount: live.length,
+    cargoItems: listed.map((item) => ({
       description: item.description,
       volume: item.volume,
       priceShare: Number(item.priceShare),

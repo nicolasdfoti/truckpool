@@ -14,6 +14,7 @@ import { calculateSuggestedPrice } from "../lib/pricing.js";
 import { AppError } from "../lib/errors.js";
 import { quoteCancellation, hoursUntilDeparture } from "../lib/cancellation.js";
 import { salidaEn } from "./helpers/salida.js";
+import { pdfText } from "./helpers/pdfText.js";
 import { CARRIER_CAN_CHARGE } from "../lib/mappers.js";
 
 // el token del transportista llega a la base cifrado (ver OAuth), así que los
@@ -2590,16 +2591,44 @@ describe("GET /api/trips/:id/manifest.pdf", () => {
     departureAddress: null,
     departureLat: null,
     departureLng: null,
+    // u2 (Comercial Norte) y u7 (Aceros del Sur) con carga viva; u8 retiró la suya
     cargoItems: [
       {
+        status: "CONFIRMED" as const,
         description: "Cajas deurado",
         volume: 8,
         priceShare: new Prisma.Decimal(180000),
         company: { id: "u2", name: "Comercial Norte" },
       },
+      {
+        status: "PENDING" as const,
+        description: "Vigas de acero",
+        volume: 6,
+        priceShare: new Prisma.Decimal(135000),
+        company: { id: "u7", name: "Aceros del Sur" },
+      },
+      {
+        status: "CANCELLED" as const,
+        description: "Barricas de vino",
+        volume: 3,
+        priceShare: new Prisma.Decimal(67500),
+        company: { id: "u8", name: "Bodega Retirada" },
+      },
     ],
     platformFeePercent: 10,
   };
+
+  /** el texto del PDF que recibe quien tiene ese token */
+  async function textoDelManifiesto(token: string) {
+    vi.mocked(prisma.trip.findUnique).mockResolvedValue(manifestTrip);
+    const res = await asPdf(
+      request(app)
+        .get("/api/trips/clx1234abcd/manifest.pdf")
+        .set("Authorization", `Bearer ${token}`)
+    );
+    expect(res.status).toBe(200);
+    return pdfText(res.body as Buffer);
+  }
 
   // supertest no parsea application/pdf: le pasamos un parser binario
   const asPdf = (req: request.Test) =>
@@ -2645,6 +2674,56 @@ describe("GET /api/trips/:id/manifest.pdf", () => {
     expect(res.headers["content-disposition"]).toContain("attachment");
     expect(res.headers["content-disposition"]).toContain(".pdf");
     expect(res.body.subarray(0, 4).toString()).toBe("%PDF");
+  });
+
+  it("el fletero recibe todas las cargas vivas, con empresa y parte", async () => {
+    const texto = await textoDelManifiesto(carrierToken);
+
+    for (const dato of [
+      "Cajas deurado",
+      "Comercial Norte",
+      "$180.000",
+      "Vigas de acero",
+      "Aceros del Sur",
+      "$135.000",
+      "$315.000",
+      "2 cargas",
+    ]) {
+      expect(texto).toContain(dato);
+    }
+    // la retirada no viaja
+    expect(texto).not.toContain("Barricas de vino");
+  });
+
+  it("la empresa recibe solo su carga y los totales del viaje (U7)", async () => {
+    const texto = await textoDelManifiesto(companyToken);
+
+    expect(texto).toContain("Cajas deurado");
+    expect(texto).toContain("$180.000");
+    // totales del viaje: m³ ocupados y cantidad de cargas, como en el detalle
+    expect(texto).toContain("14 m³ de 20 m³ ocupados");
+    expect(texto).toContain("2 cargas");
+    // nada de la otra empresa: ni qué lleva, ni quién es, ni cuánto paga, ni
+    // el total en plata del viaje (dejaría deducir la parte ajena)
+    for (const ajeno of [
+      "Vigas de acero",
+      "Aceros del Sur",
+      "$135.000",
+      "$315.000",
+      "Barricas de vino",
+      "Bodega Retirada",
+    ]) {
+      expect(texto).not.toContain(ajeno);
+    }
+  });
+
+  it("la empresa que retiró su carga ya no puede pedirlo (403)", async () => {
+    vi.mocked(prisma.trip.findUnique).mockResolvedValue(manifestTrip);
+    const res = await request(app)
+      .get("/api/trips/clx1234abcd/manifest.pdf")
+      .set("Authorization", `Bearer ${signToken({ id: "u8", role: "COMPANY" })}`);
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("FORBIDDEN");
   });
 
   it("una empresa con carga en el viaje también puede pedirlo", async () => {

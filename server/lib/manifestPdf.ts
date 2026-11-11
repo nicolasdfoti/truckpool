@@ -33,6 +33,15 @@ export type ManifestTrip = {
   price: number;
   status: "OPEN" | "FULL" | "IN_TRANSIT" | "COMPLETED" | "CANCELLED";
   carrierName: string;
+  /**
+   * FULL: el remito del fletero, con todas las cargas vivas. COMPANY: el de
+   * una empresa, solo con su carga (L2 ítem 9, U7).
+   */
+  scope: "FULL" | "COMPANY";
+  /** totales del viaje (todas las cargas vivas), aunque la lista sea solo la propia */
+  usedVolume: number;
+  cargoCount: number;
+  /** las cargas que van en la tabla: todas (FULL) o las de la empresa (COMPANY) */
   cargoItems: {
     description: string;
     volume: number;
@@ -132,7 +141,8 @@ export function renderManifestPdf(trip: ManifestTrip): Promise<Buffer> {
     doc.on("end", () => resolve(Buffer.concat(chunks)));
     doc.on("error", reject);
 
-    const used = trip.cargoItems.reduce((sum, item) => sum + item.volume, 0);
+    const used = trip.usedVolume;
+    const ownOnly = trip.scope === "COMPANY";
 
     // --- header azul -------------------------------------------------------
     const headerHeight = 96;
@@ -224,7 +234,11 @@ export function renderManifestPdf(trip: ManifestTrip): Promise<Buffer> {
     y = barY + 26;
 
     // --- tabla de cargas ---------------------------------------------------
-    doc.font("Helvetica-Bold").fontSize(11).fillColor(INK).text("cargas", MARGIN, y);
+    doc
+      .font("Helvetica-Bold")
+      .fontSize(11)
+      .fillColor(INK)
+      .text(ownOnly ? "tu carga" : "cargas", MARGIN, y);
     y += 20;
 
     const columns = [
@@ -281,12 +295,20 @@ export function renderManifestPdf(trip: ManifestTrip): Promise<Buffer> {
     }
 
     // --- totales -----------------------------------------------------------
+    // el total en plata es solo de las cargas listadas: en el remito de una
+    // empresa, el del viaje dejaría deducir lo que pagan las demás.
     const totalShare = trip.cargoItems.reduce((sum, item) => sum + item.priceShare, 0);
+    const listedVolume = trip.cargoItems.reduce((sum, item) => sum + item.volume, 0);
+    const cargoWord = trip.cargoCount === 1 ? "carga" : "cargas";
+    const cargoCountText = `${trip.cargoCount} ${cargoWord}`;
     y += 4;
     dashedLine(doc, y);
     y += 14;
     doc.font("Helvetica-Bold").fontSize(10).fillColor(INK);
-    doc.text("total", MARGIN, y, { width: CONTENT_WIDTH - 120, align: "right" });
+    doc.text(ownOnly ? "total de tu carga" : "total", MARGIN, y, {
+      width: CONTENT_WIDTH - 120,
+      align: "right",
+    });
     doc.text(formatMoney(totalShare), MARGIN, y, {
       width: CONTENT_WIDTH,
       align: "right",
@@ -296,16 +318,18 @@ export function renderManifestPdf(trip: ManifestTrip): Promise<Buffer> {
       .font("Helvetica")
       .fontSize(9)
       .fillColor(INK_SOFT)
-      .text(`${formatVolume(used)} de ${formatVolume(trip.capacityTotal)}`, MARGIN, y, {
-        width: CONTENT_WIDTH - 120,
-        align: "right",
-      });
-    doc.text(
-      `${trip.cargoItems.length} ${trip.cargoItems.length === 1 ? "carga" : "cargas"}`,
-      MARGIN,
-      y,
-      { width: CONTENT_WIDTH, align: "right" }
-    );
+      .text(
+        ownOnly
+          ? `tu carga: ${formatVolume(listedVolume)}`
+          : `${formatVolume(used)} de ${formatVolume(trip.capacityTotal)}`,
+        MARGIN,
+        y,
+        { width: CONTENT_WIDTH - 120, align: "right" }
+      );
+    doc.text(ownOnly ? `el viaje lleva ${cargoCountText}` : cargoCountText, MARGIN, y, {
+      width: CONTENT_WIDTH,
+      align: "right",
+    });
 
     // --- pie ---------------------------------------------------------------
     const generatedAt = new Date().toLocaleString("es-AR");
