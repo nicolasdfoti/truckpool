@@ -1589,6 +1589,7 @@ export async function addCargoItem(
               priceShare,
               depositAmount,
               pickupAddress: data.pickupAddress,
+              pickupCity: pickupCoords?.city ?? null,
               pickupLat: pickupCoords?.lat ?? null,
               pickupLng: pickupCoords?.lng ?? null,
               trackingCode,
@@ -2106,7 +2107,8 @@ export async function getTripLocation(
  * stopOrder manual y proyección automática sobre la ruta origen→destino.
  * Solo para el transportista y las empresas con alguna carga viva en el viaje.
  * El fletero ve todas completas; la empresa, las suyas completas y las ajenas
- * como "otra parada", con el orden y el volumen (U19, ver toStopResponse).
+ * como "otra parada", con el orden, el volumen y la localidad (U19, ver
+ * toStopResponse).
  */
 export async function getTripStops(tripId: string, userId: string): Promise<StopItem[]> {
   const participants = await resolveParticipants(tripId);
@@ -2130,6 +2132,7 @@ export async function getTripStops(tripId: string, userId: string): Promise<Stop
           id: true,
           companyId: true,
           pickupAddress: true,
+          pickupCity: true,
           pickupLat: true,
           pickupLng: true,
           trackingCode: true,

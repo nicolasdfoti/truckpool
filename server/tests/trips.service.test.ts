@@ -2051,6 +2051,47 @@ describe("addCargoItem", () => {
       expect(data.trackingCode).not.toMatch(/-C\d+$/);
     });
 
+    // L6: la localidad que resolvió Nominatim es lo único del retiro que ven
+    // las otras empresas ("otra carga · 3 m³ · retiro en Córdoba")
+    it("guarda la localidad del geocode como pickupCity", async () => {
+      vi.mocked(geocode).mockResolvedValue({
+        lat: -31.42,
+        lng: -64.18,
+        label: "Córdoba, Córdoba, Argentina",
+        city: "Córdoba",
+      });
+
+      await tripsService.addCargoItem("t1", "c1", {
+        description: "Maquinaria",
+        pickupAddress: "Av. Colón 1234, Córdoba",
+        volume: 10,
+      });
+
+      expect(tx.cargoItem.create.mock.calls[0]?.[0]?.data).toMatchObject({
+        pickupAddress: "Av. Colón 1234, Córdoba",
+        pickupCity: "Córdoba",
+        pickupLat: -31.42,
+        pickupLng: -64.18,
+      });
+    });
+
+    it.each([
+      ["el geocode no trae localidad", { lat: -31.42, lng: -64.18, city: null }],
+      ["el geocode no resolvió", null],
+    ])("pickupCity queda en null si %s", async (_caso, place) => {
+      vi.mocked(geocode).mockResolvedValue(place);
+
+      await tripsService.addCargoItem("t1", "c1", {
+        description: "Maquinaria",
+        pickupAddress: "Córdoba, Córdoba",
+        volume: 10,
+      });
+
+      expect(tx.cargoItem.create.mock.calls[0]?.[0]?.data).toMatchObject({
+        pickupCity: null,
+      });
+    });
+
     it("falla con STOP_TOO_FAR_FROM_ROUTE cuando el pickup está lejos del trayecto (distancia > 8 km)", async () => {
       // geometría de ruta Córdoba → Rosario
       const routeGeometry: [number, number][] = [
@@ -5591,6 +5632,7 @@ describe("getTripStops por rol (U19)", () => {
     trackingCode: string;
     volume: number;
     stopOrder: number;
+    pickupCity?: string | null;
   }) {
     return {
       id: o.id,
@@ -5599,6 +5641,7 @@ describe("getTripStops por rol (U19)", () => {
       status: "CONFIRMED",
       description: o.description,
       pickupAddress: o.pickupAddress,
+      pickupCity: o.pickupCity ?? null,
       pickupLat: -32.95,
       pickupLng: -60.65,
       trackingCode: o.trackingCode,
@@ -5632,6 +5675,7 @@ describe("getTripStops por rol (U19)", () => {
             companyId: "c-acero",
             description: "Bobinas de acero",
             pickupAddress: "Av. Pellegrini 900, Rosario",
+            pickupCity: "Rosario",
             trackingCode: "TP-ACERO-C2",
             volume: 4,
             stopOrder: 1,
@@ -5654,12 +5698,18 @@ describe("getTripStops por rol (U19)", () => {
     "volume",
   ];
 
-  it("la empresa ve su parada completa y la ajena solo con orden y volumen", async () => {
+  it("la empresa ve su parada completa y la ajena con orden, volumen y ciudad", async () => {
     const stops = await tripsService.getTripStops("t1", "c-norte");
 
     expect(stops).toHaveLength(2);
-    // el orden del recorrido se mantiene: la ajena es la 1.ª
-    expect(stops[0]).toEqual({ kind: "OTHER", stopOrder: 1, volume: 4 });
+    // el orden del recorrido se mantiene: la ajena es la 1.ª. De su retiro solo
+    // va la localidad que resolvió el geocode, nunca la dirección (L6)
+    expect(stops[0]).toEqual({
+      kind: "OTHER",
+      stopOrder: 1,
+      volume: 4,
+      pickupCity: "Rosario",
+    });
     expect(Object.keys(stops[1]!).sort()).toEqual(CLAVES_COMPLETA);
     expect(stops[1]).toMatchObject({
       kind: "FULL",

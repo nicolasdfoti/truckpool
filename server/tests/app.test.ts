@@ -2446,6 +2446,7 @@ describe("GET /api/trips/:id por rol (U7)", () => {
     description: string;
     volume: number;
     pickupAddress: string;
+    pickupCity?: string | null;
     trackingCode: string;
   }) {
     return {
@@ -2462,6 +2463,7 @@ describe("GET /api/trips/:id por rol (U7)", () => {
       cancelledAt: o.status === "CANCELLED" ? new Date("2026-09-02T10:00:00.000Z") : null,
       cancellationFeeAmount: o.status === "CANCELLED" ? new Prisma.Decimal(0) : null,
       pickupAddress: o.pickupAddress,
+      pickupCity: o.pickupCity ?? null,
       pickupLat: -32.95,
       pickupLng: -60.65,
       trackingCode: o.trackingCode,
@@ -2528,6 +2530,7 @@ describe("GET /api/trips/:id por rol (U7)", () => {
         description: "Bobinas de acero",
         volume: 4,
         pickupAddress: "Av. Pellegrini 900, Rosario",
+        pickupCity: "Rosario",
         trackingCode: "TP-ACERO-C2",
       }),
       carga({
@@ -2646,7 +2649,7 @@ describe("GET /api/trips/:id por rol (U7)", () => {
     ]);
   });
 
-  it("empresa dueña: su carga completa y las ajenas solo con volumen", async () => {
+  it("empresa dueña: su carga completa y las ajenas con volumen y ciudad", async () => {
     const body = await pedir(norteToken);
 
     expect(claves(body)).toEqual(CLAVES_PARTICIPANTE);
@@ -2658,10 +2661,26 @@ describe("GET /api/trips/:id por rol (U7)", () => {
       pickupAddress: "Bv. Oroño 1200, Rosario",
       trackingCode: "TP-NORTE-C1",
     });
-    // la retirada de otra empresa tampoco aparece entre las ajenas
-    expect(body.otherCargo).toEqual([{ volume: 4 }]);
+    // la retirada de otra empresa tampoco aparece entre las ajenas; de la viva,
+    // la localidad del retiro y nada de la dirección (L6)
+    expect(body.otherCargo).toEqual([{ volume: 4, pickupCity: "Rosario" }]);
     expect(body.departureAddress).toBe("Galpón Av. Circunvalación 5000, Córdoba");
     noContiene(body, [...secretosDe.acero, ...secretosDe.vino]);
+  });
+
+  it("una carga ajena sin localidad resuelta va con pickupCity null", async () => {
+    const sinCiudad = {
+      ...viaje,
+      cargoItems: viaje.cargoItems.map((item) => ({ ...item, pickupCity: null })),
+    };
+    vi.mocked(prisma.trip.findUnique).mockResolvedValue(sinCiudad as never);
+    vi.mocked(prisma.revokedToken.findUnique).mockResolvedValue(null as never);
+
+    const res = await request(app)
+      .get("/api/trips/t-roles")
+      .set("Authorization", `Bearer ${norteToken}`);
+
+    expect(res.body.otherCargo).toEqual([{ volume: 4, pickupCity: null }]);
   });
 
   it("fletero dueño: todas las cargas completas", async () => {
