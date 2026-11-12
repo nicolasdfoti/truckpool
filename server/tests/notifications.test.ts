@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { prisma } from "../lib/prisma.js";
-import { sendEmailToUser } from "../lib/email.js";
+import { renderEmail, sendEmailToUser } from "../lib/email.js";
 import {
   listNotifications,
   markAllNotificationsRead,
@@ -197,6 +197,36 @@ describe("notifyUsers", () => {
       ).resolves.toBe(1);
       await vi.waitFor(() => expect(console.error).toHaveBeenCalled());
     });
+  });
+});
+
+// L5: el email genérico (el que reciben las empresas por CARGO_CANCELLED o
+// STOPS_REORDERED) se arma con renderEmail, así que escapa el body y el nombre
+describe("email genérico de un aviso", () => {
+  it("escapa el body del aviso y el nombre de quien lo recibe", async () => {
+    const real =
+      await vi.importActual<typeof import("../lib/email.js")>("../lib/email.js");
+    vi.mocked(renderEmail).mockImplementationOnce(real.renderEmail);
+    vi.mocked(prisma.user.findMany).mockResolvedValue([
+      user({ name: '<a href="https://phish.example">x</a>' }),
+    ] as never);
+    vi.mocked(prisma.notification.createMany).mockResolvedValue({ count: 1 } as never);
+    vi.mocked(sendEmailToUser).mockResolvedValue(true);
+
+    await notifyUsers(["u1"], {
+      type: "CARGO_CANCELLED",
+      title: "se canceló tu carga",
+      body: "tu carga <img src=x onerror=alert(1)> se canceló",
+      tripId: "t1",
+    });
+    await vi.waitFor(() => expect(sendEmailToUser).toHaveBeenCalledTimes(1));
+
+    const html = vi.mocked(sendEmailToUser).mock.calls[0]![2];
+    expect(html).toContain("tu carga &lt;img src=x onerror=alert(1)&gt; se canceló");
+    expect(html).toContain(
+      "hola &lt;a href=&quot;https://phish.example&quot;&gt;x&lt;/a&gt;,"
+    );
+    expect(html).not.toContain("<img");
   });
 });
 

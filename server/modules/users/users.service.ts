@@ -20,6 +20,7 @@ import {
 } from "../../lib/mappers.js";
 import { endOfArgentinaDay, isTripDateAvailable } from "../../lib/dates.js";
 import { encryptSecret } from "../../lib/crypto.js";
+import { tripRequestEmail, tripRequestResponseEmail } from "../../lib/email.js";
 import { signOAuthState } from "../../lib/auth.js";
 import { mpOAuthTestToken } from "../../lib/env.js";
 import type {
@@ -491,27 +492,16 @@ export async function createTripRequest(
       input.desiredDate
     ).toLocaleDateString("es-AR")} (${input.estimatedVolume} m³).`,
     tripId: null,
-    email: (recipient) => ({
-      subject: `Nueva solicitud de viaje: ${input.origin} → ${input.destination}`,
-      html: `
-        <p>Hola ${recipient.name},</p>
-        <p><strong>${request.company.name}</strong> te solicitó un viaje directo:</p>
-        <ul>
-          <li><strong>Origen:</strong> ${input.origin}</li>
-          <li><strong>Destino:</strong> ${input.destination}</li>
-          <li><strong>Fecha deseada:</strong> ${new Date(
-            input.desiredDate
-          ).toLocaleDateString("es-AR", {
-            weekday: "long",
-            day: "numeric",
-            month: "long",
-          })}</li>
-          <li><strong>Volumen estimado:</strong> ${input.estimatedVolume} m³</li>
-          ${input.note ? `<li><strong>Nota:</strong> ${input.note}</li>` : ""}
-        </ul>
-        <p>Iniciá sesión para ver la solicitud y responder.</p>
-      `,
-    }),
+    email: (recipient) =>
+      tripRequestEmail({
+        carrier: recipient,
+        companyName: request.company.name,
+        origin: input.origin,
+        destination: input.destination,
+        desiredDate: input.desiredDate,
+        estimatedVolume: input.estimatedVolume,
+        note: input.note ?? null,
+      }),
   });
 
   return { request: toTripRequestResponse(request) };
@@ -655,7 +645,6 @@ export async function respondTripRequest(
 
   // Notificar a la company
   const { notifyUsers } = await import("../../lib/notifications.js");
-  const tripLink = resultingTripId ? `/viajes/${resultingTripId}` : null;
   await notifyUsers([request.companyId], {
     type: "TRIP_REQUEST_RESPONSE",
     title: input.accept
@@ -665,18 +654,15 @@ export async function respondTripRequest(
       ? `${request.carrier.name} aceptó tu pedido y creó el viaje.`
       : `${request.carrier.name} no puede hacer ese viaje en este momento.`,
     tripId: resultingTripId,
-    email: (recipient) => ({
-      subject: input.accept
-        ? `Solicitud aceptada: ${request.origin} → ${request.destination}`
-        : `Solicitud rechazada: ${request.origin} → ${request.destination}`,
-      html: `
-        <p>Hola ${recipient.name},</p>
-        <p>Tu solicitud de viaje <strong>${request.origin} → ${request.destination}</strong> fue
-          <strong>${input.accept ? "aceptada" : "rechazada"}</strong> por <strong>${request.carrier.name}</strong>.</p>
-        ${input.accept ? `<p>El viaje ya está publicado y podés sumar carga.</p>` : ""}
-        ${tripLink ? `<p><a href="${process.env.APP_URL}${tripLink}">Ver el viaje</a></p>` : ""}
-      `,
-    }),
+    email: (recipient) =>
+      tripRequestResponseEmail({
+        company: recipient,
+        carrierName: request.carrier.name,
+        origin: request.origin,
+        destination: request.destination,
+        accepted: input.accept,
+        tripId: resultingTripId,
+      }),
   });
 
   return { request: toTripRequestResponse(updated) };

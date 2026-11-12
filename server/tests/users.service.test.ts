@@ -573,7 +573,7 @@ describe("verificación de identidad", () => {
   });
 });
 
-// Reloj fijo: miércoles 12/11/2026 12:00 ART. «Hoy» y «mañana» son días
+// Reloj fijo: jueves 12/11/2026 12:00 ART. «Hoy» y «mañana» son días
 // calendario de Argentina (isTripDateAvailable).
 const AHORA_SOLICITUDES = new Date("2026-11-12T15:00:00.000Z");
 const HOY_TARDE = new Date("2026-11-13T02:30:00.000Z"); // 12/11 23:30 ART
@@ -609,6 +609,43 @@ describe("crear una solicitud de viaje directo", () => {
 
     expect(prisma.tripRequest.create).not.toHaveBeenCalled();
     expect(notifyUsers).not.toHaveBeenCalled();
+  });
+
+  // L5: el email al fletero se arma con renderEmail (escapa la nota y el nombre)
+  it("el email al fletero escapa lo que escribió la empresa", async () => {
+    vi.mocked(prisma.user.findUnique).mockResolvedValue({
+      id: "u1",
+      role: "CARRIER",
+      name: "Transportes Flete",
+    } as never);
+    vi.mocked(prisma.tripRequest.create).mockResolvedValue({
+      id: "r1",
+      status: "PENDING",
+      carrierId: "u1",
+      companyId: "c1",
+      origin: "Córdoba",
+      destination: "Rosario",
+      desiredDate: MANANA,
+      createdAt: AHORA_SOLICITUDES,
+      estimatedVolume: 10,
+      note: "<img src=x onerror=alert(1)>",
+      resultingTripId: null,
+      company: { id: "c1", name: '<a href="https://phish.example">x</a>' },
+      carrier: { id: "u1", name: "Transportes Flete" },
+    } as never);
+
+    await usersService.createTripRequest("c1", {
+      ...input,
+      desiredDate: MANANA,
+      note: "<img src=x onerror=alert(1)>",
+    });
+
+    const aviso = vi.mocked(notifyUsers).mock.calls[0]![1];
+    if (typeof aviso.email !== "function") throw new Error("el aviso no trae email");
+    const { html } = aviso.email({ name: "Transportes Flete", email: "f@x.com" });
+    expect(html).toContain("&lt;img src=x onerror=alert(1)&gt;");
+    expect(html).toContain("&lt;a href=&quot;https://phish.example&quot;&gt;");
+    expect(html).not.toContain("<img");
   });
 
   it("crea la solicitud para mañana", async () => {
@@ -781,6 +818,31 @@ describe("responder una solicitud de viaje directo", () => {
     const result = await usersService.respondTripRequest("r1", "u1", { accept: false });
 
     expect(result.request.status).toBe("DECLINED");
+  });
+
+  it("el email a la empresa escapa el nombre del fletero y linkea al viaje", async () => {
+    vi.mocked(prisma.tripRequest.findUnique).mockResolvedValue(
+      baseRequest({
+        carrier: { id: "u1", name: "<b>Flete</b>", email: "flete@truckpool.app" },
+      }) as never
+    );
+    vi.mocked(prisma.user.findUnique).mockResolvedValue({
+      verificationStatus: "VERIFIED",
+      mpUserId: "mp-user-123",
+    } as never);
+    vi.mocked(prisma.trip.create).mockResolvedValue({ id: "t9" } as never);
+    vi.mocked(prisma.tripRequest.update).mockResolvedValue(
+      baseRequest({ status: "ACCEPTED", resultingTripId: "t9" }) as never
+    );
+
+    await usersService.respondTripRequest("r1", "u1", { accept: true, tripDetails });
+
+    const aviso = vi.mocked(notifyUsers).mock.calls[0]![1];
+    if (typeof aviso.email !== "function") throw new Error("el aviso no trae email");
+    const { html } = aviso.email({ name: "Acero SA", email: "a@x.com" });
+    expect(html).toContain("&lt;b&gt;Flete&lt;/b&gt;");
+    expect(html).toContain('href="http://localhost:5173/viajes/t9"');
+    expect(html).not.toContain("undefined");
   });
 
   it("rechazar no exige cuenta de MP", async () => {
