@@ -7,8 +7,9 @@ import type { LatLng } from "../lib/geo";
 type TripPinMapProps = {
   origin: LatLng | null;
   destination: LatLng | null;
-  onOriginChange: (point: LatLng) => void;
-  onDestinationChange: (point: LatLng) => void;
+  /** sin handler el pin queda fijo (hoy PublishTrip no los pasa: ver usePlaceField) */
+  onOriginChange?: (point: LatLng) => void;
+  onDestinationChange?: (point: LatLng) => void;
   /**
    * Punto exacto de partida (depósito/galpón). Opcional: si viene null no se
    * dibuja, y el mapa sigue siendo el de dos extremos de siempre.
@@ -67,11 +68,11 @@ function FitToPoints({ points, fitKey }: { points: [number, number][]; fitKey: s
 }
 
 /**
- * Mapa de publicación: dos pines arrastrables, uno por extremo, y un tercero
- * opcional para el punto exacto de salida. Los mueve el geocode cuando el
- * fletero escribe la dirección, y el fletero los puede corregir a mano (un
- * "Rosario" mal geocodificado se arregla moviendo el pin, no escribiendo una
- * dirección imposible de adivinar).
+ * Mapa de publicación: un pin por extremo y un tercero opcional para el punto
+ * exacto de salida. Los mueve el geocode cuando el fletero escribe la
+ * dirección. Cada pin es arrastrable solo si viene su handler: mientras el
+ * server no reciba el punto movido (L10), PublishTrip los deja fijos para no
+ * prometer una corrección que se pierde al publicar.
  */
 export function TripPinMap({
   origin,
@@ -118,7 +119,11 @@ export function TripPinMap({
             position={[departure.lat, departure.lng]}
             icon={departureIcon}
             draggable={Boolean(onDepartureChange)}
-            title="punto exacto de salida: mové el pin si el lugar no es el correcto"
+            title={
+              onDepartureChange
+                ? "punto exacto de salida: mové el pin si el lugar no es el correcto"
+                : "punto exacto de salida"
+            }
             eventHandlers={
               onDepartureChange
                 ? {
@@ -135,28 +140,44 @@ export function TripPinMap({
           <Marker
             position={[origin.lat, origin.lng]}
             icon={originIcon}
-            draggable
-            title="origen: mové el pin si el lugar no es el correcto"
-            eventHandlers={{
-              dragend: (event) => {
-                const { lat, lng } = (event.target as L.Marker).getLatLng();
-                onOriginChange({ lat, lng });
-              },
-            }}
+            draggable={Boolean(onOriginChange)}
+            title={
+              onOriginChange
+                ? "origen: mové el pin si el lugar no es el correcto"
+                : "origen"
+            }
+            eventHandlers={
+              onOriginChange
+                ? {
+                    dragend: (event) => {
+                      const { lat, lng } = (event.target as L.Marker).getLatLng();
+                      onOriginChange({ lat, lng });
+                    },
+                  }
+                : undefined
+            }
           />
         )}
         {destination && (
           <Marker
             position={[destination.lat, destination.lng]}
             icon={destinationIcon}
-            draggable
-            title="destino: mové el pin si el lugar no es el correcto"
-            eventHandlers={{
-              dragend: (event) => {
-                const { lat, lng } = (event.target as L.Marker).getLatLng();
-                onDestinationChange({ lat, lng });
-              },
-            }}
+            draggable={Boolean(onDestinationChange)}
+            title={
+              onDestinationChange
+                ? "destino: mové el pin si el lugar no es el correcto"
+                : "destino"
+            }
+            eventHandlers={
+              onDestinationChange
+                ? {
+                    dragend: (event) => {
+                      const { lat, lng } = (event.target as L.Marker).getLatLng();
+                      onDestinationChange({ lat, lng });
+                    },
+                  }
+                : undefined
+            }
           />
         )}
         <FitToPoints points={points} fitKey={fitKey} />

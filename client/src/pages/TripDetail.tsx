@@ -140,9 +140,6 @@ function PickupAddressField({
           en el mapa.
         </p>
       )}
-      {place.movedByHand && (
-        <p className="mt-1 text-xs text-ink-muted">pin corregido a mano</p>
-      )}
       {error && <p className="mt-1 text-xs text-danger">{error}</p>}
     </div>
   );

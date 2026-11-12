@@ -40,9 +40,11 @@ function formatPoint(point: { lat: number; lng: number }): string {
 type PlaceKind = "origen" | "destino" | "punto de salida";
 
 /**
- * Lo que el fletero necesita ver antes de publicar: dónde cayó el pin. Si el
- * geocode no encontró el lugar, lo decimos (el viaje se publica igual, pero sin
- * coordenadas no va a aparecer en los mapas ni en las búsquedas por radio).
+ * Lo que el fletero necesita ver antes de publicar: qué lugar entendimos, en
+ * texto y con el país ("Córdoba, Córdoba, Argentina"). Las coordenadas quedan
+ * solo si el server no informó el lugar. Si el geocode no lo encontró, lo
+ * decimos (el viaje se publica igual, pero sin coordenadas no va a aparecer en
+ * los mapas ni en las búsquedas por radio).
  */
 function PlaceHint({
   place,
@@ -65,10 +67,24 @@ function PlaceHint({
   if (!place.point) return null;
   return (
     <p className="mt-1 text-xs text-ink-muted">
-      pin del {kind}: {formatPoint(place.point)}
-      {place.movedByHand ? " (lo moviste vos)" : " — revisá que sea el lugar correcto"}
+      {place.label ? (
+        <>
+          {kind}: <span className="text-ink">{place.label}</span>
+        </>
+      ) : (
+        <>
+          pin del {kind}: {formatPoint(place.point)}
+        </>
+      )}{" "}
+      — revisá que sea el lugar correcto
     </p>
   );
+}
+
+/** "40 % arriba", "12 % abajo": cuánto se aleja el precio del sugerido */
+function deviationText(price: number, suggested: number): string {
+  const percent = Math.round((Math.abs(price - suggested) / suggested) * 100);
+  return `${percent} % ${price > suggested ? "arriba" : "abajo"}`;
 }
 
 export default function PublishTrip() {
@@ -94,52 +110,57 @@ export default function PublishTrip() {
   const [truckType, setTruckType] = useState(TRUCK_TYPES[0]);
   const [capacityTotal, setCapacityTotal] = useState("");
   const [price, setPrice] = useState("");
+  const [priceTouched, setPriceTouched] = useState(false);
   const [depositPercent, setDepositPercent] = useState("20");
   const [departureTime, setDepartureTime] = useState("");
   const [features, setFeatures] = useState<TripFeature[]>([]);
   const [formError, setFormError] = useState<string | null>(null);
 
-  // Cada extremo tiene su estado de geocode: el pin se mueve solo con lo que
-  // el fletero escribe y queda en sus manos si lo corrige a mano.
+  // Cada extremo tiene su estado de geocode: el pin y el lugar en texto siguen
+  // a lo que el fletero escribe (el pin no se arrastra, ver usePlaceField).
   const originPlace = usePlaceField(origin);
   const destinationPlace = usePlaceField(destination);
   const departurePlace = usePlaceField(departureAddress);
 
-  // Precio sugerido según distancia y vehículo. Cuando hay sugerencia, el
-  // precio deja de ser un input libre y pasa a ser un control acotado al rango
-  // que devuelve la API (±15%); sin sugerencia (geocode caído) queda libre.
+  // Precio sugerido según distancia y vehículo (D5): es una referencia. El
+  // precio lo pone el fletero y salir del ±15 % solo muestra un aviso.
   const { estimate } = usePriceEstimate(origin, destination, truckType);
-  // geocoded:false viene con los números en null, así que el narrowing se hace
-  // una vez acá y el resto del form trabaja con number sin interrogantes
-  const rango = estimate?.geocoded
-    ? {
-        distanceKm: estimate.distanceKm as number,
-        suggestedPrice: estimate.suggestedPrice as number,
-        minPrice: estimate.minPrice as number,
-        maxPrice: estimate.maxPrice as number,
-      }
-    : null;
+  // los números vienen todos o ninguno: geocoded:false (geocode caído) o más
+  // de 5.000 km (una punta mal resuelta) los traen en null
+  const sugerencia =
+    estimate?.geocoded &&
+    estimate.distanceKm !== null &&
+    estimate.suggestedPrice !== null &&
+    estimate.minPrice !== null &&
+    estimate.maxPrice !== null
+      ? {
+          distanceKm: estimate.distanceKm,
+          suggestedPrice: estimate.suggestedPrice,
+          minPrice: estimate.minPrice,
+          maxPrice: estimate.maxPrice,
+        }
+      : null;
+  const tooFarKm =
+    estimate?.geocoded && !sugerencia && estimate.distanceKm !== null
+      ? estimate.distanceKm
+      : null;
 
-  // Cada vez que llega una sugerencia distinta (otra ruta, otro vehículo) el
-  // precio vuelve al medio del rango: lo que el fletero había elegido era para
-  // un viaje que ya no es este.
-  const estimateKey = rango
-    ? `${rango.suggestedPrice}:${rango.minPrice}:${rango.maxPrice}`
-    : null;
-  const [lastEstimateKey, setLastEstimateKey] = useState<string | null>(null);
-  if (estimateKey !== lastEstimateKey) {
-    setLastEstimateKey(estimateKey);
-    if (rango) setPrice(String(rango.suggestedPrice));
+  // Mientras el fletero no escribió un precio, el campo muestra el sugerido (y
+  // lo sigue si cambia la ruta o el vehículo). Lo que escribe a mano no se pisa
+  // nunca; "usar el sugerido" vuelve a la precarga.
+  const shownPrice =
+    !priceTouched && sugerencia ? String(sugerencia.suggestedPrice) : price;
+  const parsedPrice = parseDecimalInput(shownPrice);
+  const outOfRange =
+    sugerencia &&
+    Number.isFinite(parsedPrice) &&
+    parsedPrice > 0 &&
+    (parsedPrice < sugerencia.minPrice || parsedPrice > sugerencia.maxPrice);
+
+  function applySuggestedPrice() {
+    setPrice("");
+    setPriceTouched(false);
   }
-
-  // el slider es un <input type="range">: si le pasamos "" o un NaN se rompe.
-  // Ante cualquier valor raro cae al sugerido, que siempre está en el rango.
-  const parsedPrice = parseDecimalInput(price);
-  const sliderValue = rango
-    ? Number.isFinite(parsedPrice)
-      ? Math.min(rango.maxPrice, Math.max(rango.minPrice, parsedPrice))
-      : rango.suggestedPrice
-    : 0;
 
   function toggleFeature(feature: TripFeature) {
     setFeatures((current) =>
@@ -154,7 +175,7 @@ export default function PublishTrip() {
     setFormError(null);
 
     const parsedCapacity = parseDecimalInput(capacityTotal);
-    const parsedPrice = parseDecimalInput(price);
+    const parsedPrice = parseDecimalInput(shownPrice);
     const parsedDeposit = parseDecimalInput(depositPercent);
 
     if (!origin.trim() || !destination.trim()) {
@@ -352,16 +373,13 @@ export default function PublishTrip() {
                 className="h-72 w-full"
                 origin={originPlace.point}
                 destination={destinationPlace.point}
-                onOriginChange={originPlace.setPointByHand}
-                onDestinationChange={destinationPlace.setPointByHand}
                 departure={departurePlace.point}
-                onDepartureChange={departurePlace.setPointByHand}
                 fitKey={`${departurePlace.resolvedFor ?? ""}|${originPlace.resolvedFor ?? ""}|${destinationPlace.resolvedFor ?? ""}`}
               />
               <p className="mt-2 text-xs text-ink-muted">
                 {originPlace.point || destinationPlace.point || departurePlace.point
-                  ? " revisá los pines: si alguno cayó en el lugar equivocado, movelo. el pin de salida es el azul y el de llegada el naranja."
-                  : " escribí origen y destino y los ubicamos en el mapa. después podés corregir cada pin a mano."}
+                  ? "revisá los pines: si alguno cayó en el lugar equivocado, completá la dirección (por ejemplo con la provincia). el pin de salida es el azul y el de llegada el naranja."
+                  : "escribí origen y destino y los ubicamos en el mapa."}
               </p>
             </div>
 
@@ -464,50 +482,57 @@ export default function PublishTrip() {
               <label className="text-[13px] text-ink-soft" htmlFor="price">
                 precio del viaje
               </label>
-              {rango ? (
-                <>
-                  <p className="mt-1 text-sm text-ink-muted">
-                    {Math.round(rango.distanceKm)} km · sugerido:{" "}
-                    {currency(rango.suggestedPrice)}
+              <input
+                id="price"
+                value={shownPrice}
+                onChange={(e) => {
+                  setPrice(e.target.value);
+                  setPriceTouched(true);
+                }}
+                placeholder="ej: 1500"
+                inputMode="decimal"
+                aria-describedby="priceHelp"
+                className={inputClass}
+              />
+              <div id="priceHelp">
+                {sugerencia ? (
+                  <p className="mt-1 text-xs text-ink-muted">
+                    sugerido {currency(sugerencia.suggestedPrice)} para{" "}
+                    {Math.round(sugerencia.distanceKm)} km (entre{" "}
+                    {currency(sugerencia.minPrice)} y {currency(sugerencia.maxPrice)}). es
+                    una referencia para que las empresas comparen: el precio lo ponés vos.
+                    {parsedPrice !== sugerencia.suggestedPrice && (
+                      <>
+                        {" "}
+                        <button
+                          type="button"
+                          onClick={applySuggestedPrice}
+                          className="text-brand underline"
+                        >
+                          usar el sugerido
+                        </button>
+                      </>
+                    )}
                   </p>
-                  <div className="mt-3 flex items-center gap-3">
-                    <input
-                      id="price"
-                      type="range"
-                      min={rango.minPrice}
-                      max={rango.maxPrice}
-                      step={100}
-                      value={sliderValue}
-                      onChange={(e) => setPrice(e.target.value)}
-                      aria-describedby="priceRange"
-                      className="w-full accent-brand"
-                    />
-                    <span className="w-24 shrink-0 text-right font-medium text-brand">
-                      {currency(sliderValue)}
-                    </span>
-                  </div>
-                  <p id="priceRange" className="mt-1 text-xs text-ink-muted">
-                    entre {currency(rango.minPrice)} y {currency(rango.maxPrice)}: es el
-                    rango razonable para esta ruta, así las empresas pueden comparar
-                    precios entre viajes.
+                ) : tooFarKm !== null ? (
+                  <p className="mt-1 text-xs text-ink-muted">
+                    no sugerimos precio: {Math.round(tooFarKm).toLocaleString("es-AR")} km
+                    entre origen y destino no parece un viaje real. revisá los lugares.
                   </p>
-                </>
-              ) : (
-                <>
-                  <input
-                    id="price"
-                    value={price}
-                    onChange={(e) => setPrice(e.target.value)}
-                    placeholder="ej: 1500"
-                    inputMode="decimal"
-                    className={inputClass}
-                  />
+                ) : (
                   <p className="mt-1 text-xs text-ink-muted">
                     no pudimos calcular una sugerencia, ingresalo vos. el precio se
                     prorratea entre las cargas según el volumen que ocupen.
                   </p>
-                </>
-              )}
+                )}
+                {sugerencia && outOfRange && (
+                  <p role="status" className="mt-1 text-xs text-accent-text">
+                    está {deviationText(parsedPrice, sugerencia.suggestedPrice)} del
+                    sugerido ({currency(sugerencia.suggestedPrice)}). podés publicarlo
+                    igual.
+                  </p>
+                )}
+              </div>
             </div>
 
             <div className="mt-4">
