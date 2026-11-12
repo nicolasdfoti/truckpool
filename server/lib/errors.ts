@@ -124,6 +124,20 @@ export class CarrierNotVerifiedError extends AppError {
   }
 }
 
+/**
+ * Aceptar una solicitud cuya fecha ya llegó (hoy o antes, en Argentina): el
+ * viaje que crearía no podría recibir cargas (isTripDateAvailable).
+ */
+export class TripRequestExpiredError extends AppError {
+  constructor() {
+    super(
+      "la fecha de esta solicitud ya llegó: no se puede aceptar, solo rechazar",
+      409,
+      "TRIP_REQUEST_EXPIRED"
+    );
+  }
+}
+
 export class VerificationNotPendingError extends AppError {
   constructor() {
     super(

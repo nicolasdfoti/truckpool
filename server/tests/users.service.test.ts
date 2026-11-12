@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { User } from "@prisma/client";
 import { CarrierNotFoundError } from "../lib/errors.js";
 import { decryptSecret } from "../lib/crypto.js";
+import { notifyUsers } from "../lib/notifications.js";
 import { signOAuthState, signToken, verifyOAuthState } from "../lib/auth.js";
 import * as usersService from "../modules/users/users.service.js";
 import { prisma } from "../lib/prisma.js";
@@ -10,7 +11,7 @@ vi.mock("../lib/prisma", () => ({
   prisma: {
     user: { findUnique: vi.fn(), update: vi.fn(), findMany: vi.fn() },
     trip: { findMany: vi.fn(), create: vi.fn() },
-    tripRequest: { findUnique: vi.fn(), update: vi.fn() },
+    tripRequest: { findUnique: vi.fn(), update: vi.fn(), create: vi.fn() },
     cargoItem: { findMany: vi.fn() },
     review: { aggregate: vi.fn(), groupBy: vi.fn() },
   },
@@ -572,6 +573,76 @@ describe("verificación de identidad", () => {
   });
 });
 
+// Reloj fijo: miércoles 12/11/2026 12:00 ART. «Hoy» y «mañana» son días
+// calendario de Argentina (isTripDateAvailable).
+const AHORA_SOLICITUDES = new Date("2026-11-12T15:00:00.000Z");
+const HOY_TARDE = new Date("2026-11-13T02:30:00.000Z"); // 12/11 23:30 ART
+const AYER = new Date("2026-11-11T15:00:00.000Z");
+const MANANA = new Date("2026-11-13T15:00:00.000Z");
+
+describe("crear una solicitud de viaje directo", () => {
+  const input = {
+    carrierId: "u1",
+    origin: "Córdoba",
+    destination: "Rosario",
+    estimatedVolume: 10,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(AHORA_SOLICITUDES);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // L5: un viaje para hoy ya no acepta cargas, así que pedirlo no tiene sentido
+  it.each([
+    ["hoy", HOY_TARDE],
+    ["ayer", AYER],
+  ])("rechaza una fecha de %s con 400 sin crear ni avisar", async (_cuando, desiredDate) => {
+    await expect(
+      usersService.createTripRequest("c1", { ...input, desiredDate })
+    ).rejects.toMatchObject({ statusCode: 400, code: "VALIDATION_ERROR" });
+
+    expect(prisma.tripRequest.create).not.toHaveBeenCalled();
+    expect(notifyUsers).not.toHaveBeenCalled();
+  });
+
+  it("crea la solicitud para mañana", async () => {
+    vi.mocked(prisma.user.findUnique).mockResolvedValue({
+      id: "u1",
+      role: "CARRIER",
+      name: "Transportes Flete",
+    } as never);
+    vi.mocked(prisma.tripRequest.create).mockResolvedValue({
+      id: "r1",
+      status: "PENDING",
+      carrierId: "u1",
+      companyId: "c1",
+      origin: "Córdoba",
+      destination: "Rosario",
+      desiredDate: MANANA,
+      createdAt: AHORA_SOLICITUDES,
+      estimatedVolume: 10,
+      note: null,
+      resultingTripId: null,
+      company: { id: "c1", name: "Acero SA" },
+      carrier: { id: "u1", name: "Transportes Flete" },
+    } as never);
+
+    const result = await usersService.createTripRequest("c1", {
+      ...input,
+      desiredDate: MANANA,
+    });
+
+    expect(prisma.tripRequest.create).toHaveBeenCalledTimes(1);
+    expect(result.request.id).toBe("r1");
+  });
+});
+
 describe("responder una solicitud de viaje directo", () => {
   const tripDetails = {
     departureTime: "08:00",
@@ -590,8 +661,8 @@ describe("responder una solicitud de viaje directo", () => {
       companyId: "c1",
       origin: "Córdoba",
       destination: "Rosario",
-      desiredDate: new Date("2026-10-01"),
-      createdAt: new Date("2026-09-01"),
+      desiredDate: MANANA,
+      createdAt: new Date("2026-11-01"),
       estimatedVolume: null,
       note: null,
       resultingTripId: null,
@@ -603,6 +674,12 @@ describe("responder una solicitud de viaje directo", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(AHORA_SOLICITUDES);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   // Aceptar una solicitud publica un viaje, así que tiene la misma exigencia
@@ -611,6 +688,7 @@ describe("responder una solicitud de viaje directo", () => {
   it("no acepta si el transportista no tiene cuenta de MP conectada", async () => {
     vi.mocked(prisma.tripRequest.findUnique).mockResolvedValue(baseRequest() as never);
     vi.mocked(prisma.user.findUnique).mockResolvedValue({
+      verificationStatus: "VERIFIED",
       mpUserId: null,
     } as never);
 
@@ -628,6 +706,7 @@ describe("responder una solicitud de viaje directo", () => {
   it("acepta y publica el viaje si la cuenta de MP está conectada", async () => {
     vi.mocked(prisma.tripRequest.findUnique).mockResolvedValue(baseRequest() as never);
     vi.mocked(prisma.user.findUnique).mockResolvedValue({
+      verificationStatus: "VERIFIED",
       mpUserId: "mp-user-123",
     } as never);
     vi.mocked(prisma.trip.create).mockResolvedValue({ id: "t9" } as never);
@@ -647,6 +726,61 @@ describe("responder una solicitud de viaje directo", () => {
     );
     expect(result.request.status).toBe("ACCEPTED");
     expect(result.request.resultingTripId).toBe("t9");
+  });
+
+  // U13: aceptar publica un viaje, así que pide lo mismo que createTrip
+  it.each(["UNVERIFIED", "PENDING", "REJECTED"])(
+    "no acepta si el transportista está %s: 403 CARRIER_NOT_VERIFIED",
+    async (verificationStatus) => {
+      vi.mocked(prisma.tripRequest.findUnique).mockResolvedValue(baseRequest() as never);
+      vi.mocked(prisma.user.findUnique).mockResolvedValue({
+        verificationStatus,
+        mpUserId: "mp-user-123",
+      } as never);
+
+      await expect(
+        usersService.respondTripRequest("r1", "u1", { accept: true, tripDetails })
+      ).rejects.toMatchObject({ statusCode: 403, code: "CARRIER_NOT_VERIFIED" });
+
+      expect(prisma.trip.create).not.toHaveBeenCalled();
+      expect(prisma.tripRequest.update).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([
+    ["hoy", HOY_TARDE],
+    ["ayer", AYER],
+  ])(
+    "no acepta una solicitud para %s: 409 TRIP_REQUEST_EXPIRED",
+    async (_cuando, desiredDate) => {
+      vi.mocked(prisma.tripRequest.findUnique).mockResolvedValue(
+        baseRequest({ desiredDate }) as never
+      );
+      vi.mocked(prisma.user.findUnique).mockResolvedValue({
+        verificationStatus: "VERIFIED",
+        mpUserId: "mp-user-123",
+      } as never);
+
+      await expect(
+        usersService.respondTripRequest("r1", "u1", { accept: true, tripDetails })
+      ).rejects.toMatchObject({ statusCode: 409, code: "TRIP_REQUEST_EXPIRED" });
+
+      expect(prisma.trip.create).not.toHaveBeenCalled();
+      expect(prisma.tripRequest.update).not.toHaveBeenCalled();
+    }
+  );
+
+  it("una solicitud vencida se puede rechazar igual", async () => {
+    vi.mocked(prisma.tripRequest.findUnique).mockResolvedValue(
+      baseRequest({ desiredDate: AYER }) as never
+    );
+    vi.mocked(prisma.tripRequest.update).mockResolvedValue(
+      baseRequest({ desiredDate: AYER, status: "DECLINED" }) as never
+    );
+
+    const result = await usersService.respondTripRequest("r1", "u1", { accept: false });
+
+    expect(result.request.status).toBe("DECLINED");
   });
 
   it("rechazar no exige cuenta de MP", async () => {

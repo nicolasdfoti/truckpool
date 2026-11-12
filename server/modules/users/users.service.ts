@@ -1,6 +1,11 @@
 import { prisma } from "../../lib/prisma.js";
 import type { User } from "@prisma/client";
-import { AppError } from "../../lib/errors.js";
+import {
+  AppError,
+  CarrierNotVerifiedError,
+  TripRequestExpiredError,
+  ValidationError,
+} from "../../lib/errors.js";
 import {
   AlreadyVerifiedError,
   CarrierNotFoundError,
@@ -13,7 +18,7 @@ import {
   toCarrierReviewResponse,
   toTripSummary,
 } from "../../lib/mappers.js";
-import { endOfArgentinaDay } from "../../lib/dates.js";
+import { endOfArgentinaDay, isTripDateAvailable } from "../../lib/dates.js";
 import { encryptSecret } from "../../lib/crypto.js";
 import { signOAuthState } from "../../lib/auth.js";
 import { mpOAuthTestToken } from "../../lib/env.js";
@@ -430,6 +435,12 @@ export async function createTripRequest(
   companyId: string,
   input: CreateTripRequestInput
 ) {
+  // un viaje para hoy (o antes) ya no acepta cargas: la misma regla que el
+  // listado. Va acá y no en el schema para que el schema no dependa del reloj.
+  if (!isTripDateAvailable(input.desiredDate)) {
+    throw new ValidationError("la fecha tiene que ser posterior a hoy");
+  }
+
   const carrier = await prisma.user.findUnique({
     where: { id: input.carrierId },
     select: {
@@ -580,11 +591,14 @@ export async function respondTripRequest(
     // no podría cobrar comisión y nadie se enteraría hasta que alguien pague.
     const carrier = await prisma.user.findUnique({
       where: { id: carrierId },
-      select: { mpUserId: true },
+      select: { verificationStatus: true, mpUserId: true },
     });
     if (!carrier) {
       throw new AppError("usuario no encontrado", 404, "USER_NOT_FOUND");
     }
+    // U13: el mismo chequeo que createTrip; sin esto un fletero no verificado
+    // (o rechazado) publicaba viajes aceptando solicitudes
+    if (carrier.verificationStatus !== "VERIFIED") throw new CarrierNotVerifiedError();
     if (!carrier.mpUserId) {
       throw new AppError(
         "para aceptar un viaje debés conectar tu cuenta de Mercado Pago desde tu perfil",
@@ -592,6 +606,10 @@ export async function respondTripRequest(
         "MP_ACCOUNT_NOT_CONNECTED"
       );
     }
+
+    // un viaje para hoy (o antes) no podría recibir cargas. Rechazarla sí se
+    // puede: es la forma de sacarla de la lista.
+    if (!isTripDateAvailable(request.desiredDate)) throw new TripRequestExpiredError();
 
     // Geocodificar origen y destino (best-effort)
     const { geocode } = await import("../../lib/geocode.js");

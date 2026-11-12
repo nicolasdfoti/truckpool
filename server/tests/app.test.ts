@@ -16,6 +16,7 @@ import { quoteCancellation, hoursUntilDeparture } from "../lib/cancellation.js";
 import { salidaEn } from "./helpers/salida.js";
 import { pdfText } from "./helpers/pdfText.js";
 import { CARRIER_CAN_CHARGE } from "../lib/mappers.js";
+import { argentinaNoonOfDay, calendarDayKey } from "../lib/dates.js";
 
 // el token del transportista llega a la base cifrado (ver OAuth), así que los
 // mocks usan un sobre real y no un string suelto
@@ -95,6 +96,7 @@ vi.mock("../lib/prisma", () => ({
       updateMany: vi.fn(),
     },
     tripLocation: { create: vi.fn(), findFirst: vi.fn(), findMany: vi.fn() },
+    tripRequest: { findUnique: vi.fn(), update: vi.fn(), create: vi.fn() },
     // requireAuth consulta la lista de revocados en cada request autenticado.
     // Por defecto findUnique devuelve undefined (no revocado), así que los
     // tests que no van de logout siguen viendo el token como válido.
@@ -111,6 +113,14 @@ vi.mock("../lib/prisma", () => ({
 
 const carrierToken = signToken({ id: "u1", role: "CARRIER" });
 const companyToken = signToken({ id: "u2", role: "COMPANY" });
+
+/** detalles válidos para aceptar una solicitud de viaje */
+const tripRequestDetails = {
+  departureTime: "08:00",
+  truckType: "Semi",
+  capacityTotal: 30,
+  price: 250_000,
+};
 const strangerToken = signToken({ id: "u9", role: "COMPANY" });
 const adminToken = signToken({ id: "u0", role: "ADMIN" });
 
@@ -285,6 +295,122 @@ describe("POST /api/trips", () => {
       });
     expect(res.status).toBe(400);
     expect(res.body.code).toBe("VALIDATION_ERROR");
+  });
+
+  // L5 (U13): aceptar una solicitud publica un viaje, así que exige VERIFIED
+  it("aceptar una solicitud sin estar verificado da 403 CARRIER_NOT_VERIFIED", async () => {
+    vi.mocked(prisma.tripRequest.findUnique).mockResolvedValueOnce({
+      id: "r1",
+      status: "PENDING",
+      carrierId: "u1",
+      companyId: "u2",
+      origin: "Córdoba",
+      destination: "Rosario",
+      desiredDate: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000),
+    } as never);
+    vi.mocked(prisma.user.findUnique).mockResolvedValueOnce({
+      verificationStatus: "PENDING",
+      mpUserId: "mp-user-123",
+    } as never);
+    vi.mocked(prisma.trip.create).mockClear();
+
+    const res = await request(app)
+      .patch("/api/users/trip-requests/r1/respond")
+      .set("Authorization", `Bearer ${carrierToken}`)
+      .send({ accept: true, tripDetails: { ...tripRequestDetails } });
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("CARRIER_NOT_VERIFIED");
+    expect(prisma.trip.create).not.toHaveBeenCalled();
+  });
+
+  it("aceptar una solicitud vencida da 409 TRIP_REQUEST_EXPIRED", async () => {
+    vi.mocked(prisma.tripRequest.findUnique).mockResolvedValueOnce({
+      id: "r1",
+      status: "PENDING",
+      carrierId: "u1",
+      companyId: "u2",
+      origin: "Córdoba",
+      destination: "Rosario",
+      desiredDate: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
+    } as never);
+    vi.mocked(prisma.user.findUnique).mockResolvedValueOnce({
+      verificationStatus: "VERIFIED",
+      mpUserId: "mp-user-123",
+    } as never);
+    vi.mocked(prisma.trip.create).mockClear();
+
+    const res = await request(app)
+      .patch("/api/users/trip-requests/r1/respond")
+      .set("Authorization", `Bearer ${carrierToken}`)
+      .send({ accept: true, tripDetails: { ...tripRequestDetails } });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("TRIP_REQUEST_EXPIRED");
+    expect(prisma.trip.create).not.toHaveBeenCalled();
+  });
+
+  it("pedir un viaje para una fecha pasada da 400 VALIDATION_ERROR", async () => {
+    vi.mocked(prisma.tripRequest.create).mockClear();
+
+    const res = await request(app)
+      .post("/api/users/trip-requests")
+      .set("Authorization", `Bearer ${companyToken}`)
+      .send({
+        carrierId: "u1",
+        origin: "Córdoba",
+        destination: "Rosario",
+        desiredDate: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
+        estimatedVolume: 10,
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("VALIDATION_ERROR");
+    expect(prisma.tripRequest.create).not.toHaveBeenCalled();
+  });
+
+  // el formulario manda "YYYY-MM-DD": mañana en Argentina tiene que poder
+  // pedirse (z.coerce.date lo leía como hoy a las 21:00 ART)
+  it("pedir un viaje para mañana con YYYY-MM-DD crea la solicitud (201)", async () => {
+    const manana = calendarDayKey(new Date(Date.now() + 24 * 60 * 60 * 1000));
+    vi.mocked(prisma.user.findUnique).mockResolvedValueOnce({
+      id: "u1",
+      role: "CARRIER",
+      name: "Transportes Flete",
+    } as never);
+    vi.mocked(prisma.tripRequest.create).mockResolvedValueOnce({
+      id: "r2",
+      status: "PENDING",
+      carrierId: "u1",
+      companyId: "u2",
+      origin: "Córdoba",
+      destination: "Rosario",
+      desiredDate: argentinaNoonOfDay(manana),
+      createdAt: new Date(),
+      estimatedVolume: 10,
+      note: null,
+      resultingTripId: null,
+      company: { id: "u2", name: "Acero SA" },
+      carrier: { id: "u1", name: "Transportes Flete" },
+    } as never);
+
+    const res = await request(app)
+      .post("/api/users/trip-requests")
+      .set("Authorization", `Bearer ${companyToken}`)
+      .send({
+        carrierId: "u1",
+        origin: "Córdoba",
+        destination: "Rosario",
+        desiredDate: manana,
+        estimatedVolume: 10,
+      });
+
+    expect(res.status).toBe(201);
+    expect(prisma.tripRequest.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ desiredDate: argentinaNoonOfDay(manana) }),
+      })
+    );
   });
 
   it("rechaza features fuera del set permitido (400)", async () => {
