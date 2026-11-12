@@ -73,7 +73,11 @@ export type RateLimitOptions = {
   name: string;
   windowMs: number;
   limit: number;
-  key: "ip" | "user";
+  /**
+   * `ip`, `user` (req.user.id, cae a la IP sin sesión) o una función: si
+   * devuelve undefined, el pedido no cuenta para este límite.
+   */
+  key: "ip" | "user" | ((req: Request) => string | undefined);
   /** solo cuentan los pedidos que fallan (el login) */
   skipSuccessful?: boolean;
   /** el texto del 429; por defecto «demasiados pedidos…» */
@@ -100,8 +104,11 @@ export function createRateLimit(options: RateLimitOptions): RequestHandler {
     standardHeaders: "draft-7",
     legacyHeaders: false,
     skipSuccessfulRequests: options.skipSuccessful ?? false,
-    keyGenerator: (req) =>
-      options.key === "user" && req.user ? `user:${req.user.id}` : ipKey(req),
+    skip: (req) => typeof options.key === "function" && options.key(req) === undefined,
+    keyGenerator: (req) => {
+      if (typeof options.key === "function") return options.key(req) ?? ipKey(req);
+      return options.key === "user" && req.user ? `user:${req.user.id}` : ipKey(req);
+    },
     handler: (_req, res) => {
       res.status(429).json({ error: message, code: "RATE_LIMITED" });
     },
@@ -151,6 +158,31 @@ function authLimit(skipSuccessful: boolean): RequestHandler {
 
 /** Login: 10 intentos por IP cada 15 minutos (solo los fallidos cuentan). */
 export const loginRateLimit = authLimit(true);
+
+/** el email del body normalizado como lo guarda el registro; sin email no cuenta */
+function loginEmailKey(req: Request): string | undefined {
+  const email: unknown = (req.body as { email?: unknown } | undefined)?.email;
+  if (typeof email !== "string" || email.trim() === "") return undefined;
+  return `email:${email.trim().toLowerCase()}`;
+}
+
+/**
+ * Login: además, 10 intentos fallidos por email cada 15 minutos, vengan de la
+ * IP que vengan (02§2.5: el límite por IP no frena el credential stuffing
+ * repartido entre muchas IPs). Costo aceptado: cualquiera puede trabar el
+ * login de una cuenta 15 minutos con 10 claves malas; CAPTCHA o backoff quedan
+ * para después. Un body sin email no cuenta acá: lo corta validateBody y ya lo
+ * contó el límite por IP.
+ */
+export const loginEmailRateLimit = createRateLimit({
+  name: "login-email",
+  windowMs: AUTH_WINDOW_MINUTES * MINUTE_MS,
+  limit: authMaxAttempts(),
+  key: loginEmailKey,
+  skipSuccessful: true,
+  message: `demasiados intentos. probá de nuevo en ${AUTH_WINDOW_MINUTES} minutos.`,
+  force: Boolean(process.env.AUTH_RATE_LIMIT_MAX),
+});
 
 /** Registro: 10 altas por IP cada 15 minutos. */
 export const registerRateLimit = authLimit(false);

@@ -1,7 +1,11 @@
 import { Router } from "express";
 import { requireAuth } from "../../lib/auth.js";
 import { validateBody } from "../../lib/validate.js";
-import { loginRateLimit, registerRateLimit } from "../../lib/rateLimit.js";
+import {
+  loginEmailRateLimit,
+  loginRateLimit,
+  registerRateLimit,
+} from "../../lib/rateLimit.js";
 import * as authController from "./auth.controller.js";
 import { loginSchema, registerSchema } from "./auth.schemas.js";
 
@@ -19,6 +23,8 @@ authRouter.post(
 authRouter.post(
   "/login",
   loginRateLimit,
+  // por email, además de por IP: muchas IPs contra la misma cuenta
+  loginEmailRateLimit,
   validateBody(loginSchema),
   authController.login
 );
