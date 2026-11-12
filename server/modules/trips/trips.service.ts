@@ -18,13 +18,7 @@ import { geocode, haversineKm, type LatLng } from "../../lib/geocode.js";
 import { fetchRouteGeometry } from "../../lib/routing.js";
 import { generateTrackingCode, normalizeTrackingCode } from "../../lib/trackingCode.js";
 import { point, lineString, pointToLineDistance } from "@turf/turf";
-import {
-  cargoPrice,
-  formatPesos,
-  isPriceInRange,
-  priceRangeFor,
-  rateFor,
-} from "../../lib/pricing.js";
+import { cargoPrice, priceRangeFor, rateFor } from "../../lib/pricing.js";
 import {
   departureInstant,
   hoursUntilDeparture,
@@ -389,7 +383,7 @@ export async function getTripById(id: string, viewer: { id: string } | null) {
 }
 
 /**
- * Precio sugerido + rango válido para un viaje que aún no existe.
+ * Precio sugerido + rango de referencia (±15 %) para un viaje que aún no existe.
  *
  * Los dos strings llegan al mismo `geocode()` que usa createTrip, así que si el
  * front ya geocodificó cada campo para mover el pin, esta llamada pega
@@ -419,7 +413,15 @@ export async function estimateTripPrice(input: {
   }
 
   const distanceKm = haversineKm(origin, destination);
-  return { ...base, geocoded: true, ...priceRangeFor(input.truckType, distanceKm) };
+  // más de 5.000 km: sin sugerencia (D5), pero con la distancia para que el
+  // client explique por qué
+  const range = priceRangeFor(input.truckType, distanceKm) ?? {
+    distanceKm,
+    suggestedPrice: null,
+    minPrice: null,
+    maxPrice: null,
+  };
+  return { ...base, geocoded: true, ...range };
 }
 
 /**
@@ -571,21 +573,9 @@ export async function createTrip(carrierId: string, data: CreateTripInput) {
     data.departureAddress ? geocode(data.departureAddress) : Promise.resolve(null),
   ]);
 
-  // Con las dos puntas ya geocodificadas se puede sugerir precio y acotar lo
-  // que el fletero puede pedir. Si falta alguna, no hay distancia: se deja el
-  // precio sin restringir en vez de frenar la publicación por un geocode caído.
-  if (origin && destination) {
-    const range = priceRangeFor(data.truckType, haversineKm(origin, destination));
-    if (!isPriceInRange(data.price, range)) {
-      throw new AppError(
-        `el precio está fuera del rango razonable para ${Math.round(range.distanceKm)} km: ` +
-          `tiene que estar entre ${formatPesos(range.minPrice)} y ${formatPesos(range.maxPrice)} ` +
-          `(sugerido ${formatPesos(range.suggestedPrice)}).`,
-        400,
-        "PRICE_OUT_OF_RANGE"
-      );
-    }
-  }
+  // El precio no se valida contra la sugerencia (D5 = b): la sugerencia
+  // depende de un geocode best-effort, así que es una referencia que el client
+  // muestra con un aviso fuera de ±15 %, no un límite.
 
   const trip = await prisma.trip.create({
     data: {
@@ -1492,6 +1482,13 @@ export async function addCargoItem(
   let lastError: unknown;
   let created: { response: CargoItemResponse; email: CargoAddedEmail } | null = null;
 
+  // U10: Nominatim (cola de 1 req/s) y OSRM (hasta 5 s) van antes de abrir la
+  // TX y una sola vez: con la TX Serializable abierta la estiraban hasta su
+  // timeout y la exponían a más conflictos, y cada reintento los repetía.
+  // Best-effort: sin coordenadas o sin geometría no se valida la distancia.
+  const pickupCoords = await geocode(data.pickupAddress);
+  const routeGeometry = pickupCoords ? await getFullRouteGeometry(tripId) : null;
+
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     try {
       created = await prisma.$transaction(
@@ -1555,12 +1552,11 @@ export async function addCargoItem(
           // su parte para que el transportista no le arme el espacio al aire.
           const { priceShare, depositAmount } = cargoPrice(trip, data.volume);
 
-          // geocodificar el pickup (best-effort: si falla, lat/lng quedan null)
-          const pickupCoords = await geocode(data.pickupAddress);
-
-          // validar distancia del pickup al trayecto del viaje (si tenemos coordenadas y geometría)
+          // validar distancia del pickup al trayecto del viaje (si tenemos
+          // coordenadas y geometría). Es una cuenta pura sobre lo que se buscó
+          // antes de la TX; va acá para que los chequeos de estado y capacidad
+          // sigan respondiendo primero.
           if (pickupCoords) {
-            const routeGeometry = await getFullRouteGeometry(tripId);
             if (routeGeometry && routeGeometry.length >= 2) {
               const pickupPoint = point([pickupCoords.lng, pickupCoords.lat]);
               const routeLine = lineString(routeGeometry);
@@ -1593,6 +1589,7 @@ export async function addCargoItem(
               priceShare,
               depositAmount,
               pickupAddress: data.pickupAddress,
+              pickupCity: pickupCoords?.city ?? null,
               pickupLat: pickupCoords?.lat ?? null,
               pickupLng: pickupCoords?.lng ?? null,
               trackingCode,
@@ -2110,7 +2107,8 @@ export async function getTripLocation(
  * stopOrder manual y proyección automática sobre la ruta origen→destino.
  * Solo para el transportista y las empresas con alguna carga viva en el viaje.
  * El fletero ve todas completas; la empresa, las suyas completas y las ajenas
- * como "otra parada", con el orden y el volumen (U19, ver toStopResponse).
+ * como "otra parada", con el orden, el volumen y la localidad (U19, ver
+ * toStopResponse).
  */
 export async function getTripStops(tripId: string, userId: string): Promise<StopItem[]> {
   const participants = await resolveParticipants(tripId);
@@ -2134,6 +2132,7 @@ export async function getTripStops(tripId: string, userId: string): Promise<Stop
           id: true,
           companyId: true,
           pickupAddress: true,
+          pickupCity: true,
           pickupLat: true,
           pickupLng: true,
           trackingCode: true,

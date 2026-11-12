@@ -211,6 +211,10 @@ model CargoItem {
   // --- pickups por carga (nueva feature) ---
   // dirección de retiro (texto libre, lo que la empresa escribe)
   pickupAddress String
+  // localidad del retiro según el geocode ("Rosario"), sin calle ni número: es
+  // lo único del retiro que ven las otras empresas del viaje (L6). Null si el
+  // geocode no resolvió o no informó localidad.
+  pickupCity    String?
   // geocodificación del pickup (best-effort, igual que Trip)
   pickupLat     Float?
   pickupLng     Float?

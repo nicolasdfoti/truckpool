@@ -296,13 +296,13 @@ export function toTripDetailResponse(
       : access === "PARTICIPANT" || access === "FORMER_PARTICIPANT"
         ? trip.cargoItems.filter((item) => item.companyId === viewer?.id)
         : [];
-  // las ajenas, solo para la empresa con carga viva: el volumen y nada más
-  // (la ciudad de retiro llega con pickupCity, L6)
+  // las ajenas, solo para la empresa con carga viva: el volumen y la localidad
+  // del retiro que resolvió el geocode (L6), nunca la dirección
   const otherCargo =
     access === "PARTICIPANT"
       ? active
           .filter((item) => item.companyId !== viewer?.id)
-          .map((item) => ({ volume: item.volume }))
+          .map((item) => ({ volume: item.volume, pickupCity: item.pickupCity }))
       : [];
   const seesDeparture = access === "CARRIER_OWNER" || access === "PARTICIPANT";
 
@@ -344,7 +344,7 @@ export function toTripDetailResponse(
 /**
  * Una parada del recorrido (U19). `FULL` es la parada completa: para el fletero
  * todas, para la empresa las suyas. `OTHER` es la parada de otra empresa: solo
- * el lugar en el orden y el volumen (la ciudad llega con pickupCity, L6).
+ * el lugar en el orden, el volumen y la localidad del retiro (`pickupCity`, L6).
  */
 export type StopItem =
   | {
@@ -359,12 +359,13 @@ export type StopItem =
       status: CargoItemStatus;
       stopOrder: number;
     }
-  | { kind: "OTHER"; stopOrder: number; volume: number };
+  | { kind: "OTHER"; stopOrder: number; volume: number; pickupCity: string | null };
 
 export function toStopResponse(
   item: {
     id: string;
     pickupAddress: string;
+    pickupCity: string | null;
     pickupLat: number | null;
     pickupLng: number | null;
     trackingCode: string;
@@ -375,7 +376,9 @@ export function toStopResponse(
   stopOrder: number,
   kind: StopItem["kind"]
 ): StopItem {
-  if (kind === "OTHER") return { kind, stopOrder, volume: item.volume };
+  if (kind === "OTHER") {
+    return { kind, stopOrder, volume: item.volume, pickupCity: item.pickupCity };
+  }
   return {
     kind,
     cargoItemId: item.id,

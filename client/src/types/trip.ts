@@ -162,7 +162,7 @@ export type CreateReviewInput = {
  * Quién mira el detalle, según el backend (U7):
  * - CARRIER_OWNER: el fletero del viaje, ve todo;
  * - PARTICIPANT: empresa con carga viva, ve las suyas completas y las ajenas
- *   solo como volumen (`otherCargo`);
+ *   solo con volumen y localidad del retiro (`otherCargo`);
  * - FORMER_PARTICIPANT: empresa que retiró todas sus cargas, ve las suyas;
  * - ANONYMOUS: el resto (también admin y otros fleteros), solo agregados.
  */
@@ -175,8 +175,11 @@ export type TripDetail = Trip & {
   viewerAccess: TripViewerAccess;
   /** las cargas que quien mira puede ver completas (vacío para terceros) */
   cargoItems: CargoItem[];
-  /** las cargas vivas de otras empresas, solo para la empresa participante */
-  otherCargo: { volume: number }[];
+  /**
+   * las cargas vivas de otras empresas, solo para la empresa participante:
+   * volumen y localidad del retiro (null si el geocode no la resolvió)
+   */
+  otherCargo: { volume: number; pickupCity: string | null }[];
   /** punto exacto de salida: solo para el fletero y sus empresas con carga viva */
   departureAddress?: string | null;
   reviews: Review[];
@@ -227,7 +230,8 @@ export type TripLocationResponse = {
 /**
  * Parada (pickup) de una carga en el viaje, ya ordenada (U19). `FULL` es la
  * parada completa: para el fletero todas, para la empresa las suyas. `OTHER` es
- * la de otra empresa: solo el lugar en el orden y el volumen.
+ * la de otra empresa: solo el lugar en el orden, el volumen y la localidad del
+ * retiro (`pickupCity`, null si el geocode no la resolvió).
  */
 export type FullStopItem = {
   kind: "FULL";
@@ -243,7 +247,8 @@ export type FullStopItem = {
 };
 
 export type StopItem =
-  FullStopItem | { kind: "OTHER"; stopOrder: number; volume: number };
+  | FullStopItem
+  | { kind: "OTHER"; stopOrder: number; volume: number; pickupCity: string | null };
 
 /** Tracking público por código — info limitada sin exponer datos sensibles */
 export type PublicTracking = {

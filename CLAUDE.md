@@ -25,7 +25,7 @@ npm run db:seed        # alias of db:seed:demo — demo users flete@ / empresa@ 
 npm run db:seed:e2e    # extra users + fixed-id trips for Playwright (client global-setup runs it); also blocked in production
 npm run db:seed:prod   # idempotent, creates no users
 npm run admin:create   # production admin: prompts for email/password (≥ 16 chars); ADMIN_EMAIL/ADMIN_PASSWORD env also work but can land in shell history
-npm run seed:geocode   # backfill coords for existing trips
+npm run seed:geocode   # dry run by default; --escribir writes. no flag: trips without coords · --fuera-de-ar: trip points outside Argentina · --cargas: CargoItem.pickupCity
 
 # client/
 npm run dev            # vite (5173 by default; Playwright specs assume 5174)
@@ -54,7 +54,9 @@ Server tests mock Prisma, Mercado Pago, Nominatim, OSRM routing and email per fi
 - `depositAmount` is frozen at booking time.
 - Cancellation penalty: >48 h free, 24–48 h half the deposit, <24 h full deposit (`lib/cancellation.ts`). The client doesn't recompute it: `client/src/lib/cancellation.ts` asks `GET /trips/:tripId/cargo-items/:cargoItemId/cancellation-quote` (U21: $ 0 if the deposit wasn't paid). The public `GET /trips/cancellation-quote` is unused and slated for removal in L11.
 - Trip status `OPEN → FULL → IN_TRANSIT → COMPLETED`, or `CANCELLED` from OPEN/FULL (carrier cancels; active cargo is cancelled with the paid deposit refunded in full); cargo `PENDING → CONFIRMED | CANCELLED`; payment `PENDING → APPROVED | REJECTED → REFUNDED`, and `APPROVED → CHARGED_BACK` (final).
-- Geocoding (Nominatim, 1 req/s queue, 24 h cache) and emails (Resend) are best-effort: failure must never block publishing a trip or a business operation. Coordinates are nullable on purpose.
+- Geocoding (Nominatim, Argentina only via `countrycodes=ar`, 1 req/s queue, 24 h cache) and emails (Resend) are best-effort: failure must never block publishing a trip or a business operation. Coordinates are nullable on purpose. Geocode and OSRM run before `addCargoItem`'s transaction, never inside it.
+- The suggested price (±15 %) is only a reference (D5): the server accepts any price, and there is no suggestion beyond 5,000 km.
+- Other companies' cargo shows only volume and `pickupCity` (the geocoded locality), never the pickup address.
 - Only the `COMPANY` reviews, once per `COMPLETED` trip; the reviewee is always derived from the trip.
 
 ### Mercado Pago

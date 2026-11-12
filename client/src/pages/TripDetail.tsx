@@ -140,9 +140,6 @@ function PickupAddressField({
           en el mapa.
         </p>
       )}
-      {place.movedByHand && (
-        <p className="mt-1 text-xs text-ink-muted">pin corregido a mano</p>
-      )}
       {error && <p className="mt-1 text-xs text-danger">{error}</p>}
     </div>
   );
@@ -734,7 +731,8 @@ export default function TripDetail() {
                   </li>
                 );
               })}
-              {/* las cargas de otras empresas: solo el volumen (U7) */}
+              {/* las cargas de otras empresas: el volumen y la localidad del
+                  retiro, nunca la dirección (U7, L6) */}
               {trip.otherCargo.map((other, i) => (
                 <li
                   key={`otra-${i}`}
@@ -742,6 +740,7 @@ export default function TripDetail() {
                 >
                   otra carga ·{" "}
                   {other.volume.toLocaleString("es-AR", { maximumFractionDigits: 1 })} m³
+                  {other.pickupCity && ` · retiro en ${other.pickupCity}`}
                 </li>
               ))}
             </ul>

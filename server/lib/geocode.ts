@@ -7,7 +7,9 @@
  *    pasan por una cola serial con 1s de separación entre requests.
  * 2. User-Agent obligatorio y único: Nominatim bloquea requests sin uno, y
  *    también los que son genéricos ("curl"). Configurable por env.
- * 3. La red puede no estar. Un geocode que falla devuelve `null` y nunca
+ * 3. Solo Argentina (`countrycodes=ar`): una coordenada en otro país es peor
+ *    que ninguna, porque el viaje miente con seguridad (03/Sin coords#2).
+ * 4. La red puede no estar. Un geocode que falla devuelve `null` y nunca
  *    rompe la operación de negocio: publicar un viaje no puede fallar porque
  *    Nominatim esté caído.
  */
@@ -20,7 +22,20 @@ const MAX_CACHE_ENTRIES = 500;
 
 export type LatLng = { lat: number; lng: number };
 
-type CacheEntry = { value: LatLng | null; expiresAt: number };
+/**
+ * Lo que devuelve el geocode: el punto y, cuando Nominatim trae el desglose,
+ * el lugar en texto. Nunca lleva calle ni número: la ciudad se muestra a otras
+ * empresas ("retiro en Rosario") y la dirección completa no puede filtrarse.
+ * Los dos campos son opcionales para que un `{ lat, lng }` siga siendo válido.
+ */
+export type GeocodedPlace = LatLng & {
+  /** "Córdoba, Córdoba, Argentina": localidad, provincia y país */
+  label?: string | null;
+  /** la localidad sola ("Rosario"), o null si Nominatim no la informa */
+  city?: string | null;
+};
+
+type CacheEntry = { value: GeocodedPlace | null; expiresAt: number };
 
 const cache = new Map<string, CacheEntry>();
 
@@ -32,7 +47,7 @@ function userAgent(): string {
   return process.env.NOMINATIM_USER_AGENT ?? DEFAULT_USER_AGENT;
 }
 
-function readCache(address: string): { hit: boolean; value: LatLng | null } {
+function readCache(address: string): { hit: boolean; value: GeocodedPlace | null } {
   const entry = cache.get(address);
   if (!entry) return { hit: false, value: null };
   if (entry.expiresAt < Date.now()) {
@@ -42,7 +57,7 @@ function readCache(address: string): { hit: boolean; value: LatLng | null } {
   return { hit: true, value: entry.value };
 }
 
-function writeCache(address: string, value: LatLng | null) {
+function writeCache(address: string, value: GeocodedPlace | null) {
   if (cache.size >= MAX_CACHE_ENTRIES) {
     // descarte lo más viejo: Map preserva el orden de inserción
     const oldest = cache.keys().next().value as string | undefined;
@@ -79,11 +94,36 @@ async function enqueue<T>(task: () => Promise<T>): Promise<T> {
   return run;
 }
 
-async function fetchLatLng(address: string): Promise<LatLng | null> {
+// de la más específica a la más general: la primera que venga es la localidad
+const LOCALITY_KEYS = ["city", "town", "village", "municipality"] as const;
+
+function text(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+/**
+ * Del desglose de Nominatim (`addressdetails=1`) saca solo localidad, provincia
+ * y país. Calle, número, barrio y código postal se ignoran a propósito.
+ */
+function placeText(address: unknown): { label: string | null; city: string | null } {
+  if (!address || typeof address !== "object") return { label: null, city: null };
+  const parts = address as Record<string, unknown>;
+  const city = LOCALITY_KEYS.map((key) => text(parts[key])).find(Boolean) ?? null;
+  const pieces = [city, text(parts.state), text(parts.country)].filter(
+    (piece): piece is string => piece !== null
+  );
+  return { label: pieces.length > 0 ? pieces.join(", ") : null, city };
+}
+
+async function fetchPlace(address: string): Promise<GeocodedPlace | null> {
   const url = new URL(baseUrl());
   url.searchParams.set("q", address);
   url.searchParams.set("format", "jsonv2");
   url.searchParams.set("limit", "1");
+  // TruckPool opera en Argentina: sin esto "Córdoba" caía en España (03/Publicar#1)
+  url.searchParams.set("countrycodes", "ar");
+  // el desglose trae ciudad, provincia y país para mostrar el lugar en texto
+  url.searchParams.set("addressdetails", "1");
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -99,12 +139,12 @@ async function fetchLatLng(address: string): Promise<LatLng | null> {
     if (!res.ok) return null;
     const data: unknown = await res.json();
     if (!Array.isArray(data) || data.length === 0) return null;
-    const first = data[0] as { lat?: unknown; lon?: unknown };
+    const first = data[0] as { lat?: unknown; lon?: unknown; address?: unknown };
     const lat = Number(first.lat);
     const lng = Number(first.lon);
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
     if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
-    return { lat, lng };
+    return { lat, lng, ...placeText(first.address) };
   } catch {
     // timeout, DNS, 429, JSON inválido: para nosotros es "no pudimos resolver"
     return null;
@@ -114,20 +154,43 @@ async function fetchLatLng(address: string): Promise<LatLng | null> {
 }
 
 /**
- * Convierte "Rosario, Santa Fe" en lat/lng. Cacheado por string exacto de
- * entrada, así que dos llamadas con el mismo texto no gastan el rate limit.
+ * Convierte "Rosario, Santa Fe" en lat/lng, con el lugar en texto si
+ * Nominatim lo informa. Cacheado por string exacto de entrada, así que dos
+ * llamadas con el mismo texto no gastan el rate limit.
  * Devuelve `null` si no se pudo resolver — nunca throw.
  */
-export async function geocode(address: string): Promise<LatLng | null> {
+export async function geocode(address: string): Promise<GeocodedPlace | null> {
   const key = address.trim();
   if (!key) return null;
 
   const cached = readCache(key);
   if (cached.hit) return cached.value;
 
-  const value = await enqueue(() => fetchLatLng(key));
+  const value = await enqueue(() => fetchPlace(key));
   writeCache(key, value);
   return value;
+}
+
+/**
+ * Caja de Argentina continental. Es una aproximación: deja afuera lo que el
+ * geocode resolvió en otro continente ("Córdoba" en España) y adentro algo de
+ * los países vecinos (Montevideo, Santiago), que se acepta. La usa
+ * `npm run seed:geocode` para encontrar coordenadas viejas fuera del país.
+ */
+export const ARGENTINA_BOX = {
+  minLat: -55.2,
+  maxLat: -21.7,
+  minLng: -73.7,
+  maxLng: -53.5,
+};
+
+export function isInArgentinaBox(point: LatLng): boolean {
+  return (
+    point.lat >= ARGENTINA_BOX.minLat &&
+    point.lat <= ARGENTINA_BOX.maxLat &&
+    point.lng >= ARGENTINA_BOX.minLng &&
+    point.lng <= ARGENTINA_BOX.maxLng
+  );
 }
 
 const EARTH_RADIUS_KM = 6371;

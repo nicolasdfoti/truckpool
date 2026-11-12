@@ -85,7 +85,7 @@ obligatoria para que un transportista pueda publicar: el admin la aprueba desde
 1.  CARRIER publica un viaje
     origen → destino, fecha, tipo de camión, m³, precio total
     ↓
-2.  El sistema geocodifica origen, destino y punto de salida (Nominatim, cache 24 h)
+2.  El sistema geocodifica origen, destino y punto de salida (Nominatim, solo Argentina, cache 24 h)
     ↓
 3.  COMPANY ve el viaje en el mapa y reserva espacio
     se prorratea el precio por m³ → priceShare
@@ -121,8 +121,9 @@ puede aceptarla y termina creando un viaje.
   y múltiples ventanas de carga/recogida.
 - Búsqueda por origen, destino, fecha, radio en km (`nearOrigin` /
   `nearDestination`), features y disponibilidad.
-- **Estimación de precio en vivo** (`GET /api/trips/price-estimate`) antes de
-  reservar, y **cotización de cancelación** (`GET /api/trips/cancellation-quote`)
+- **Precio sugerido en vivo** al publicar (`GET /api/trips/price-estimate`): es
+  una referencia, el fletero pone el precio que quiera (ver Decisiones de
+  diseño), y **cotización de cancelación** (`GET /api/trips/cancellation-quote`)
   con la penalización real según cuán cerca está la fecha del viaje.
 - Solicitudes de viaje inversas (`TripRequest`) cuando la empresa no encuentra
   capacidad y prefiere que sea el transportista el que publique.
@@ -326,8 +327,8 @@ Todas bajo `/api`, salvo `/health`. `Bearer` = JWT required.
 | Método | Ruta | Auth | |
 | --- | --- | --- | --- |
 | GET | `/` | — | Viajes abiertos, con filtros y radio |
-| GET | `/geocode?address=` | — | Dirección → coordenadas |
-| GET | `/price-estimate` | — | Prorrateo del precio por m³ |
+| GET | `/geocode?address=` | — | Dirección → coordenadas y lugar en texto (solo Argentina) |
+| GET | `/price-estimate` | — | Precio sugerido y rango ±15 %, como referencia |
 | GET | `/cancellation-quote` | — | Penalización según la fecha |
 | GET | `/:id` | — | Detalle con carga |
 | POST | `/` | role:CARRIER | Publica viaje |
@@ -473,7 +474,7 @@ jamás un secreto ahí.
 | `npm run lint` | ESLint |
 | `npm run format` | Prettier |
 | `npm run db:seed` | Usuarios y viajes de ejemplo |
-| `npm run seed:geocode` | Rellena coordenadas de viajes ya publicados |
+| `npm run seed:geocode` | En seco: muestra qué coordenadas corregiría. Modos: sin flag (viajes sin coordenadas), `--fuera-de-ar` (viajes con puntos fuera de Argentina), `--cargas` (ciudad de retiro de las cargas). Escribe solo con `--escribir` |
 
 **client/**
 
@@ -510,9 +511,22 @@ y no una sorpresa.
 24 h) para no comerse el rate limit del servicio público. Si falla, el viaje se
 publica igual: perder el mapa es molesto, perder el viaje es un bug.
 
+**Solo Argentina.** Nominatim busca con `countrycodes=ar`: sin eso "Córdoba"
+caía en España y el viaje quedaba con un pin a 10.000 km. Una coordenada en
+otro país es peor que ninguna. Al publicar se muestra el lugar resuelto en texto
+("Córdoba, Córdoba, Argentina") para que el fletero lo confirme. Los datos
+viejos se corrigen con `npm run seed:geocode -- --fuera-de-ar`.
+
+**El precio sugerido es una referencia.** La sugerencia depende de un geocode
+best-effort, así que no puede ser un límite: el fletero publica el precio que
+quiera y, fuera del ±15 % del sugerido, ve un aviso que no bloquea. Con más de
+5.000 km entre las puntas (más que cualquier viaje dentro del país) no se sugiere
+nada: casi seguro una punta se resolvió mal.
+
 **Las coordenadas exactas no se exponen.** Las respuestas públicas no incluyen
 lat/lng exactos; se usan server-side para ordenar por distancia y el radio se
-filtra en el servidor.
+filtra en el servidor. De la carga de otra empresa se muestra solo la localidad
+del retiro (`pickupCity`, la que resolvió el geocode), nunca la dirección.
 
 **Notificaciones de admin honestas.** `getAdminStats` devuelve `null` en vez de
 `0` cuando una métrica depende de una fase no implementada, y agrega una nota

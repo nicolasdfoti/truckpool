@@ -40,12 +40,20 @@ function buildQueryString(filters: TripFilters) {
   return query ? `?${query}` : "";
 }
 
-export function geocodeAddress(address: string) {
+/** el punto y el lugar en texto ("Córdoba, Córdoba, Argentina"), si el server lo sabe */
+export type GeocodedPlace = { lat: number; lng: number; label: string | null };
+
+export function geocodePlace(address: string): Promise<GeocodedPlace> {
   return api
-    .get<{ address: string; lat: number; lng: number }>(
+    .get<{ address: string; lat: number; lng: number; label?: string | null }>(
       `/trips/geocode?address=${encodeURIComponent(address)}`
     )
-    .then((d) => ({ lat: d.lat, lng: d.lng }));
+    .then((d) => ({ lat: d.lat, lng: d.lng, label: d.label ?? null }));
+}
+
+/** solo el punto: lo que necesita la búsqueda por cercanía */
+export function geocodeAddress(address: string) {
+  return geocodePlace(address).then(({ lat, lng }) => ({ lat, lng }));
 }
 
 export function useTrips(filters: TripFilters = EMPTY_TRIP_FILTERS) {

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
 import {
   getTripRoute,
   getTripRouteGeometry,
@@ -660,6 +660,14 @@ describe("endpoints HTTP del recorrido (con sesión, U7)", () => {
     const request = (await import("supertest")).default;
     return { app, request };
   }
+
+  // La primera importación de la app transforma todos sus módulos: la pagaba
+  // el primer test ("/route sin token": 0,6 a 2,8 s según la carga de la
+  // suite). Se hace una vez acá, con timeout propio; lo que prueba cada test
+  // no cambia.
+  beforeAll(async () => {
+    await http();
+  }, 30_000);
 
   const fletero = `Bearer ${signToken({ id: FLETERO, role: "CARRIER" })}`;
   const ajena = `Bearer ${signToken({ id: "c9", role: "COMPANY" })}`;

@@ -42,6 +42,8 @@ export const E2E = {
     second: {
       description: "E2E carga de la segunda",
       pickupAddress: "E2E Calle Segunda 222, Marcos Juárez",
+      /** la localidad del retiro: lo único que ven las otras empresas (L6) */
+      pickupCity: "Marcos Juárez",
       volume: 3,
     },
     former: {

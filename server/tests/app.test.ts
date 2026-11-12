@@ -2446,6 +2446,7 @@ describe("GET /api/trips/:id por rol (U7)", () => {
     description: string;
     volume: number;
     pickupAddress: string;
+    pickupCity?: string | null;
     trackingCode: string;
   }) {
     return {
@@ -2462,6 +2463,7 @@ describe("GET /api/trips/:id por rol (U7)", () => {
       cancelledAt: o.status === "CANCELLED" ? new Date("2026-09-02T10:00:00.000Z") : null,
       cancellationFeeAmount: o.status === "CANCELLED" ? new Prisma.Decimal(0) : null,
       pickupAddress: o.pickupAddress,
+      pickupCity: o.pickupCity ?? null,
       pickupLat: -32.95,
       pickupLng: -60.65,
       trackingCode: o.trackingCode,
@@ -2528,6 +2530,7 @@ describe("GET /api/trips/:id por rol (U7)", () => {
         description: "Bobinas de acero",
         volume: 4,
         pickupAddress: "Av. Pellegrini 900, Rosario",
+        pickupCity: "Rosario",
         trackingCode: "TP-ACERO-C2",
       }),
       carga({
@@ -2646,7 +2649,7 @@ describe("GET /api/trips/:id por rol (U7)", () => {
     ]);
   });
 
-  it("empresa dueña: su carga completa y las ajenas solo con volumen", async () => {
+  it("empresa dueña: su carga completa y las ajenas con volumen y ciudad", async () => {
     const body = await pedir(norteToken);
 
     expect(claves(body)).toEqual(CLAVES_PARTICIPANTE);
@@ -2658,10 +2661,26 @@ describe("GET /api/trips/:id por rol (U7)", () => {
       pickupAddress: "Bv. Oroño 1200, Rosario",
       trackingCode: "TP-NORTE-C1",
     });
-    // la retirada de otra empresa tampoco aparece entre las ajenas
-    expect(body.otherCargo).toEqual([{ volume: 4 }]);
+    // la retirada de otra empresa tampoco aparece entre las ajenas; de la viva,
+    // la localidad del retiro y nada de la dirección (L6)
+    expect(body.otherCargo).toEqual([{ volume: 4, pickupCity: "Rosario" }]);
     expect(body.departureAddress).toBe("Galpón Av. Circunvalación 5000, Córdoba");
     noContiene(body, [...secretosDe.acero, ...secretosDe.vino]);
+  });
+
+  it("una carga ajena sin localidad resuelta va con pickupCity null", async () => {
+    const sinCiudad = {
+      ...viaje,
+      cargoItems: viaje.cargoItems.map((item) => ({ ...item, pickupCity: null })),
+    };
+    vi.mocked(prisma.trip.findUnique).mockResolvedValue(sinCiudad as never);
+    vi.mocked(prisma.revokedToken.findUnique).mockResolvedValue(null as never);
+
+    const res = await request(app)
+      .get("/api/trips/t-roles")
+      .set("Authorization", `Bearer ${norteToken}`);
+
+    expect(res.body.otherCargo).toEqual([{ volume: 4, pickupCity: null }]);
   });
 
   it("fletero dueño: todas las cargas completas", async () => {
@@ -3138,15 +3157,29 @@ describe("GET /api/trips/geocode", () => {
     vi.mocked(geocode).mockReset();
   });
 
-  it("devuelve lat/lng cuando Nominatim resuelve la dirección", async () => {
-    vi.mocked(geocode).mockResolvedValue({ lat: -32.9442, lng: -60.6505 });
+  it("devuelve lat/lng y el lugar resuelto en texto cuando Nominatim resuelve", async () => {
+    vi.mocked(geocode).mockResolvedValue({
+      lat: -32.9442,
+      lng: -60.6505,
+      label: "Rosario, Santa Fe, Argentina",
+      city: "Rosario",
+    });
     const res = await request(app).get("/api/trips/geocode?address=Rosario, Santa Fe");
     expect(res.status).toBe(200);
+    // el label es lo que el fletero confirma en publicar; la ciudad no hace falta
     expect(res.body).toEqual({
       address: "Rosario, Santa Fe",
       lat: -32.9442,
       lng: -60.6505,
+      label: "Rosario, Santa Fe, Argentina",
     });
+  });
+
+  it("sin lugar en texto responde label null", async () => {
+    vi.mocked(geocode).mockResolvedValue({ lat: -32.9442, lng: -60.6505 });
+    const res = await request(app).get("/api/trips/geocode?address=Rosario");
+    expect(res.status).toBe(200);
+    expect(res.body.label).toBeNull();
   });
 
   it("devuelve 400 con mensaje claro si no encuentra la dirección", async () => {
@@ -3250,16 +3283,21 @@ describe("GET /api/trips/price-estimate", () => {
     expect(res.body.rate).toEqual({ baseFee: 5000, perKm: 260 });
   });
 
-  it("el rango de la API es el que valida createTrip", async () => {
+  it("el rango de la API es una referencia: adentro y afuera se publica (D5)", async () => {
     byAddress();
     const res = await request(app).get(
       "/api/trips/price-estimate?origin=Rosario&destination=Córdoba&truckType=Semi"
     );
     const { minPrice, maxPrice, suggestedPrice } = res.body;
 
-    // lo que el front ofrece como extremos tiene que ser lo que el server
-    // acepta: si no, el fletero choca contra un 400 con el slider arriba
-    for (const price of [minPrice, suggestedPrice, maxPrice]) {
+    // D5 = (b): fuera del ±15 % el client avisa, pero el server no rechaza
+    for (const price of [
+      minPrice - 100,
+      minPrice,
+      suggestedPrice,
+      maxPrice,
+      maxPrice * 2,
+    ]) {
       vi.mocked(prisma.user.findUnique).mockResolvedValue({
         verificationStatus: "VERIFIED",
         mpUserId: "mp-user-123",
@@ -3293,6 +3331,25 @@ describe("GET /api/trips/price-estimate", () => {
         })
       ).resolves.toBeDefined();
     }
+  });
+
+  it("con más de 5.000 km entre las puntas no sugiere precio (D5)", async () => {
+    // "Córdoba" resuelta en España, como pasaba antes de countrycodes=ar
+    vi.mocked(geocode).mockImplementation(async (address: string) =>
+      address === "Rosario" ? rosario : { lat: 37.8846, lng: -4.776 }
+    );
+    const res = await request(app).get(
+      "/api/trips/price-estimate?origin=Rosario&destination=Córdoba&truckType=Camión"
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.geocoded).toBe(true);
+    expect(res.body.distanceKm).toBeGreaterThan(5_000);
+    expect(res.body).toMatchObject({
+      suggestedPrice: null,
+      minPrice: null,
+      maxPrice: null,
+    });
   });
 
   it("responde 200 con geocoded false si no puede calcular la distancia", async () => {

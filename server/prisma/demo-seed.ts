@@ -114,6 +114,7 @@ export async function runDemoSeed(prisma: PrismaClient): Promise<void> {
         depositAmount: seedDeposit,
         status: "CONFIRMED",
         pickupAddress: "Córdoba, Córdoba",
+        pickupCity: "Córdoba",
         pickupLat: coordsOf("Córdoba")?.lat ?? null,
         pickupLng: coordsOf("Córdoba")?.lng ?? null,
         trackingCode: generateTrackingCode(),
