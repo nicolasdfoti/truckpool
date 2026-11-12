@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { prisma } from "../lib/prisma.js";
-import { sendEmailToUser } from "../lib/email.js";
+import { renderEmail, sendEmailToUser } from "../lib/email.js";
 import {
   listNotifications,
   markAllNotificationsRead,
@@ -197,6 +197,59 @@ describe("notifyUsers", () => {
       ).resolves.toBe(1);
       await vi.waitFor(() => expect(console.error).toHaveBeenCalled());
     });
+
+    // L5 (U6): el log no lleva el email de la persona ni el error entero
+    it("si el email falla loguea el tipo, el id y name/code", async () => {
+      vi.mocked(prisma.user.findMany).mockResolvedValue([user()] as never);
+      vi.mocked(prisma.notification.createMany).mockResolvedValue({ count: 1 } as never);
+
+      await notifyUsers(["u1"], {
+        ...aviso,
+        email: () => {
+          throw Object.assign(new TypeError("no se pudo armar para uno@empresa.com"), {
+            code: "BUILDER",
+          });
+        },
+      });
+      await vi.waitFor(() => expect(console.error).toHaveBeenCalled());
+
+      expect(console.error).toHaveBeenCalledWith(
+        "[notificaciones] no se pudo encolar un email",
+        { type: "CARGO_ADDED", userId: "u1", name: "TypeError", code: "BUILDER" }
+      );
+      const logged = JSON.stringify(vi.mocked(console.error).mock.calls);
+      expect(logged).not.toContain("uno@empresa.com");
+    });
+  });
+});
+
+// L5: el email genérico (el que reciben las empresas por CARGO_CANCELLED o
+// STOPS_REORDERED) se arma con renderEmail, así que escapa el body y el nombre
+describe("email genérico de un aviso", () => {
+  it("escapa el body del aviso y el nombre de quien lo recibe", async () => {
+    const real =
+      await vi.importActual<typeof import("../lib/email.js")>("../lib/email.js");
+    vi.mocked(renderEmail).mockImplementationOnce(real.renderEmail);
+    vi.mocked(prisma.user.findMany).mockResolvedValue([
+      user({ name: '<a href="https://phish.example">x</a>' }),
+    ] as never);
+    vi.mocked(prisma.notification.createMany).mockResolvedValue({ count: 1 } as never);
+    vi.mocked(sendEmailToUser).mockResolvedValue(true);
+
+    await notifyUsers(["u1"], {
+      type: "CARGO_CANCELLED",
+      title: "se canceló tu carga",
+      body: "tu carga <img src=x onerror=alert(1)> se canceló",
+      tripId: "t1",
+    });
+    await vi.waitFor(() => expect(sendEmailToUser).toHaveBeenCalledTimes(1));
+
+    const html = vi.mocked(sendEmailToUser).mock.calls[0]![2];
+    expect(html).toContain("tu carga &lt;img src=x onerror=alert(1)&gt; se canceló");
+    expect(html).toContain(
+      "hola &lt;a href=&quot;https://phish.example&quot;&gt;x&lt;/a&gt;,"
+    );
+    expect(html).not.toContain("<img");
   });
 });
 

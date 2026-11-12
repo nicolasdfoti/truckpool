@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { requireAuth, requireRole } from "../../lib/auth.js";
 import { validateBody } from "../../lib/validate.js";
+import { paymentPreferenceRateLimit } from "../../lib/rateLimit.js";
 import * as paymentsController from "./payments.controller.js";
 import {
   mpTestPreferenceSchema,
@@ -21,6 +22,7 @@ paymentsRouter.post(
   "/cargo-items/:id/payment-preference",
   requireAuth,
   requireRole("COMPANY"),
+  paymentPreferenceRateLimit,
   validateBody(paymentPreferenceSchema),
   paymentsController.postPaymentPreference
 );

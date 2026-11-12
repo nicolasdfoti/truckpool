@@ -1,9 +1,15 @@
+// Datos del seed demo: usuarios con la contraseña pública truckpool123 y dos
+// viajes de ejemplo. Solo para desarrollo: con NODE_ENV=production lanza antes
+// de tocar la base (U14). El entrypoint es seed-demo.ts; acá queda la lógica,
+// que recibe la base por parámetro para poder probarla sin una base real.
 import bcrypt from "bcryptjs";
-import { Prisma } from "@prisma/client";
-import { prisma } from "../lib/prisma.js";
+import { Prisma, type PrismaClient } from "@prisma/client";
 import { generateTrackingCode } from "../lib/trackingCode.js";
+import { assertNotProduction } from "./seed-guard.js";
 
-async function main() {
+export async function runDemoSeed(prisma: PrismaClient): Promise<void> {
+  assertNotProduction("seed-demo");
+
   const password = await bcrypt.hash("truckpool123", 10);
 
   // el fletero demo queda VERIFIED para no romper el flujo de prueba manual
@@ -132,10 +138,3 @@ async function main() {
   );
   console.log("password: truckpool123");
 }
-
-main()
-  .catch((err) => {
-    console.error(err);
-    process.exit(1);
-  })
-  .finally(() => prisma.$disconnect());

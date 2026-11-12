@@ -4,6 +4,7 @@ import type { Express } from "express";
 import { app } from "../src/app.js";
 import bcrypt from "bcryptjs";
 import { prisma } from "../lib/prisma.js";
+import { applyTrustProxy } from "../lib/security.js";
 
 // el test del login exitoso necesita que la contraseña "matchee"
 vi.mock("bcryptjs", () => ({
@@ -56,6 +57,7 @@ beforeEach(() => {
 
 afterEach(() => {
   delete process.env.AUTH_RATE_LIMIT_MAX;
+  delete process.env.TRUST_PROXY;
   vi.resetModules();
 });
 
@@ -241,5 +243,151 @@ describe("rate limit en /api/auth", () => {
 
     expect((await register(limited)).status).toBe(400);
     expect((await register(limited)).status).toBe(429);
+  });
+});
+
+// L5 (02§2.5): el límite por IP no frena el credential stuffing distribuido
+// (muchas IPs contra la misma cuenta); el login cuenta también por email.
+describe("rate limit del login por email", () => {
+  const loginDesde = (app: Express, ip: string, email: string, password = "mala") =>
+    request(app)
+      .post("/api/auth/login")
+      .set("X-Forwarded-For", ip)
+      .send({ email, password });
+
+  it("muchas IPs contra el mismo email: el intento N+1 da 429", async () => {
+    const limited = await freshApp({ AUTH_RATE_LIMIT_MAX: "3", TRUST_PROXY: "1" });
+
+    for (let i = 1; i <= 3; i++) {
+      expect((await loginDesde(limited, `203.0.113.${i}`, "victima@x.com")).status).toBe(
+        401
+      );
+    }
+    const blocked = await loginDesde(limited, "203.0.113.4", "victima@x.com");
+
+    expect(blocked.status).toBe(429);
+    expect(blocked.body.code).toBe("RATE_LIMITED");
+  });
+
+  it("cuenta el email sin importar mayúsculas ni espacios", async () => {
+    const limited = await freshApp({ AUTH_RATE_LIMIT_MAX: "2", TRUST_PROXY: "1" });
+
+    await loginDesde(limited, "203.0.113.1", "Victima@X.com");
+    await loginDesde(limited, "203.0.113.2", " victima@x.com ");
+
+    expect((await loginDesde(limited, "203.0.113.3", "victima@x.com")).status).toBe(429);
+  });
+
+  it("otro email desde IPs nuevas no está bloqueado", async () => {
+    const limited = await freshApp({ AUTH_RATE_LIMIT_MAX: "2", TRUST_PROXY: "1" });
+
+    await loginDesde(limited, "203.0.113.1", "victima@x.com");
+    await loginDesde(limited, "203.0.113.2", "victima@x.com");
+
+    expect((await loginDesde(limited, "203.0.113.3", "otra@x.com")).status).toBe(401);
+  });
+
+  it("un body sin email no cuenta para el límite por email (lo corta la validación)", async () => {
+    const limited = await freshApp({ AUTH_RATE_LIMIT_MAX: "1", TRUST_PROXY: "1" });
+
+    for (let i = 1; i <= 3; i++) {
+      const res = await request(limited)
+        .post("/api/auth/login")
+        .set("X-Forwarded-For", `203.0.113.${i}`)
+        .send({ password: "mala" });
+      expect(res.status).toBe(400);
+    }
+  });
+
+  it("los logins que aciertan no gastan el presupuesto del email", async () => {
+    const limited = await freshApp({ AUTH_RATE_LIMIT_MAX: "2", TRUST_PROXY: "1" });
+    vi.mocked(prisma.user.findUnique).mockResolvedValue(verifiedUser);
+    compareMock().mockResolvedValue(true);
+
+    for (let i = 1; i <= 5; i++) {
+      const res = await loginDesde(
+        limited,
+        `203.0.113.${i}`,
+        "flete@truckpool.app",
+        "truckpool123"
+      );
+      expect(res.status).toBe(200);
+    }
+  });
+});
+
+// L5 (02§2.6): en producción sin CORS_ORIGIN, cors() quedaba con origin: * para
+// cualquier sitio. Ahora no deja pasar a nadie (y el arranque ya aborta antes).
+describe("CORS en producción", () => {
+  afterEach(() => {
+    process.env.NODE_ENV = "test";
+    delete process.env.CORS_ORIGIN;
+  });
+
+  it("sin CORS_ORIGIN no responde Access-Control-Allow-Origin a ningún origen", async () => {
+    delete process.env.CORS_ORIGIN;
+    const prodApp = await freshApp({ NODE_ENV: "production" });
+
+    const res = await request(prodApp)
+      .options("/api/auth/login")
+      .set("Origin", "https://otro-sitio.example")
+      .set("Access-Control-Request-Method", "POST");
+
+    expect(res.headers["access-control-allow-origin"]).toBeUndefined();
+  });
+
+  it("con CORS_ORIGIN deja pasar solo ese origen", async () => {
+    const prodApp = await freshApp({
+      NODE_ENV: "production",
+      CORS_ORIGIN: "https://app.truckpool.app",
+    });
+
+    const permitido = await request(prodApp)
+      .options("/api/auth/login")
+      .set("Origin", "https://app.truckpool.app")
+      .set("Access-Control-Request-Method", "POST");
+    const otro = await request(prodApp)
+      .options("/api/auth/login")
+      .set("Origin", "https://otro-sitio.example")
+      .set("Access-Control-Request-Method", "POST");
+
+    expect(permitido.headers["access-control-allow-origin"]).toBe(
+      "https://app.truckpool.app"
+    );
+    expect(otro.headers["access-control-allow-origin"]).toBeUndefined();
+  });
+});
+
+// L5: TRUST_PROXY es obligatorio en producción (assertServerEnv). Si igual
+// falta, no se confía en X-Forwarded-For: antes asumía 1 proxy y, sin proxy
+// delante, cualquiera elegía su IP para el rate limit.
+describe("trust proxy", () => {
+  afterEach(() => {
+    process.env.NODE_ENV = "test";
+    delete process.env.TRUST_PROXY;
+  });
+
+  function trustProxyCon(env: Record<string, string | undefined>): unknown {
+    for (const [key, value] of Object.entries(env)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    const set = vi.fn();
+    applyTrustProxy({ set });
+    return set.mock.calls.find((call) => call[0] === "trust proxy")?.[1];
+  }
+
+  it("en producción sin TRUST_PROXY no confía en ningún proxy", () => {
+    expect(trustProxyCon({ NODE_ENV: "production", TRUST_PROXY: undefined })).toBe(false);
+  });
+
+  it.each([
+    ["2", 2],
+    ["1", 1],
+    ["true", 1],
+    ["0", false],
+    ["false", false],
+  ])("TRUST_PROXY=%j → %j", (valor, esperado) => {
+    expect(trustProxyCon({ NODE_ENV: "production", TRUST_PROXY: valor })).toBe(esperado);
   });
 });

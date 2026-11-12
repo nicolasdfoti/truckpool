@@ -86,6 +86,42 @@ function nextCalendarDay(day: CalendarParts): CalendarParts {
   };
 }
 
+/** Instante de las 00:00 ART del día calendario argentino en que cae `instant`. */
+export function startOfArgentinaDay(instant: Date): Date {
+  return startOfDayInstant(
+    calendarParts(instant, ARGENTINA_TIME_ZONE),
+    ARGENTINA_TIME_ZONE
+  );
+}
+
+const DATE_ONLY = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/**
+ * Una fecha sin hora ("YYYY-MM-DD", la de un `<input type="date">`) es un día
+ * calendario argentino: devuelve las 12:00 ART de ese día, el mismo instante con
+ * el que se guardan los viajes que publica el fletero. `new Date("YYYY-MM-DD")`
+ * da medianoche UTC, que en Argentina es el día anterior a las 21:00. Devuelve
+ * null si no es una fecha sin hora o si el día no existe ("2026-02-30").
+ */
+export function argentinaNoonOfDay(value: string): Date | null {
+  const match = DATE_ONLY.exec(value);
+  if (!match) return null;
+  const [year, month, day] = [Number(match[1]), Number(match[2]), Number(match[3])];
+  const check = new Date(Date.UTC(year, month - 1, day));
+  if (
+    check.getUTCFullYear() !== year ||
+    check.getUTCMonth() !== month - 1 ||
+    check.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  const start = startOfDayInstant(
+    { year, month, day, hour: 0, minute: 0, second: 0 },
+    ARGENTINA_TIME_ZONE
+  );
+  return new Date(start.getTime() + 12 * 60 * 60_000);
+}
+
 /**
  * Instante de la hora `hhmm` ("HH:mm") del día calendario argentino en que cae
  * `day`. Sirve para la salida de un viaje: `Trip.date` guarda un instante del

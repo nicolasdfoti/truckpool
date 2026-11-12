@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { argentinaNoonOfDay } from "../../lib/dates.js";
 
 export const TRIP_FEATURES = [
   "refrigeracion",
@@ -28,6 +29,23 @@ export const createCargoItemSchema = z.object({
 export type CreateCargoItemInput = z.infer<typeof createCargoItemSchema>;
 
 /**
+ * Fecha que manda el client. Un "YYYY-MM-DD" (input type=date) es un día
+ * calendario argentino y se toma al mediodía ART (`argentinaNoonOfDay`); si el
+ * día no existe ("2026-02-30") es un error, no una fecha que JS corre al mes
+ * siguiente. Una fecha con hora (ISO) entra tal cual: así publica viajes el
+ * client, con el mediodía de su navegador.
+ */
+export const calendarDateSchema = z.preprocess(
+  (value) => {
+    if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value.trim())) {
+      return value;
+    }
+    return argentinaNoonOfDay(value.trim()) ?? "fecha-inexistente";
+  },
+  z.coerce.date({ message: "la fecha es inválida" })
+);
+
+/**
  * Hora de salida en formato 24h "HH:mm". Obligatoria en los viajes nuevos: la
  * ventana de retiro de las cargas se mide contra la salida (U11). Los viajes
  * viejos sin hora salen a las 23:59 ART (ver lib/cancellation.ts). Se valida
@@ -46,7 +64,7 @@ export const createTripSchema = z.object({
   destination: z.string().trim().min(1, "el destino es obligatorio"),
   // punto exacto de salida (depósito, galpón). Opcional: si no viene se usa el origin general.
   departureAddress: z.string().trim().optional().nullable(),
-  date: z.coerce.date({ message: "la fecha es inválida" }),
+  date: calendarDateSchema,
   departureTime: departureTimeSchema,
   truckType: z.string().trim().min(1, "el tipo de vehículo es obligatorio"),
   capacityTotal: z
@@ -72,6 +90,28 @@ export const createTripSchema = z.object({
 
 export type CreateTripInput = z.infer<typeof createTripSchema>;
 
+/** `stopOrder` es un Int de Postgres: un número más grande rompe el update (500) */
+const MAX_STOP_ORDER = 2_147_483_647;
+
+// el reorden de paradas: el client manda cada carga con su posición (1, 2, …)
+export const reorderStopsSchema = z.object({
+  items: z
+    .array(
+      z.object({
+        cargoItemId: z.string().trim().min(1, "cada parada necesita su cargoItemId"),
+        order: z
+          .number({ message: "order debe ser un número" })
+          .int("order debe ser un número entero")
+          .min(0, "order no puede ser negativo")
+          .max(MAX_STOP_ORDER, "order es demasiado grande"),
+      }),
+      { message: "se requiere un array de items con cargoItemId y order" }
+    )
+    .min(1, "se requiere un array de items con cargoItemId y order"),
+});
+
+export type ReorderStopsInput = z.infer<typeof reorderStopsSchema>;
+
 // CANCELLED: el fletero cancela un viaje que no salió (D6); solo desde OPEN/FULL
 export const updateTripStatusSchema = z.object({
   status: z.enum(["IN_TRANSIT", "COMPLETED", "CANCELLED"]),
@@ -84,7 +124,7 @@ const optionalText = z.preprocess(
 
 const optionalDate = z.preprocess(
   (value) => (value === "" || value === undefined ? undefined : value),
-  z.coerce.date({ message: "la fecha es inválida" }).optional()
+  calendarDateSchema.optional()
 );
 
 const optionalFeatures = z.preprocess(

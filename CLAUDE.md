@@ -21,7 +21,10 @@ npm run typecheck      # tsc --noEmit
 npm run lint
 npm run format         # prettier
 npx prisma migrate dev # schema lives at server/schema.prisma (not prisma/), migrations in prisma/migrations
-npm run db:seed        # demo users: flete@ / empresa@ / admin@truckpool.app, password truckpool123
+npm run db:seed        # alias of db:seed:demo — demo users flete@ / empresa@ / admin@truckpool.app, password truckpool123; aborts with NODE_ENV=production
+npm run db:seed:e2e    # extra users + fixed-id trips for Playwright (client global-setup runs it); also blocked in production
+npm run db:seed:prod   # idempotent, creates no users
+npm run admin:create   # production admin: prompts for email/password (≥ 16 chars); ADMIN_EMAIL/ADMIN_PASSWORD env also work but can land in shell history
 npm run seed:geocode   # backfill coords for existing trips
 
 # client/
@@ -31,11 +34,11 @@ npm run lint
 npx playwright test    # specs in tests-e2e/; no playwright config, needs app + API running
 ```
 
-Server tests mock Prisma, Mercado Pago, Nominatim, OSRM routing and email per file with `vi.mock` — they need no database or network. `tests/setup.ts` pins `JWT_SECRET` and `TOKEN_ENCRYPTION_KEY`. The client has no unit tests; validation is lint + build.
+Server tests mock Prisma, Mercado Pago, Nominatim, OSRM routing and email per file with `vi.mock` — they need no database or network. `tests/setup.ts` pins `JWT_SECRET` and `TOKEN_ENCRYPTION_KEY`. Rate limits are off under vitest; tests that exercise them set `RATE_LIMITS=on` (or `AUTH_RATE_LIMIT_MAX` for login/register) and re-import the app after `vi.resetModules()`. The client has no unit tests; validation is lint + build.
 
 ## Server architecture
 
-- **Pipeline** (`src/app.ts`): helmet → json → cors → routers under `/api` (`API_PREFIX`) → 404 → error handler. `src/index.ts` is the bootstrap that loads `.env`. `lib/env.ts` aborts startup on missing/known-insecure secrets. `src/` only holds `app.ts` and `index.ts`; `lib/` and `modules/` live at the `server/` root (not under `src/`), so `lib/env.ts` means `server/lib/env.ts`.
+- **Pipeline** (`src/app.ts`): helmet → json → cors → routers under `/api` (`API_PREFIX`) → 404 → error handler. `src/index.ts` is the bootstrap that loads `.env`. `lib/env.ts` aborts startup on missing/known-insecure secrets; in production it also requires the full MP/Resend/CORS/HTTPS-URL/`TRUST_PROXY` config and rejects `RATE_LIMITS=off`. `src/` only holds `app.ts` and `index.ts`; `lib/` and `modules/` live at the `server/` root (not under `src/`), so `lib/env.ts` means `server/lib/env.ts`.
 - **Modules** (`modules/<name>/`): `*.routes.ts` (guard chain: `validateBody`/`validateQuery` Zod middleware, `requireAuth`, `requireRole`) → `*.controller.ts` (only req/res) → `*.service.ts` (business logic **and ownership checks**, never touches req/res) → Prisma. `*.schemas.ts` holds Zod schemas; don't re-validate in controllers. Note `users.routes.ts` also exports `carriersRouter` and `adminRouter`, and public tracking (`/api/tracking/:code`) is wired directly in `app.ts` to a trips controller. `paymentsRouter` is mounted at the `/api` root.
 - **Errors**: throw an `AppError` subclass from `lib/errors.ts` (message, status, `code`). Express 5 forwards async throws; the handler returns `{ error, code }`. The client's `ApiError` exposes that `code` so the UI can branch on it — keep codes stable.
 - **Serialization boundary**: every API response goes through `lib/mappers.ts`. Secrets (encrypted MP tokens) and exact coordinates stay hidden because the mapper omits them — add new fields there deliberately.
@@ -60,7 +63,7 @@ Server tests mock Prisma, Mercado Pago, Nominatim, OSRM routing and email per fi
 
 ### Auth
 
-JWT (7 days) with `jti`; `requireAuth` checks the `RevokedToken` table on every request (logout revokes). OAuth `state` is signed with purpose + 10 min expiry. Admin accounts only come from the seed.
+JWT (7 days) with `jti`; `requireAuth` checks the `RevokedToken` table on every request (logout revokes). OAuth `state` is signed with purpose + 10 min expiry. Production admin accounts come from `npm run admin:create` (the demo seed's admin is dev-only).
 
 ## Client architecture
 

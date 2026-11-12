@@ -1,6 +1,11 @@
 import { prisma } from "../../lib/prisma.js";
 import type { User } from "@prisma/client";
-import { AppError } from "../../lib/errors.js";
+import {
+  AppError,
+  CarrierNotVerifiedError,
+  TripRequestExpiredError,
+  ValidationError,
+} from "../../lib/errors.js";
 import {
   AlreadyVerifiedError,
   CarrierNotFoundError,
@@ -13,8 +18,9 @@ import {
   toCarrierReviewResponse,
   toTripSummary,
 } from "../../lib/mappers.js";
-import { endOfArgentinaDay } from "../../lib/dates.js";
+import { endOfArgentinaDay, isTripDateAvailable } from "../../lib/dates.js";
 import { encryptSecret } from "../../lib/crypto.js";
+import { tripRequestEmail, tripRequestResponseEmail } from "../../lib/email.js";
 import { signOAuthState } from "../../lib/auth.js";
 import { mpOAuthTestToken } from "../../lib/env.js";
 import type {
@@ -430,6 +436,12 @@ export async function createTripRequest(
   companyId: string,
   input: CreateTripRequestInput
 ) {
+  // un viaje para hoy (o antes) ya no acepta cargas: la misma regla que el
+  // listado. Va acá y no en el schema para que el schema no dependa del reloj.
+  if (!isTripDateAvailable(input.desiredDate)) {
+    throw new ValidationError("la fecha tiene que ser posterior a hoy");
+  }
+
   const carrier = await prisma.user.findUnique({
     where: { id: input.carrierId },
     select: {
@@ -480,27 +492,16 @@ export async function createTripRequest(
       input.desiredDate
     ).toLocaleDateString("es-AR")} (${input.estimatedVolume} m³).`,
     tripId: null,
-    email: (recipient) => ({
-      subject: `Nueva solicitud de viaje: ${input.origin} → ${input.destination}`,
-      html: `
-        <p>Hola ${recipient.name},</p>
-        <p><strong>${request.company.name}</strong> te solicitó un viaje directo:</p>
-        <ul>
-          <li><strong>Origen:</strong> ${input.origin}</li>
-          <li><strong>Destino:</strong> ${input.destination}</li>
-          <li><strong>Fecha deseada:</strong> ${new Date(
-            input.desiredDate
-          ).toLocaleDateString("es-AR", {
-            weekday: "long",
-            day: "numeric",
-            month: "long",
-          })}</li>
-          <li><strong>Volumen estimado:</strong> ${input.estimatedVolume} m³</li>
-          ${input.note ? `<li><strong>Nota:</strong> ${input.note}</li>` : ""}
-        </ul>
-        <p>Iniciá sesión para ver la solicitud y responder.</p>
-      `,
-    }),
+    email: (recipient) =>
+      tripRequestEmail({
+        carrier: recipient,
+        companyName: request.company.name,
+        origin: input.origin,
+        destination: input.destination,
+        desiredDate: input.desiredDate,
+        estimatedVolume: input.estimatedVolume,
+        note: input.note ?? null,
+      }),
   });
 
   return { request: toTripRequestResponse(request) };
@@ -580,11 +581,14 @@ export async function respondTripRequest(
     // no podría cobrar comisión y nadie se enteraría hasta que alguien pague.
     const carrier = await prisma.user.findUnique({
       where: { id: carrierId },
-      select: { mpUserId: true },
+      select: { verificationStatus: true, mpUserId: true },
     });
     if (!carrier) {
       throw new AppError("usuario no encontrado", 404, "USER_NOT_FOUND");
     }
+    // U13: el mismo chequeo que createTrip; sin esto un fletero no verificado
+    // (o rechazado) publicaba viajes aceptando solicitudes
+    if (carrier.verificationStatus !== "VERIFIED") throw new CarrierNotVerifiedError();
     if (!carrier.mpUserId) {
       throw new AppError(
         "para aceptar un viaje debés conectar tu cuenta de Mercado Pago desde tu perfil",
@@ -592,6 +596,10 @@ export async function respondTripRequest(
         "MP_ACCOUNT_NOT_CONNECTED"
       );
     }
+
+    // un viaje para hoy (o antes) no podría recibir cargas. Rechazarla sí se
+    // puede: es la forma de sacarla de la lista.
+    if (!isTripDateAvailable(request.desiredDate)) throw new TripRequestExpiredError();
 
     // Geocodificar origen y destino (best-effort)
     const { geocode } = await import("../../lib/geocode.js");
@@ -637,7 +645,6 @@ export async function respondTripRequest(
 
   // Notificar a la company
   const { notifyUsers } = await import("../../lib/notifications.js");
-  const tripLink = resultingTripId ? `/viajes/${resultingTripId}` : null;
   await notifyUsers([request.companyId], {
     type: "TRIP_REQUEST_RESPONSE",
     title: input.accept
@@ -647,18 +654,15 @@ export async function respondTripRequest(
       ? `${request.carrier.name} aceptó tu pedido y creó el viaje.`
       : `${request.carrier.name} no puede hacer ese viaje en este momento.`,
     tripId: resultingTripId,
-    email: (recipient) => ({
-      subject: input.accept
-        ? `Solicitud aceptada: ${request.origin} → ${request.destination}`
-        : `Solicitud rechazada: ${request.origin} → ${request.destination}`,
-      html: `
-        <p>Hola ${recipient.name},</p>
-        <p>Tu solicitud de viaje <strong>${request.origin} → ${request.destination}</strong> fue
-          <strong>${input.accept ? "aceptada" : "rechazada"}</strong> por <strong>${request.carrier.name}</strong>.</p>
-        ${input.accept ? `<p>El viaje ya está publicado y podés sumar carga.</p>` : ""}
-        ${tripLink ? `<p><a href="${process.env.APP_URL}${tripLink}">Ver el viaje</a></p>` : ""}
-      `,
-    }),
+    email: (recipient) =>
+      tripRequestResponseEmail({
+        company: recipient,
+        carrierName: request.carrier.name,
+        origin: request.origin,
+        destination: request.destination,
+        accepted: input.accept,
+        tripId: resultingTripId,
+      }),
   });
 
   return { request: toTripRequestResponse(updated) };

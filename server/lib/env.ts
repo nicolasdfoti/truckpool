@@ -132,11 +132,104 @@ export function jobsStatus(): { enabled: boolean; message: string } {
 }
 
 /**
+ * `TRUST_PROXY`: cuántos proxies hay delante de la API (lib/security.ts). Un
+ * entero ≥ 0, "true" (= 1) o "false" (= 0). Otro valor es un error en cualquier
+ * entorno: antes caía a "sin proxy" en silencio.
+ */
+function trustProxyProblem(): string | undefined {
+  const raw = process.env.TRUST_PROXY;
+  if (raw === undefined || raw === "") return undefined;
+  if (/^(\d+|true|false)$/.test(raw)) return undefined;
+  return `TRUST_PROXY="${raw}" no es válido: usá la cantidad de proxies delante de la API (0, 1, 2…)`;
+}
+
+/**
+ * `RATE_LIMITS`: "on", "off" o vacío (= prendidos; lib/rateLimit.ts). "off" es
+ * solo para pruebas locales: en producción no se acepta.
+ */
+function rateLimitsProblem(): string | undefined {
+  const raw = process.env.RATE_LIMITS;
+  if (raw === undefined || raw === "" || raw === "on") return undefined;
+  if (raw !== "off") return `RATE_LIMITS="${raw}" no es válido: usá on, off o vacío`;
+  if (process.env.NODE_ENV === "production") {
+    return "RATE_LIMITS=off apaga los rate limits: no se puede usar en producción";
+  }
+  return undefined;
+}
+
+function isBlank(value: string | undefined): boolean {
+  return value === undefined || value.trim() === "";
+}
+
+/**
+ * Lo que producción exige además de lo de siempre (02§2.6). Sin esto el server
+ * arrancaba y fallaba recién al usarlo (webhooks en 503, OAuth y emails sin
+ * configurar) o quedaba abierto (CORS a cualquier origen).
+ */
+function productionProblems(): string[] {
+  const problems: string[] = [];
+
+  const encryptionKey = process.env.TOKEN_ENCRYPTION_KEY?.trim();
+  if (!encryptionKey || !/^[0-9a-fA-F]{64}$/.test(encryptionKey)) {
+    problems.push(
+      "TOKEN_ENCRYPTION_KEY tiene que ser 64 caracteres hex (32 bytes): sin ella no se guardan los tokens de Mercado Pago. Generala con `openssl rand -hex 32`"
+    );
+  }
+
+  const required: [string, string][] = [
+    [
+      "MP_WEBHOOK_SECRET",
+      "sin él el webhook de Mercado Pago responde 503 y ningún pago se acredita",
+    ],
+    ["MP_CLIENT_ID", "sin él ningún fletero puede conectar su cuenta de Mercado Pago"],
+    [
+      "MP_CLIENT_SECRET",
+      "sin él ningún fletero puede conectar su cuenta de Mercado Pago",
+    ],
+    ["RESEND_API_KEY", "sin ella no sale ningún email"],
+    [
+      "TRUST_PROXY",
+      "tiene que ser la cantidad de proxies delante de la API en el hosting (0 si no hay ninguno)",
+    ],
+  ];
+  for (const [name, why] of required) {
+    if (isBlank(process.env[name])) problems.push(`${name} no está definido: ${why}`);
+  }
+
+  const origins = (process.env.CORS_ORIGIN ?? "")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+  if (origins.length === 0) {
+    problems.push(
+      "CORS_ORIGIN no está definido: tiene que listar el origen del front (sin él la API quedaría abierta a cualquier sitio)"
+    );
+  } else if (origins.includes("*")) {
+    problems.push('CORS_ORIGIN no puede incluir "*": listá los orígenes del front');
+  }
+
+  // Con APP_URL local, la preference no manda back_urls (MP las rechaza): el
+  // comprador no volvería nunca al sitio después de pagar. API_PUBLIC_URL es la
+  // notification_url del webhook y el redirect de OAuth: MP no llega a localhost.
+  for (const name of ["APP_URL", "API_PUBLIC_URL"]) {
+    const url = process.env[name]?.trim();
+    if (!url || isLocalUrl(url) || !url.startsWith("https://")) {
+      problems.push(
+        `${name} tiene que ser una URL pública con https en producción (no localhost): Mercado Pago no acepta URLs locales`
+      );
+    }
+  }
+
+  return problems;
+}
+
+/**
  * Aborta el arranque si la configuración no alcanza para operar.
  *
  * Sólo chequea lo que rompería la seguridad o dejaría el server sin poder hacer
- * su trabajo. Lo opcional (Mercado Pago, correo, Nominatim) sigue siendo
- * opcional a propósito: cada módulo falla solo cuando se lo usa.
+ * su trabajo. Fuera de producción, Mercado Pago, el correo y Nominatim siguen
+ * siendo opcionales: cada módulo falla solo cuando se lo usa. En producción
+ * son obligatorios (productionProblems).
  */
 export function assertServerEnv(): void {
   const problems: string[] = [];
@@ -174,16 +267,12 @@ export function assertServerEnv(): void {
     );
   }
 
-  // Con APP_URL local, la preference no manda back_urls (MP las rechaza): en
-  // producción el comprador no volvería nunca al sitio después de pagar.
-  if (nodeEnv === "production") {
-    const appUrl = process.env.APP_URL;
-    if (appUrl === undefined || appUrl.trim() === "" || isLocalUrl(appUrl)) {
-      problems.push(
-        "APP_URL tiene que ser la URL pública del front en producción (no localhost): Mercado Pago no acepta back_urls locales"
-      );
-    }
-  }
+  if (nodeEnv === "production") problems.push(...productionProblems());
+
+  const trustProxy = trustProxyProblem();
+  if (trustProxy) problems.push(trustProxy);
+  const rateLimits = rateLimitsProblem();
+  if (rateLimits) problems.push(rateLimits);
 
   const mpTestToken = readMpOAuthTestToken();
   if (mpTestToken.problem) problems.push(mpTestToken.problem);

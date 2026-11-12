@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { optionalAuth, requireAuth, requireRole } from "../../lib/auth.js";
 import { validateBody } from "../../lib/validate.js";
+import { tripRequestsRateLimit } from "../../lib/rateLimit.js";
 import * as usersController from "./users.controller.js";
 import {
   requestVerificationSchema,
@@ -65,6 +66,7 @@ usersRouter.post(
   "/trip-requests",
   requireAuth,
   requireRole("COMPANY"),
+  tripRequestsRateLimit,
   validateBody(createTripRequestSchema),
   usersController.createTripRequest
 );

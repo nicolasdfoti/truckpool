@@ -30,7 +30,8 @@ export async function sendEmail(
 ): Promise<boolean> {
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey) {
-    console.warn(`[email] sin RESEND_API_KEY, se omite el envío a ${to}: ${subject}`);
+    // sin destinatario ni asunto: el asunto trae nombres y rutas (U6)
+    console.warn("[email] sin RESEND_API_KEY: se omite el envío");
     return false;
   }
 
@@ -45,14 +46,18 @@ export async function sendEmail(
     });
 
     if (!res.ok) {
-      const detail = await res.text().catch(() => "");
-      console.error(`[email] Resend respondió ${res.status} para ${to}: ${detail}`);
+      // solo el status: el body de Resend repite el destinatario (U6)
+      console.error("[email] Resend rechazó el envío", { status: res.status });
       return false;
     }
 
     return true;
   } catch (err) {
-    console.error(`[email] no se pudo enviar a ${to}:`, err);
+    // nunca el error entero: puede traer la request con el Authorization
+    console.error("[email] no se pudo enviar", {
+      name: err instanceof Error ? err.name : typeof err,
+      code: (err as { code?: unknown } | null)?.code,
+    });
     return false;
   }
 }
@@ -67,12 +72,7 @@ export async function sendEmailToUser(
   html: string
 ): Promise<boolean> {
   if (!user) return false;
-  if (!user.emailNotifications) {
-    console.log(
-      `[email] ${user.email} tiene las notificaciones apagadas: se omite "${subject}"`
-    );
-    return false;
-  }
+  if (!user.emailNotifications) return false;
   return sendEmail(user.email, subject, html);
 }
 
@@ -83,6 +83,31 @@ type EmailContent = {
   closing?: string;
 };
 
+/**
+ * Todo lo que va en un email es texto: nombres, descripciones, direcciones y
+ * notas los escribe la gente, y una empresa registrada como «<a href=…>» mandaba
+ * phishing con remitente truckpool (02§2.4). Se escapa una sola vez, acá: los
+ * builders pasan texto plano.
+ */
+export function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/** solo links http(s): un `javascript:` o un `data:` no van nunca en un botón */
+function safeLink(url: string): string | null {
+  try {
+    const { protocol } = new URL(url);
+    return protocol === "https:" || protocol === "http:" ? url : null;
+  } catch {
+    return null;
+  }
+}
+
 /** layout mínimo, en el mismo tono de marca que el producto: minúsculas y directo */
 export function renderEmail({
   greeting,
@@ -90,20 +115,22 @@ export function renderEmail({
   cta,
   closing,
 }: EmailContent): string {
-  const button = cta
-    ? `<p style="margin:24px 0"><a href="${cta.url}" style="background:#0b3d5c;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:6px;font-weight:600">${cta.label}</a></p>`
-    : "";
+  const href = cta ? safeLink(cta.url) : null;
+  const button =
+    cta && href
+      ? `<p style="margin:24px 0"><a href="${escapeHtml(href)}" style="background:#0b3d5c;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:6px;font-weight:600">${escapeHtml(cta.label)}</a></p>`
+      : "";
   const body = paragraphs
-    .map((text) => `<p style="margin:0 0 12px">${text}</p>`)
+    .map((text) => `<p style="margin:0 0 12px">${escapeHtml(text)}</p>`)
     .join("");
-  const footer = closing ?? "gracias por usar truckpool.";
+  const footer = escapeHtml(closing ?? "gracias por usar truckpool.");
 
   return `<!doctype html>
 <html lang="es">
   <body style="margin:0;background:#eaf1f7;padding:24px;font-family:Arial,Helvetica,sans-serif;color:#1a2733">
     <div style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #e2e6ea;border-radius:10px;padding:28px">
       <p style="margin:0 0 20px;font-size:18px;font-weight:700;color:#0b3d5c">truckpool</p>
-      <p style="margin:0 0 16px">${greeting}</p>
+      <p style="margin:0 0 16px">${escapeHtml(greeting)}</p>
       ${body}
       ${button}
       <p style="margin:24px 0 0;font-size:13px;color:#8a94a0">${footer}</p>
@@ -112,9 +139,12 @@ export function renderEmail({
 </html>`;
 }
 
+function appUrl(): string {
+  return process.env.APP_URL ?? "http://localhost:5173";
+}
+
 export function tripUrl(tripId: string): string {
-  const appUrl = process.env.APP_URL ?? "http://localhost:5173";
-  return `${appUrl}/viajes/${tripId}`;
+  return `${appUrl()}/viajes/${tripId}`;
 }
 
 /** el nombre de quien recibe: los builders personalize el saludo */
@@ -276,6 +306,71 @@ export function tripStatusEmail(input: {
       greeting: `hola ${input.company.name},`,
       paragraphs,
       cta: { label: "ver el viaje", url: tripUrl(trip.id) },
+    }),
+  };
+}
+
+/** una empresa le pidió un viaje directo al fletero */
+export function tripRequestEmail(input: {
+  carrier: EmailRecipient;
+  companyName: string;
+  origin: string;
+  destination: string;
+  desiredDate: Date;
+  estimatedVolume: number;
+  note?: string | null;
+}): { subject: string; html: string } {
+  // el día del pedido es un día argentino (se guarda al mediodía ART)
+  const date = input.desiredDate.toLocaleDateString("es-AR", {
+    timeZone: "America/Argentina/Buenos_Aires",
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+  });
+  const paragraphs = [
+    `${input.companyName} te pidió un viaje directo: ${input.origin} → ${input.destination}.`,
+    `fecha deseada: ${date}. volumen estimado: ${input.estimatedVolume} m³.`,
+  ];
+  if (input.note) paragraphs.push(`nota de la empresa: ${input.note}`);
+  paragraphs.push("entrá para ver la solicitud y responderla.");
+
+  return {
+    subject: `nueva solicitud de viaje: ${input.origin} → ${input.destination}`,
+    html: renderEmail({
+      greeting: `hola ${input.carrier.name},`,
+      paragraphs,
+      cta: { label: "ver las solicitudes", url: `${appUrl()}/solicitudes` },
+    }),
+  };
+}
+
+/** el fletero aceptó (y publicó el viaje) o rechazó la solicitud de la empresa */
+export function tripRequestResponseEmail(input: {
+  company: EmailRecipient;
+  carrierName: string;
+  origin: string;
+  destination: string;
+  accepted: boolean;
+  tripId: string | null;
+}): { subject: string; html: string } {
+  const route = `${input.origin} → ${input.destination}`;
+  const paragraphs = input.accepted
+    ? [
+        `${input.carrierName} aceptó tu solicitud de viaje ${route} y publicó el viaje.`,
+        "ya podés sumar tu carga.",
+      ]
+    : [`${input.carrierName} no puede hacer el viaje ${route} en este momento.`];
+
+  return {
+    subject: input.accepted
+      ? `tu solicitud fue aceptada: ${route}`
+      : `tu solicitud fue rechazada: ${route}`,
+    html: renderEmail({
+      greeting: `hola ${input.company.name},`,
+      paragraphs,
+      ...(input.accepted && input.tripId
+        ? { cta: { label: "ver el viaje", url: tripUrl(input.tripId) } }
+        : {}),
     }),
   };
 }

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { departureTimeSchema } from "../trips/trips.schemas.js";
+import { calendarDateSchema, departureTimeSchema } from "../trips/trips.schemas.js";
 
 export const updateProfileSchema = z.object({
   name: z.string().trim().min(1, "el nombre no puede estar vacío").optional(),
@@ -41,7 +41,7 @@ export const createTripRequestSchema = z.object({
   carrierId: z.string().trim().min(1, "el transportista es obligatorio"),
   origin: z.string().trim().min(1, "el origen es obligatorio"),
   destination: z.string().trim().min(1, "el destino es obligatorio"),
-  desiredDate: z.coerce.date({ message: "la fecha es inválida" }),
+  desiredDate: calendarDateSchema,
   estimatedVolume: z
     .number({ message: "estimatedVolume debe ser un número" })
     .positive("estimatedVolume debe ser mayor a 0")

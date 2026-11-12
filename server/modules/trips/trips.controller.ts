@@ -6,6 +6,7 @@ import type {
   PriceEstimateQuery,
   CancellationQuoteQuery,
   CargoQuoteQuery,
+  ReorderStopsInput,
 } from "./trips.schemas.js";
 import { AppError } from "../../lib/errors.js";
 import { geocode } from "../../lib/geocode.js";
@@ -277,14 +278,8 @@ export async function reorderTripStops(req: Request, res: Response) {
   if (!req.user) {
     throw new AppError("no autenticado", 401, "UNAUTHORIZED");
   }
-  const { items } = req.body as { items: { cargoItemId: string; order: number }[] };
-  if (!Array.isArray(items) || items.length === 0) {
-    throw new AppError(
-      "se requiere un array de items con cargoItemId y order",
-      400,
-      "INVALID_BODY"
-    );
-  }
+  // validado en la ruta (reorderStopsSchema)
+  const { items } = req.body as ReorderStopsInput;
   const stops = await tripsService.reorderTripStops(
     getParam(req, "id"),
     req.user.id,

@@ -46,7 +46,11 @@ import {
   tripStatusEmail,
 } from "../../lib/email.js";
 import { notifyUsers } from "../../lib/notifications.js";
-import { endOfArgentinaDay, isTripDateAvailable } from "../../lib/dates.js";
+import {
+  endOfArgentinaDay,
+  isTripDateAvailable,
+  startOfArgentinaDay,
+} from "../../lib/dates.js";
 import {
   AlreadyReviewedError,
   BalanceChargedBackError,
@@ -141,7 +145,11 @@ async function bestEffortNotify(send: () => Promise<unknown>): Promise<void> {
   try {
     await send();
   } catch (err) {
-    console.error("[notificaciones] falló el aviso, la operación sigue:", err);
+    // name y code: un error de Prisma trae la consulta y sus parámetros (U6)
+    console.error("[notificaciones] falló el aviso, la operación sigue", {
+      name: err instanceof Error ? err.name : typeof err,
+      code: (err as { code?: unknown } | null)?.code,
+    });
   }
 }
 
@@ -159,24 +167,6 @@ const ALLOWED_TRANSITIONS: Record<TripStatusChange, Trip["status"][]> = {
   CANCELLED: ["OPEN", "FULL"],
 };
 
-function startOfUtcDay(date: Date) {
-  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
-}
-
-function endOfUtcDay(date: Date) {
-  return new Date(
-    Date.UTC(
-      date.getUTCFullYear(),
-      date.getUTCMonth(),
-      date.getUTCDate(),
-      23,
-      59,
-      59,
-      999
-    )
-  );
-}
-
 export async function listOpenTrips(filters: ListTripsQuery = {}, now: Date = new Date()) {
   // un fletero sin MP no puede cobrar la seña: su viaje no se ofrece
   const where: Prisma.TripWhereInput = { status: "OPEN", carrier: CARRIER_CAN_CHARGE };
@@ -192,11 +182,12 @@ export async function listOpenTrips(filters: ListTripsQuery = {}, now: Date = ne
   if (filters.destination) {
     where.destination = { contains: filters.destination, mode: "insensitive" };
   }
+  // días completos en Argentina, como el día de un viaje (lib/dates.ts)
   if (filters.dateFrom) {
-    dateFilter.gte = startOfUtcDay(filters.dateFrom);
+    dateFilter.gte = startOfArgentinaDay(filters.dateFrom);
   }
   if (filters.dateTo) {
-    dateFilter.lte = endOfUtcDay(filters.dateTo);
+    dateFilter.lte = endOfArgentinaDay(filters.dateTo);
   }
   where.date = dateFilter;
   if (filters.features && filters.features.length > 0) {
@@ -1582,9 +1573,10 @@ export async function addCargoItem(
                 );
               }
             } else {
+              // el viaje y no la dirección de retiro (U6)
               console.warn(
-                "[addCargoItem] no se pudo obtener geometría del trayecto (OSRM falló o no hay puntos); se omite validación de distancia para pickup:",
-                data.pickupAddress
+                "[addCargoItem] sin geometría del trayecto (OSRM falló o no hay puntos): se omite validar la distancia del retiro",
+                { tripId }
               );
             }
           }

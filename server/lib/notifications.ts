@@ -96,7 +96,7 @@ export async function notifyUsers(userIds: string[], data: NotifyInput): Promise
 }
 
 async function deliverEmails(
-  recipients: { name: string; email: string; emailNotifications: boolean }[],
+  recipients: { id: string; name: string; email: string; emailNotifications: boolean }[],
   data: NotifyInput
 ): Promise<void> {
   await Promise.all(
@@ -108,11 +108,14 @@ async function deliverEmails(
         await sendEmailToUser(user, subject, html);
       } catch (err) {
         // ni un error de armado del email puede salir de acá: el aviso in-app
-        // ya está creado y no se toca.
-        console.error(
-          `[notificaciones] no se pudo encolar el email de ${data.type} para ${user.email}:`,
-          err
-        );
+        // ya está creado y no se toca. El log lleva el id, nunca el email ni el
+        // error entero (puede traer datos del aviso) (U6).
+        console.error("[notificaciones] no se pudo encolar un email", {
+          type: data.type,
+          userId: user.id,
+          name: err instanceof Error ? err.name : typeof err,
+          code: (err as { code?: unknown } | null)?.code,
+        });
       }
     })
   );

@@ -6,16 +6,47 @@ import { assertServerEnv, EnvError, jobsStatus, LEGACY_DEV_SECRET } from "../lib
  * el resto de la suite corre en el mismo proceso y no puede quedar con un
  * entorno a medio camino.
  */
-const ORIGINAL = {
-  JWT_SECRET: process.env.JWT_SECRET,
-  DATABASE_URL: process.env.DATABASE_URL,
-  NODE_ENV: process.env.NODE_ENV,
-  APP_URL: process.env.APP_URL,
+const KEYS = [
+  "JWT_SECRET",
+  "DATABASE_URL",
+  "NODE_ENV",
+  "APP_URL",
+  "API_PUBLIC_URL",
+  "TOKEN_ENCRYPTION_KEY",
+  "MP_WEBHOOK_SECRET",
+  "MP_CLIENT_ID",
+  "MP_CLIENT_SECRET",
+  "RESEND_API_KEY",
+  "CORS_ORIGIN",
+  "TRUST_PROXY",
+  "RATE_LIMITS",
+] as const;
+const ORIGINAL = Object.fromEntries(KEYS.map((key) => [key, process.env[key]]));
+
+function restoreAll() {
+  for (const key of KEYS) {
+    if (ORIGINAL[key] === undefined) delete process.env[key];
+    else process.env[key] = ORIGINAL[key];
+  }
+}
+
+/** lo que exige producción además de lo de siempre (L5, 02§2.6) */
+const PROD_COMPLETO = {
+  APP_URL: "https://app.truckpool.app",
+  API_PUBLIC_URL: "https://api.truckpool.app",
+  TOKEN_ENCRYPTION_KEY: "ab".repeat(32),
+  MP_WEBHOOK_SECRET: "secreto-del-webhook",
+  MP_CLIENT_ID: "client-id",
+  MP_CLIENT_SECRET: "client-secret",
+  RESEND_API_KEY: "re_123",
+  CORS_ORIGIN: "https://app.truckpool.app",
+  TRUST_PROXY: "1",
 };
 
-function restore(key: keyof typeof ORIGINAL) {
-  if (ORIGINAL[key] === undefined) delete process.env[key];
-  else process.env[key] = ORIGINAL[key];
+/** NODE_ENV=production con todo lo que pide: cada test rompe una sola cosa */
+function setProd() {
+  process.env.NODE_ENV = "production";
+  Object.assign(process.env, PROD_COMPLETO);
 }
 
 describe("assertServerEnv", () => {
@@ -28,10 +59,7 @@ describe("assertServerEnv", () => {
   });
 
   afterEach(() => {
-    restore("JWT_SECRET");
-    restore("DATABASE_URL");
-    restore("NODE_ENV");
-    restore("APP_URL");
+    restoreAll();
   });
 
   describe("APP_URL", () => {
@@ -49,7 +77,7 @@ describe("assertServerEnv", () => {
     });
 
     it("arranca en producción con una APP_URL pública", () => {
-      process.env.NODE_ENV = "production";
+      setProd();
       process.env.APP_URL = "https://app.truckpool.app";
       expect(() => assertServerEnv()).not.toThrow();
     });
@@ -58,6 +86,129 @@ describe("assertServerEnv", () => {
       process.env.APP_URL = "http://localhost:5173";
       expect(() => assertServerEnv()).not.toThrow();
     });
+  });
+
+  // L5 (02§2.6): en producción falta algo y el server no arranca, en vez de
+  // fallar recién cuando alguien lo usa (o de quedar abierto, como CORS)
+  describe("producción exige la configuración completa", () => {
+    it("arranca con todo definido", () => {
+      setProd();
+      expect(() => assertServerEnv()).not.toThrow();
+    });
+
+    it.each(Object.keys(PROD_COMPLETO))("aborta si falta %s", (key) => {
+      setProd();
+      delete process.env[key];
+      expect(() => assertServerEnv()).toThrow(EnvError);
+      expect(() => assertServerEnv()).toThrow(new RegExp(key));
+    });
+
+    it.each(Object.keys(PROD_COMPLETO))("aborta si %s es solo espacios", (key) => {
+      setProd();
+      process.env[key] = "   ";
+      expect(() => assertServerEnv()).toThrow(new RegExp(key));
+    });
+
+    it.each([
+      ["APP_URL", "http://app.truckpool.app"],
+      ["APP_URL", "https://localhost:5173"],
+      ["API_PUBLIC_URL", "http://api.truckpool.app"],
+      ["API_PUBLIC_URL", "https://127.0.0.1:4000"],
+      ["API_PUBLIC_URL", "https://api.localhost"],
+      ["API_PUBLIC_URL", "no-es-una-url"],
+    ])("aborta con %s=%s: tiene que ser https y pública", (key, valor) => {
+      setProd();
+      process.env[key] = valor;
+      expect(() => assertServerEnv()).toThrow(new RegExp(`${key}.*https`));
+    });
+
+    it.each([
+      ["63 caracteres", "a".repeat(63)],
+      ["65 caracteres", "a".repeat(65)],
+      ["no hex", "z".repeat(64)],
+    ])("aborta con TOKEN_ENCRYPTION_KEY de %s", (_caso, valor) => {
+      setProd();
+      process.env.TOKEN_ENCRYPTION_KEY = valor;
+      expect(() => assertServerEnv()).toThrow(/TOKEN_ENCRYPTION_KEY.*64/);
+    });
+
+    it.each([["*"], ["https://app.truckpool.app,*"], [" , "]])(
+      "aborta con CORS_ORIGIN=%j",
+      (valor) => {
+        setProd();
+        process.env.CORS_ORIGIN = valor;
+        expect(() => assertServerEnv()).toThrow(/CORS_ORIGIN/);
+      }
+    );
+
+    it("acepta varios orígenes en CORS_ORIGIN", () => {
+      setProd();
+      process.env.CORS_ORIGIN = "https://app.truckpool.app, https://www.truckpool.app";
+      expect(() => assertServerEnv()).not.toThrow();
+    });
+
+    it("con nada definido reporta cada faltante", () => {
+      process.env.NODE_ENV = "production";
+      for (const key of Object.keys(PROD_COMPLETO)) delete process.env[key];
+      try {
+        assertServerEnv();
+        expect.unreachable("assertServerEnv tenía que abortar");
+      } catch (err) {
+        const problems = (err as EnvError).problems;
+        for (const key of Object.keys(PROD_COMPLETO)) {
+          expect(problems.join("\n")).toContain(key);
+        }
+        expect(problems).toHaveLength(Object.keys(PROD_COMPLETO).length);
+      }
+    });
+
+    it("fuera de producción no exige nada de esto", () => {
+      for (const key of Object.keys(PROD_COMPLETO)) delete process.env[key];
+      expect(() => assertServerEnv()).not.toThrow();
+    });
+  });
+
+  // L5: RATE_LIMITS apaga los límites solo fuera de producción (e2e, pruebas)
+  describe("RATE_LIMITS", () => {
+    it.each([["on"], ["off"], [""]])("acepta RATE_LIMITS=%j en development", (valor) => {
+      process.env.RATE_LIMITS = valor;
+      expect(() => assertServerEnv()).not.toThrow();
+    });
+
+    it("aborta en producción con RATE_LIMITS=off", () => {
+      setProd();
+      process.env.RATE_LIMITS = "off";
+      expect(() => assertServerEnv()).toThrow(/RATE_LIMITS=off/);
+    });
+
+    it("arranca en producción con RATE_LIMITS=on", () => {
+      setProd();
+      process.env.RATE_LIMITS = "on";
+      expect(() => assertServerEnv()).not.toThrow();
+    });
+
+    it.each([["false"], ["ON"], ["0"]])("aborta con RATE_LIMITS=%j", (valor) => {
+      process.env.RATE_LIMITS = valor;
+      expect(() => assertServerEnv()).toThrow(/RATE_LIMITS=.* no es válido/);
+    });
+  });
+
+  describe("TRUST_PROXY", () => {
+    it.each([["0"], ["1"], ["2"], ["true"], ["false"], [""]])(
+      "acepta TRUST_PROXY=%j fuera de producción",
+      (valor) => {
+        process.env.TRUST_PROXY = valor;
+        expect(() => assertServerEnv()).not.toThrow();
+      }
+    );
+
+    it.each([["abc"], ["-1"], ["1.5"], ["TRUE"]])(
+      "aborta con TRUST_PROXY=%j en cualquier entorno: hoy caía a false en silencio",
+      (valor) => {
+        process.env.TRUST_PROXY = valor;
+        expect(() => assertServerEnv()).toThrow(/TRUST_PROXY=.* no es válido/);
+      }
+    );
   });
 
   it("no se queja con una configuración completa", () => {
@@ -79,7 +230,7 @@ describe("assertServerEnv", () => {
     it.each([["false"], [""], [undefined]])(
       "arranca en producción con MP_OAUTH_TEST_TOKEN=%j",
       (valor) => {
-        process.env.NODE_ENV = "production";
+        setProd();
         if (valor === undefined) delete process.env.MP_OAUTH_TEST_TOKEN;
         else process.env.MP_OAUTH_TEST_TOKEN = valor;
         expect(() => assertServerEnv()).not.toThrow();
@@ -112,7 +263,7 @@ describe("assertServerEnv", () => {
     it.each([["false"], [""], [undefined]])(
       "arranca en producción con MP_CHECKOUT_SANDBOX=%j",
       (valor) => {
-        process.env.NODE_ENV = "production";
+        setProd();
         if (valor === undefined) delete process.env.MP_CHECKOUT_SANDBOX;
         else process.env.MP_CHECKOUT_SANDBOX = valor;
         expect(() => assertServerEnv()).not.toThrow();
@@ -208,6 +359,8 @@ describe("assertServerEnv", () => {
   });
 
   it.each(["development", "production"])("acepta NODE_ENV=%s", (value) => {
+    // producción además exige su configuración completa (ver más arriba)
+    if (value === "production") setProd();
     process.env.NODE_ENV = value;
     expect(() => assertServerEnv()).not.toThrow();
   });

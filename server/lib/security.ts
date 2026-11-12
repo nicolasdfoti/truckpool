@@ -68,7 +68,8 @@ export function applyTrustProxy(app: {
     );
     return;
   }
-  // en producción lo normal es un reverse proxy delante (Railway, Fly, nginx);
-  // en local no hay ninguno y hay que poner la IP real tal cual.
-  app.set("trust proxy", isProduction ? 1 : false);
+  // sin la variable no se confía en ningún proxy: en producción es obligatoria
+  // (assertServerEnv) y tiene que coincidir con los proxies del hosting. Antes
+  // se asumía 1 y, sin proxy delante, cada uno elegía su IP con X-Forwarded-For.
+  app.set("trust proxy", false);
 }
