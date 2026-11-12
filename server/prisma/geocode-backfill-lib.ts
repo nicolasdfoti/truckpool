@@ -7,7 +7,7 @@
 import type { PrismaClient } from "@prisma/client";
 import { isInArgentinaBox, type GeocodedPlace, type LatLng } from "../lib/geocode.js";
 
-export type BackfillMode = "sin-coordenadas" | "fuera-de-ar";
+export type BackfillMode = "sin-coordenadas" | "fuera-de-ar" | "cargas";
 export type BackfillArgs = { mode: BackfillMode; write: boolean };
 
 /** una opción inválida: el script la muestra tal cual y sale con 1 */
@@ -20,6 +20,7 @@ export class BackfillArgsError extends Error {
 
 const MODE_FLAGS: Record<string, BackfillMode> = {
   "--fuera-de-ar": "fuera-de-ar",
+  "--cargas": "cargas",
 };
 const WRITE_FLAG = "--escribir";
 
@@ -47,14 +48,21 @@ export type BackfillDeps = {
   log: (line: string) => void;
 };
 
-/** cuántos registros y puntos cambian (o cambiarían, en seco) */
+/** cuántos registros, coordenadas y ciudades cambian (o cambiarían, en seco) */
 export type BackfillSummary = {
   mode: BackfillMode;
   written: boolean;
+  /** viajes o cargas revisados */
   examined: number;
-  trips: number;
+  /** viajes o cargas con algún cambio */
+  changed: number;
+  /** puntos (lat/lng) que cambian */
   points: number;
+  /** pickupCity que se completan (solo --cargas) */
+  cities: number;
 };
+
+type BackfillCounts = Omit<BackfillSummary, "mode" | "written">;
 
 // los tres puntos de un viaje: texto, columnas y cómo se llama en la salida
 const TRIP_POINTS = [
@@ -113,7 +121,7 @@ async function backfillTrips(
   mode: BackfillMode,
   write: boolean,
   { db, geocode, log }: BackfillDeps
-): Promise<Omit<BackfillSummary, "mode" | "written">> {
+): Promise<BackfillCounts> {
   const rows: TripRow[] = await db.trip.findMany({
     where:
       mode === "sin-coordenadas"
@@ -140,7 +148,7 @@ async function backfillTrips(
     orderBy: { date: "desc" },
   });
 
-  let trips = 0;
+  let changed = 0;
   let points = 0;
   for (const trip of rows) {
     const data: Record<string, number | null> = {};
@@ -169,18 +177,90 @@ async function backfillTrips(
       }
     }
 
-    const changed = Object.keys(data).length / 2;
-    if (changed === 0) continue;
-    trips += 1;
-    points += changed;
+    const tripPoints = Object.keys(data).length / 2;
+    if (tripPoints === 0) continue;
+    changed += 1;
+    points += tripPoints;
     if (write) await db.trip.update({ where: { id: trip.id }, data });
   }
-  return { examined: rows.length, trips, points };
+  return { examined: rows.length, changed, points, cities: 0 };
+}
+
+/**
+ * --cargas: las cargas vivas sin `pickupCity` (las reservadas antes de L6). La
+ * ciudad sale del geocode de su dirección de retiro; de paso, si sus
+ * coordenadas estaban fuera de Argentina se reemplazan (o pasan a null sin
+ * match), con el mismo criterio que los viajes. Coordenadas null o adentro
+ * no se tocan.
+ */
+async function backfillCargo(
+  write: boolean,
+  { db, geocode, log }: BackfillDeps
+): Promise<BackfillCounts> {
+  const rows = await db.cargoItem.findMany({
+    where: { pickupCity: null, status: { not: "CANCELLED" } },
+    select: {
+      id: true,
+      pickupAddress: true,
+      pickupCity: true,
+      pickupLat: true,
+      pickupLng: true,
+    },
+    orderBy: { createdAt: "desc" },
+  });
+
+  let changed = 0;
+  let points = 0;
+  let cities = 0;
+  for (const item of rows) {
+    const found = await geocode(item.pickupAddress);
+    const place = found && isInArgentinaBox(found) ? found : null;
+    const before =
+      item.pickupLat === null || item.pickupLng === null
+        ? null
+        : { lat: item.pickupLat, lng: item.pickupLng };
+    const outside = before !== null && !isInArgentinaBox(before);
+
+    const data: {
+      pickupCity?: string;
+      pickupLat?: number | null;
+      pickupLng?: number | null;
+    } = {};
+    const parts: string[] = [];
+    if (place?.city) {
+      data.pickupCity = place.city;
+      parts.push(`ciudad → ${place.city}`);
+    } else {
+      parts.push(
+        `sigue sin ciudad (${place ? "el geocode no informó localidad" : "no hay match en Argentina"})`
+      );
+    }
+    if (outside) {
+      data.pickupLat = place?.lat ?? null;
+      data.pickupLng = place?.lng ?? null;
+      parts.push(
+        `coords ${coords(before)} (fuera de Argentina) → ${
+          place
+            ? `${place.label ?? "(sin texto)"} (${coords(place)})`
+            : "quedan sin coordenadas"
+        }`
+      );
+    }
+    log(`  carga ${item.id} "${item.pickupAddress}": ${parts.join(" · ")}`);
+
+    if (Object.keys(data).length === 0) continue;
+    changed += 1;
+    if (data.pickupCity) cities += 1;
+    if (outside) points += 1;
+    if (write) await db.cargoItem.update({ where: { id: item.id }, data });
+  }
+  return { examined: rows.length, changed, points, cities };
 }
 
 const MODE_TITLE: Record<BackfillMode, string> = {
   "sin-coordenadas": "viajes sin coordenadas",
   "fuera-de-ar": "viajes con coordenadas fuera de Argentina",
+  cargas: "cargas vivas sin ciudad de retiro (pickupCity)",
 };
 
 export async function runGeocodeBackfill(
@@ -193,20 +273,26 @@ export async function runGeocodeBackfill(
   );
   log("(geocode contra Nominatim, 1 pedido por segundo)");
 
-  const result = await backfillTrips(args.mode, args.write, deps);
+  const result =
+    args.mode === "cargas"
+      ? await backfillCargo(args.write, deps)
+      : await backfillTrips(args.mode, args.write, deps);
   const summary: BackfillSummary = { mode: args.mode, written: args.write, ...result };
 
+  const unit = args.mode === "cargas" ? "cargas" : "viajes";
+  const what =
+    args.mode === "cargas"
+      ? `${summary.cities} ciudades y ${summary.points} coordenadas en ${summary.changed} cargas`
+      : `${summary.points} puntos en ${summary.changed} viajes`;
   log("");
-  log(`revisados: ${summary.examined} viajes.`);
-  if (summary.trips === 0) {
+  log(`revisados: ${summary.examined} ${unit}.`);
+  if (summary.changed === 0) {
     log("no hay nada para cambiar.");
   } else if (args.write) {
-    log(`escrito: ${summary.points} puntos en ${summary.trips} viajes.`);
+    log(`escrito: ${what}.`);
   } else {
     const flag = Object.entries(MODE_FLAGS).find(([, mode]) => mode === args.mode)?.[0];
-    log(
-      `en seco: ${summary.points} puntos para cambiar en ${summary.trips} viajes. no se escribió nada.`
-    );
+    log(`en seco: ${what} para cambiar. no se escribió nada.`);
     log(`para escribir: npm run seed:geocode -- ${flag ? `${flag} ` : ""}${WRITE_FLAG}`);
   }
   return summary;

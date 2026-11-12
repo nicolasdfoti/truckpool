@@ -54,14 +54,32 @@ function viaje(overrides: Partial<TripRow> & { id: string }): TripRow {
   };
 }
 
-function fakeDb(trips: TripRow[]) {
+type CargoRow = {
+  id: string;
+  pickupAddress: string;
+  pickupCity: string | null;
+  pickupLat: number | null;
+  pickupLng: number | null;
+};
+
+function carga(overrides: Partial<CargoRow> & { id: string }): CargoRow {
+  return {
+    pickupAddress: "Bv. Oroño 1200, Rosario",
+    pickupCity: null,
+    pickupLat: ROSARIO.lat,
+    pickupLng: ROSARIO.lng,
+    ...overrides,
+  };
+}
+
+function fakeDb(trips: TripRow[], cargo: CargoRow[] = []) {
   return {
     trip: {
       findMany: vi.fn(async () => trips),
       update: vi.fn(async () => ({})),
     },
     cargoItem: {
-      findMany: vi.fn(async () => []),
+      findMany: vi.fn(async () => cargo),
       update: vi.fn(async () => ({})),
     },
   };
@@ -102,6 +120,20 @@ describe("parseBackfillArgs", () => {
     });
   });
 
+  it("--cargas en seco y con --escribir", () => {
+    expect(parseBackfillArgs(["--cargas"])).toEqual({ mode: "cargas", write: false });
+    expect(parseBackfillArgs(["--escribir", "--cargas"])).toEqual({
+      mode: "cargas",
+      write: true,
+    });
+  });
+
+  it("dos modos juntos abortan", () => {
+    expect(() => parseBackfillArgs(["--cargas", "--fuera-de-ar"])).toThrow(
+      /un solo modo/
+    );
+  });
+
   it("una opción desconocida aborta en vez de correr otro modo", () => {
     expect(() => parseBackfillArgs(["--write"])).toThrow(BackfillArgsError);
     expect(() => parseBackfillArgs(["--fuera-de-ar", "--escribri"])).toThrow(
@@ -125,7 +157,7 @@ describe("seed:geocode --fuera-de-ar", () => {
     expect(output).toContain("Córdoba, Córdoba, Argentina (-31.4135, -64.1811)");
     expect(output).toMatch(/en seco/);
     expect(output).toContain("--fuera-de-ar --escribir");
-    expect(summary).toMatchObject({ trips: 1, points: 1, written: false });
+    expect(summary).toMatchObject({ changed: 1, points: 1, written: false });
   });
 
   it("con --escribir actualiza solo el punto que estaba afuera", async () => {
@@ -155,7 +187,7 @@ describe("seed:geocode --fuera-de-ar", () => {
 
     expect(geocode).not.toHaveBeenCalled();
     expect(db.trip.update).not.toHaveBeenCalled();
-    expect(summary).toMatchObject({ trips: 0, points: 0 });
+    expect(summary).toMatchObject({ changed: 0, points: 0 });
   });
 
   it("sin match en Argentina el punto queda en null", async () => {
@@ -230,7 +262,7 @@ describe("seed:geocode sin flags (viajes sin coordenadas)", () => {
     expect(geocode).toHaveBeenCalledWith("Rosario");
     expect(db.trip.update).not.toHaveBeenCalled();
     expect(output).toContain("Rosario, Santa Fe, Argentina (-32.9442, -60.6505)");
-    expect(summary).toMatchObject({ trips: 1, points: 1, written: false });
+    expect(summary).toMatchObject({ changed: 1, points: 1, written: false });
   });
 
   it("con --escribir guarda lo que resolvió y deja en null lo que no", async () => {
@@ -253,5 +285,103 @@ describe("seed:geocode sin flags (viajes sin coordenadas)", () => {
       data: { destLat: ROSARIO.lat, destLng: ROSARIO.lng },
     });
     expect(output).toMatch(/Pueblo Inventado.*sigue sin coordenadas/);
+  });
+});
+
+describe("seed:geocode --cargas (pickupCity de las cargas existentes)", () => {
+  it("pide solo las cargas vivas sin ciudad", async () => {
+    const db = fakeDb([], []);
+
+    await run(["--cargas"], db, fakeGeocode({}));
+
+    expect(db.cargoItem.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { pickupCity: null, status: { not: "CANCELLED" } },
+      })
+    );
+    expect(db.trip.findMany).not.toHaveBeenCalled();
+  });
+
+  it("en seco muestra la ciudad que pondría y no escribe", async () => {
+    const db = fakeDb([], [carga({ id: "ci-1" })]);
+    const geocode = fakeGeocode({ "Bv. Oroño 1200, Rosario": ROSARIO });
+
+    const { output, summary } = await run(["--cargas"], db, geocode);
+
+    expect(db.cargoItem.update).not.toHaveBeenCalled();
+    expect(output).toMatch(/carga ci-1.*ciudad → Rosario/);
+    expect(output).toContain("--cargas --escribir");
+    expect(summary).toMatchObject({ changed: 1, cities: 1, points: 0, written: false });
+  });
+
+  it("con --escribir guarda la ciudad y no toca coordenadas dentro de Argentina", async () => {
+    const db = fakeDb([], [carga({ id: "ci-1", pickupLat: -32.95, pickupLng: -60.65 })]);
+    const geocode = fakeGeocode({ "Bv. Oroño 1200, Rosario": ROSARIO });
+
+    await run(["--cargas", "--escribir"], db, geocode);
+
+    expect(db.cargoItem.update).toHaveBeenCalledWith({
+      where: { id: "ci-1" },
+      data: { pickupCity: "Rosario" },
+    });
+  });
+
+  it("si las coordenadas estaban fuera de Argentina, las reemplaza", async () => {
+    const db = fakeDb(
+      [],
+      [
+        carga({
+          id: "ci-es",
+          pickupAddress: "Av. Colón 1234, Córdoba",
+          pickupLat: CORDOBA_ES.lat,
+          pickupLng: CORDOBA_ES.lng,
+        }),
+      ]
+    );
+    const geocode = fakeGeocode({ "Av. Colón 1234, Córdoba": CORDOBA_AR });
+
+    const { output, summary } = await run(["--cargas", "--escribir"], db, geocode);
+
+    expect(db.cargoItem.update).toHaveBeenCalledWith({
+      where: { id: "ci-es" },
+      data: {
+        pickupCity: "Córdoba",
+        pickupLat: CORDOBA_AR.lat,
+        pickupLng: CORDOBA_AR.lng,
+      },
+    });
+    expect(output).toContain("37.8846, -4.7760");
+    expect(summary).toMatchObject({ changed: 1, cities: 1, points: 1 });
+  });
+
+  it("sin match en Argentina: sin ciudad y las coordenadas de afuera pasan a null", async () => {
+    const db = fakeDb(
+      [],
+      [
+        carga({ id: "ci-es", pickupLat: CORDOBA_ES.lat, pickupLng: CORDOBA_ES.lng }),
+        carga({ id: "ci-ar", pickupAddress: "Pueblo Inventado" }),
+      ]
+    );
+
+    const { output } = await run(["--cargas", "--escribir"], db, fakeGeocode({}));
+
+    expect(db.cargoItem.update).toHaveBeenCalledTimes(1);
+    expect(db.cargoItem.update).toHaveBeenCalledWith({
+      where: { id: "ci-es" },
+      data: { pickupLat: null, pickupLng: null },
+    });
+    expect(output).toMatch(/ci-ar.*sigue sin ciudad/);
+  });
+
+  it("un geocode sin localidad deja la ciudad en null", async () => {
+    const db = fakeDb([], [carga({ id: "ci-1" })]);
+    const geocode = fakeGeocode({
+      "Bv. Oroño 1200, Rosario": { ...ROSARIO, city: null },
+    });
+
+    const { output } = await run(["--cargas", "--escribir"], db, geocode);
+
+    expect(db.cargoItem.update).not.toHaveBeenCalled();
+    expect(output).toMatch(/sigue sin ciudad/);
   });
 });
