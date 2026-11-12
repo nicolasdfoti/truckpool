@@ -2009,6 +2009,13 @@ describe("addCargoItem", () => {
       vi.mocked(geocode).mockResolvedValue({ lat: -31.42, lng: -64.18 });
     });
 
+    // vuelve al default del archivo: los describes de abajo (createTrip)
+    // cuentan con un geocode que no resuelve si no lo mockean ellos
+    afterEach(() => {
+      vi.mocked(geocode).mockResolvedValue(null);
+      vi.mocked(fetchRouteGeometry).mockResolvedValue(null);
+    });
+
     it("pasa cuando el pickup está cerca del trayecto (distancia <= 8 km)", async () => {
       // geometría de ruta Córdoba → Rosario (simula OSRM)
       const routeGeometry: [number, number][] = [
@@ -2115,6 +2122,129 @@ describe("addCargoItem", () => {
       });
 
       expect(result.volume).toBe(10);
+    });
+
+    // U10: Nominatim (cola de 1 req/s) y OSRM (hasta 5 s) no pueden correr con
+    // la TX Serializable abierta: la estiran hasta su timeout y la hacen chocar.
+    const RUTA: [number, number][] = [
+      [-64.1888, -31.4201],
+      [-63.5, -32.0],
+      [-60.6505, -32.9442],
+    ];
+    const conflicto = () =>
+      new Prisma.PrismaClientKnownRequestError("conflicto", {
+        code: "P2034",
+        clientVersion: "test",
+      });
+
+    it("geocode y OSRM corren antes de abrir la TX y nunca adentro (U10)", async () => {
+      tripsService.clearRouteGeometryCache();
+      vi.mocked(fetchRouteGeometry).mockResolvedValue(RUTA);
+      const adentro: number[] = [];
+      (prisma.$transaction as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+        async (fn: unknown) => {
+          const antes =
+            vi.mocked(geocode).mock.calls.length +
+            vi.mocked(fetchRouteGeometry).mock.calls.length;
+          const result = await (fn as (t: unknown) => unknown)(tx);
+          adentro.push(
+            vi.mocked(geocode).mock.calls.length +
+              vi.mocked(fetchRouteGeometry).mock.calls.length -
+              antes
+          );
+          return result;
+        }
+      );
+
+      await tripsService.addCargoItem("t1", "c1", {
+        description: "Maquinaria",
+        pickupAddress: "Córdoba, Córdoba",
+        volume: 10,
+      });
+
+      expect(geocode).toHaveBeenCalledTimes(1);
+      expect(fetchRouteGeometry).toHaveBeenCalledTimes(1);
+      const abreTx = vi.mocked(prisma.$transaction).mock.invocationCallOrder[0]!;
+      expect(vi.mocked(geocode).mock.invocationCallOrder[0]).toBeLessThan(abreTx);
+      expect(vi.mocked(fetchRouteGeometry).mock.invocationCallOrder[0]).toBeLessThan(
+        abreTx
+      );
+      expect(adentro).toEqual([0]);
+    });
+
+    it("un geocode lento no hace fallar la reserva: la TX espera a que termine", async () => {
+      vi.mocked(fetchRouteGeometry).mockResolvedValue(null);
+      let resolver: (value: { lat: number; lng: number }) => void = () => {};
+      vi.mocked(geocode).mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolver = resolve;
+        })
+      );
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const pendiente = tripsService.addCargoItem("t1", "c1", {
+        description: "Maquinaria",
+        pickupAddress: "Córdoba, Córdoba",
+        volume: 10,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      // con Nominatim todavía respondiendo, la TX no se abrió
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+
+      resolver({ lat: -31.42, lng: -64.18 });
+      await expect(pendiente).resolves.toMatchObject({ volume: 10 });
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      warnSpy.mockRestore();
+    });
+
+    it("un P2034 reintenta la TX sin volver a geocodificar ni pedir la ruta", async () => {
+      tripsService.clearRouteGeometryCache();
+      vi.mocked(fetchRouteGeometry).mockResolvedValue(RUTA);
+      // la primera vuelta corre entera y choca al commitear, como en Postgres
+      (prisma.$transaction as unknown as ReturnType<typeof vi.fn>)
+        .mockImplementationOnce(async (fn: unknown) => {
+          await (fn as (t: unknown) => unknown)(tx);
+          throw conflicto();
+        })
+        .mockImplementation((fn: unknown) => (fn as (t: unknown) => unknown)(tx));
+
+      const result = await tripsService.addCargoItem("t1", "c1", {
+        description: "Maquinaria",
+        pickupAddress: "Córdoba, Córdoba",
+        volume: 10,
+      });
+
+      expect(result.volume).toBe(10);
+      expect(prisma.$transaction).toHaveBeenCalledTimes(2);
+      expect(geocode).toHaveBeenCalledTimes(1);
+      expect(fetchRouteGeometry).toHaveBeenCalledTimes(1);
+    });
+
+    it("el chequeo de distancia sigue después de los de estado: viaje cerrado → TRIP_NOT_OPEN", async () => {
+      tripsService.clearRouteGeometryCache();
+      vi.mocked(fetchRouteGeometry).mockResolvedValue(RUTA);
+      // pickup lejos de la ruta, pero el viaje ya no recibe cargas
+      vi.mocked(geocode).mockResolvedValue({ lat: -34.6037, lng: -58.3816 });
+      tx.trip.findUnique.mockResolvedValue(
+        baseTrip({
+          id: "t1",
+          status: "FULL",
+          originLat: -31.4201,
+          originLng: -64.1888,
+          destLat: -32.9442,
+          destLng: -60.6505,
+          cargoItems: [],
+        })
+      );
+
+      await expect(
+        tripsService.addCargoItem("t1", "c1", {
+          description: "Maquinaria",
+          pickupAddress: "Buenos Aires, CABA",
+          volume: 10,
+        })
+      ).rejects.toBeInstanceOf(TripNotOpenError);
     });
   });
 

@@ -1492,6 +1492,13 @@ export async function addCargoItem(
   let lastError: unknown;
   let created: { response: CargoItemResponse; email: CargoAddedEmail } | null = null;
 
+  // U10: Nominatim (cola de 1 req/s) y OSRM (hasta 5 s) van antes de abrir la
+  // TX y una sola vez: con la TX Serializable abierta la estiraban hasta su
+  // timeout y la exponían a más conflictos, y cada reintento los repetía.
+  // Best-effort: sin coordenadas o sin geometría no se valida la distancia.
+  const pickupCoords = await geocode(data.pickupAddress);
+  const routeGeometry = pickupCoords ? await getFullRouteGeometry(tripId) : null;
+
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     try {
       created = await prisma.$transaction(
@@ -1555,12 +1562,11 @@ export async function addCargoItem(
           // su parte para que el transportista no le arme el espacio al aire.
           const { priceShare, depositAmount } = cargoPrice(trip, data.volume);
 
-          // geocodificar el pickup (best-effort: si falla, lat/lng quedan null)
-          const pickupCoords = await geocode(data.pickupAddress);
-
-          // validar distancia del pickup al trayecto del viaje (si tenemos coordenadas y geometría)
+          // validar distancia del pickup al trayecto del viaje (si tenemos
+          // coordenadas y geometría). Es una cuenta pura sobre lo que se buscó
+          // antes de la TX; va acá para que los chequeos de estado y capacidad
+          // sigan respondiendo primero.
           if (pickupCoords) {
-            const routeGeometry = await getFullRouteGeometry(tripId);
             if (routeGeometry && routeGeometry.length >= 2) {
               const pickupPoint = point([pickupCoords.lng, pickupCoords.lat]);
               const routeLine = lineString(routeGeometry);
