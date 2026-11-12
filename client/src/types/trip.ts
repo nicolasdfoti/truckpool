@@ -50,10 +50,6 @@ export type Trip = {
   depositPercent: number;
   /** comisión de plataforma sobre cada priceShare confirmado (default 10%) */
   platformFeePercent: number;
-  /** punto exacto de salida (depósito/galpón), distinto del origin general */
-  departureAddress: string | null;
-  departureLat: number | null;
-  departureLng: number | null;
 };
 
 export type TripInput = {
@@ -84,7 +80,6 @@ export type RoutePoint = {
   lat: number;
   lng: number;
   cargoItemId: string | null;
-  trackingCode: string | null;
 };
 
 export type TripRoute = {
@@ -147,15 +142,14 @@ export type CargoItem = {
   stopOrder: number | null;
 };
 
+/** sin la empresa que calificó (L2): la reseña no delata quién mandó carga */
 export type Review = {
   id: string;
   tripId: string;
-  fromUserId: string;
   toUserId: string;
   rating: number;
   comment: string | null;
   createdAt: string;
-  fromName: string;
   toName: string;
 };
 
@@ -164,11 +158,30 @@ export type CreateReviewInput = {
   comment?: string;
 };
 
+/**
+ * Quién mira el detalle, según el backend (U7):
+ * - CARRIER_OWNER: el fletero del viaje, ve todo;
+ * - PARTICIPANT: empresa con carga viva, ve las suyas completas y las ajenas
+ *   solo como volumen (`otherCargo`);
+ * - FORMER_PARTICIPANT: empresa que retiró todas sus cargas, ve las suyas;
+ * - ANONYMOUS: el resto (también admin y otros fleteros), solo agregados.
+ */
+export type TripViewerAccess =
+  "ANONYMOUS" | "PARTICIPANT" | "FORMER_PARTICIPANT" | "CARRIER_OWNER";
+
 export type TripDetail = Trip & {
-  carrierId: string;
+  /** cantidad de cargas vivas del viaje: el agregado que ven todos */
+  cargoCount: number;
+  viewerAccess: TripViewerAccess;
+  /** las cargas que quien mira puede ver completas (vacío para terceros) */
   cargoItems: CargoItem[];
-  carrierName: string;
+  /** las cargas vivas de otras empresas, solo para la empresa participante */
+  otherCargo: { volume: number }[];
+  /** punto exacto de salida: solo para el fletero y sus empresas con carga viva */
+  departureAddress?: string | null;
   reviews: Review[];
+  /** si quien mira ya calificó este viaje */
+  viewerReviewed: boolean;
 };
 
 export type TripMessage = {
@@ -211,8 +224,13 @@ export type TripLocationResponse = {
   track?: TripLocationPoint[];
 };
 
-/** Parada (pickup) de una carga en el viaje, ya ordenada */
-export type StopItem = {
+/**
+ * Parada (pickup) de una carga en el viaje, ya ordenada (U19). `FULL` es la
+ * parada completa: para el fletero todas, para la empresa las suyas. `OTHER` es
+ * la de otra empresa: solo el lugar en el orden y el volumen.
+ */
+export type FullStopItem = {
+  kind: "FULL";
   cargoItemId: string;
   pickupAddress: string;
   pickupLat: number | null;
@@ -220,9 +238,12 @@ export type StopItem = {
   trackingCode: string;
   description: string;
   volume: number;
-  status: string;
+  status: CargoItemStatus;
   stopOrder: number;
 };
+
+export type StopItem =
+  FullStopItem | { kind: "OTHER"; stopOrder: number; volume: number };
 
 /** Tracking público por código — info limitada sin exponer datos sensibles */
 export type PublicTracking = {

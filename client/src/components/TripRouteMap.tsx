@@ -133,12 +133,6 @@ export function TripRouteMap({ route, geometry, className = "" }: TripRouteMapPr
               <strong>{point.order}. {point.label}</strong>
               <br />
               {point.address}
-              {point.trackingCode && (
-                <>
-                  <br />
-                  <code>{point.trackingCode}</code>
-                </>
-              )}
             </Tooltip>
           </Marker>
         ))}

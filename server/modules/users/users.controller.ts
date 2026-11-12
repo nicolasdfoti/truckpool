@@ -38,7 +38,8 @@ export async function getCarriers(_req: Request, res: Response) {
 export async function getCarrierProfile(req: Request, res: Response) {
   const value = req.params.id;
   const id = Array.isArray(value) ? (value[0] ?? "") : (value ?? "");
-  const profile = await usersService.getCarrierProfile(id);
+  // `req.user` lo pone optionalAuth solo si hay una sesión válida
+  const profile = await usersService.getCarrierProfile(id, req.user ?? null);
   res.json(profile);
 }
 

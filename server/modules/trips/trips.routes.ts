@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { requireAuth, requireRole } from "../../lib/auth.js";
+import { optionalAuth, requireAuth, requireRole } from "../../lib/auth.js";
 import { validateBody, validateQuery } from "../../lib/validate.js";
 import * as tripsController from "./trips.controller.js";
 import {
@@ -57,7 +57,8 @@ tripsRouter.post(
   validateBody(createLocationSchema),
   tripsController.postTripLocation
 );
-tripsRouter.get("/:id", tripsController.getTrip);
+// público, pero cada rol ve lo suyo (U7): la sesión es opcional
+tripsRouter.get("/:id", optionalAuth, tripsController.getTrip);
 tripsRouter.post(
   "/",
   requireAuth,
@@ -129,11 +130,10 @@ tripsRouter.patch(
   tripsController.reorderTripStops
 );
 
-// Recorrido del viaje para el mapa. Sin auth: el mapa es público, como
-// GET /:id. "route" y "route-geometry" van declarados antes de "/:id" para que
-// quede explícito que no los matchea el id.
-tripsRouter.get("/:id/route", tripsController.getTripRoute);
-tripsRouter.get("/:id/route-geometry", tripsController.getTripRouteGeometry);
+// Recorrido del viaje para el mapa. Con sesión y solo para participantes
+// activos (U7): el service decide qué paradas ve cada uno.
+tripsRouter.get("/:id/route", requireAuth, tripsController.getTripRoute);
+tripsRouter.get("/:id/route-geometry", requireAuth, tripsController.getTripRouteGeometry);
 
 // Tracking público (sin auth)
 tripsRouter.get("/tracking/:trackingCode", tripsController.getPublicTracking);

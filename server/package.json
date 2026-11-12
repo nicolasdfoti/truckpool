@@ -12,6 +12,7 @@
     "test": "vitest run",
     "format": "prettier --write \"src/**/*.ts\" \"lib/**/*.ts\" \"modules/**/*.ts\" \"tests/**/*.ts\" \"prisma/**/*.ts\" \"*.{ts,json}\"",
     "db:seed": "tsx prisma/seed.ts",
+    "db:seed:e2e": "tsx prisma/seed-e2e.ts",
     "seed:geocode": "tsx prisma/backfill-geocode.ts"
   },
   "license": "ISC",

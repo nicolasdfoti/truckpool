@@ -6,7 +6,7 @@
 //
 // No mover este import más abajo ni volver a ponerlo en lib/prisma.ts.
 import "dotenv/config";
-import { assertServerEnv } from "../lib/env.js";
+import { assertServerEnv, jobsStatus } from "../lib/env.js";
 import { app } from "./app.js";
 import { startJobs } from "../lib/jobs.js";
 
@@ -17,9 +17,8 @@ const PORT = Number(process.env.PORT ?? 4000);
 app.listen(PORT, () => console.log(`server en :${PORT}`));
 
 // Tareas periódicas: solo acá, nunca en app.ts (los tests importan la app).
-// JOBS_ENABLED="false" las apaga; por defecto corren.
-if (process.env.JOBS_ENABLED !== "false") {
-  startJobs();
-} else {
-  console.log("jobs apagados (JOBS_ENABLED=false)");
-}
+// JOBS_ENABLED="false" las apaga; por defecto corren. El log dice siempre en
+// qué estado quedaron, para que nunca corran sin que se note.
+const jobs = jobsStatus();
+console.log(jobs.message);
+if (jobs.enabled) startJobs();

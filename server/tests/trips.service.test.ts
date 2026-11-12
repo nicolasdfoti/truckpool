@@ -24,6 +24,7 @@ import { refundPayment } from "../lib/mercadopago.js";
 import { salidaEn } from "./helpers/salida.js";
 import { cargoPrice } from "../lib/pricing.js";
 import { CARRIER_CAN_CHARGE } from "../lib/mappers.js";
+import { TRACKING_CODE_PATTERN } from "../lib/trackingCode.js";
 
 // Los avisos son best-effort: en los tests de trips lo que importa es a Quién
 // se avisa y con qué tipo/title, nunca que el email salga. Por eso el módulo de
@@ -1992,6 +1993,23 @@ describe("addCargoItem", () => {
       expect(result.volume).toBe(10);
     });
 
+    it("guarda un trackingCode aleatorio con el formato nuevo (U9)", async () => {
+      vi.mocked(fetchRouteGeometry).mockResolvedValue(null);
+
+      await tripsService.addCargoItem("t1", "c1", {
+        description: "Maquinaria",
+        pickupAddress: "Córdoba, Córdoba",
+        volume: 10,
+      });
+
+      const data = tx.cargoItem.create.mock.calls[0]?.[0]?.data as {
+        trackingCode: string;
+      };
+      // ya no sale del id del viaje ni del orden de la carga (TP-{tripId}-C{n})
+      expect(data.trackingCode).toMatch(TRACKING_CODE_PATTERN);
+      expect(data.trackingCode).not.toMatch(/-C\d+$/);
+    });
+
     it("falla con STOP_TOO_FAR_FROM_ROUTE cuando el pickup está lejos del trayecto (distancia > 8 km)", async () => {
       // geometría de ruta Córdoba → Rosario
       const routeGeometry: [number, number][] = [
@@ -2367,7 +2385,7 @@ describe("addCargoItem", () => {
         baseTrip({ carrier: { name: "Flete" }, reviews: [] })
       );
 
-      await tripsService.getTripById("t1");
+      await tripsService.getTripById("t1", null);
 
       expect(prisma.cargoItem.findMany).not.toHaveBeenCalled();
       expect(prisma.$transaction).not.toHaveBeenCalled();
@@ -2384,7 +2402,7 @@ describe("addCargoItem", () => {
       (prisma.trip.findUnique as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(
         baseTrip({ carrier: { name: "Flete" }, reviews: [], ...overrides })
       );
-      return tripsService.getTripById("t1");
+      return tripsService.getTripById("t1", null);
     }
 
     it("el detalle de un viaje de mañana llega con acceptsCargo", async () => {
@@ -3968,17 +3986,12 @@ describe("addCargoItem", () => {
           rating: 5,
           comment: "puntual",
         },
-        include: {
-          fromUser: { select: { name: true } },
-          toUser: { select: { name: true } },
-        },
+        // el nombre de la empresa ya no se pide: no sale en la respuesta (ítem 10)
+        include: { toUser: { select: { name: true } } },
       });
-      expect(review).toMatchObject({
-        fromUserId: "u2",
-        toUserId: "u1",
-        fromName: "Comercial Norte",
-        toName: "Transportes Flete",
-      });
+      expect(review).toMatchObject({ toUserId: "u1", toName: "Transportes Flete" });
+      expect(review).not.toHaveProperty("fromUserId");
+      expect(review).not.toHaveProperty("fromName");
     });
 
     it("cada empresa del viaje califica al fletero aunque haya varias", async () => {
@@ -4059,11 +4072,16 @@ describe("addCargoItem", () => {
 
     function mockTripWithCompanies(
       companies: { id: string; name: string }[],
-      tripCarrier = carrier
+      tripCarrier = carrier,
+      // empresas que retiraron todas sus cargas (D9)
+      formerCompanies: { id: string; name: string }[] = []
     ) {
       (prisma.trip.findUnique as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
         carrier: tripCarrier,
-        cargoItems: companies.map((company) => ({ company })),
+        cargoItems: [
+          ...companies.map((company) => ({ status: "CONFIRMED", company })),
+          ...formerCompanies.map((company) => ({ status: "CANCELLED", company })),
+        ],
       });
     }
 
@@ -4113,9 +4131,10 @@ describe("addCargoItem", () => {
 
         const result = await tripsService.listTripMessages("t1", "u1");
 
+        // U8: el fletero lee sus conversaciones, no las que no lo incluyen
         expect(prisma.message.findMany).toHaveBeenCalledWith(
           expect.objectContaining({
-            where: { tripId: "t1" },
+            where: { tripId: "t1", OR: [{ fromUserId: "u1" }, { toUserId: "u1" }] },
             orderBy: { createdAt: "asc" },
           })
         );
@@ -4132,10 +4151,46 @@ describe("addCargoItem", () => {
         });
       });
 
-      it("una empresa con carga también puede verlos", async () => {
+      it("U8: la empresa lee solo su conversación con el fletero", async () => {
         mockTripWithCompanies([companyUno, companyDos]);
         const result = await tripsService.listTripMessages("t1", "c2");
+
+        expect(prisma.message.findMany).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: {
+              tripId: "t1",
+              OR: [
+                { fromUserId: "c2", toUserId: "u1" },
+                { fromUserId: "u1", toUserId: "c2" },
+              ],
+            },
+          })
+        );
         expect(result.messages).toEqual([]);
+        // tampoco se entera de qué otras empresas cargan en el viaje
+        expect(result.participants).toEqual({ carrier, companies: [] });
+      });
+
+      it("D9: la empresa que retiró su carga sigue leyendo su conversación", async () => {
+        mockTripWithCompanies([companyUno], carrier, [companyDos]);
+        await tripsService.listTripMessages("t1", "c2");
+
+        expect(prisma.message.findMany).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: {
+              tripId: "t1",
+              OR: [
+                { fromUserId: "c2", toUserId: "u1" },
+                { fromUserId: "u1", toUserId: "c2" },
+              ],
+            },
+          })
+        );
+      });
+
+      it("D9: el selector del fletero incluye a la que retiró su carga", async () => {
+        mockTripWithCompanies([companyUno], carrier, [companyDos]);
+        const result = await tripsService.listTripMessages("t1", "u1");
         expect(result.participants.companies).toEqual([companyUno, companyDos]);
       });
 
@@ -4211,6 +4266,51 @@ describe("addCargoItem", () => {
           tripsService.createTripMessage("t1", "u1", { body: "hola", toUserId: "c9" })
         ).rejects.toMatchObject({ statusCode: 403, code: "NOT_A_PARTICIPANT" });
         expect(prisma.message.create).not.toHaveBeenCalled();
+      });
+
+      it("U8: una empresa no le puede escribir a otra empresa del viaje", async () => {
+        mockTripWithCompanies([companyUno, companyDos]);
+
+        await expect(
+          tripsService.createTripMessage("t1", "c1", { body: "hola", toUserId: "c2" })
+        ).rejects.toMatchObject({ statusCode: 403, code: "FORBIDDEN" });
+        expect(prisma.message.create).not.toHaveBeenCalled();
+      });
+
+      it("D9: la empresa que retiró su carga le escribe al fletero", async () => {
+        mockTripWithCompanies([companyUno], carrier, [companyDos]);
+
+        const message = await tripsService.createTripMessage("t1", "c2", {
+          body: "¿cuándo vuelve la seña?",
+          toUserId: "u1",
+        });
+        expect(message).toMatchObject({ fromUserId: "c2", toUserId: "u1" });
+      });
+
+      it("D9: la empresa que retiró su carga no le escribe a otra empresa", async () => {
+        mockTripWithCompanies([companyUno], carrier, [companyDos]);
+
+        await expect(
+          tripsService.createTripMessage("t1", "c2", { body: "hola", toUserId: "c1" })
+        ).rejects.toMatchObject({ statusCode: 403, code: "FORBIDDEN" });
+        expect(prisma.message.create).not.toHaveBeenCalled();
+      });
+
+      it("D9: el fletero le contesta a la empresa que retiró su carga", async () => {
+        mockTripWithCompanies([companyUno], carrier, [companyDos]);
+
+        const message = await tripsService.createTripMessage("t1", "u1", {
+          body: "la seña ya se devolvió",
+          toUserId: "c2",
+        });
+        expect(message).toMatchObject({ fromUserId: "u1", toUserId: "c2" });
+      });
+
+      it("la empresa tampoco se puede escribir a sí misma", async () => {
+        mockTripWithCompanies([companyUno]);
+        await expect(
+          tripsService.createTripMessage("t1", "c1", { body: "hola", toUserId: "c1" })
+        ).rejects.toMatchObject({ statusCode: 400, code: "INVALID_TARGET" });
       });
 
       it("no te podés mandar un mensaje a vos mismo", async () => {
@@ -4623,6 +4723,19 @@ describe("addCargoItem", () => {
       expect(prisma.tripLocation.findMany).not.toHaveBeenCalled();
     });
 
+    it("sin historial pide la posición más reciente, no la primera (02#14)", async () => {
+      vi.mocked(prisma.trip.findUnique).mockResolvedValue(tripInTransit() as never);
+      vi.mocked(prisma.tripLocation.findFirst).mockResolvedValue(baseLocation() as never);
+
+      await tripsService.getTripLocation("t1", "u2", { history: false });
+
+      // mismo desempate por id que el historial, al revés
+      expect(prisma.tripLocation.findFirst).toHaveBeenCalledWith({
+        where: { tripId: "t1" },
+        orderBy: [{ recordedAt: "desc" }, { id: "desc" }],
+      });
+    });
+
     it("la empresa con carga en el viaje también lee la última posición", async () => {
       vi.mocked(prisma.trip.findUnique).mockResolvedValue(tripInTransit() as never);
       vi.mocked(prisma.tripLocation.findFirst).mockResolvedValue(baseLocation() as never);
@@ -4641,6 +4754,37 @@ describe("addCargoItem", () => {
         }
       );
       expect(prisma.tripLocation.findFirst).not.toHaveBeenCalled();
+    });
+
+    it("U8: la empresa que retiró su carga (CANCELLED) ya no ve el camión", async () => {
+      vi.mocked(prisma.trip.findUnique).mockResolvedValue(
+        tripInTransit({
+          cargoItems: [
+            { status: "CANCELLED", company: { id: "u2", name: "Granos del Litoral" } },
+          ],
+        }) as never
+      );
+
+      await expect(
+        tripsService.getTripLocation("t1", "u2", { history: true })
+      ).rejects.toMatchObject({ statusCode: 403, code: "FORBIDDEN" });
+      expect(prisma.tripLocation.findMany).not.toHaveBeenCalled();
+      expect(prisma.tripLocation.findFirst).not.toHaveBeenCalled();
+    });
+
+    it("U8: con una carga retirada y otra viva sigue siendo participante", async () => {
+      vi.mocked(prisma.trip.findUnique).mockResolvedValue(
+        tripInTransit({
+          cargoItems: [
+            { status: "CANCELLED", company: { id: "u2", name: "Granos del Litoral" } },
+            { status: "CONFIRMED", company: { id: "u2", name: "Granos del Litoral" } },
+          ],
+        }) as never
+      );
+      vi.mocked(prisma.tripLocation.findFirst).mockResolvedValue(baseLocation() as never);
+
+      const result = await tripsService.getTripLocation("t1", "u2", { history: false });
+      expect(result.location).toMatchObject({ id: "loc1" });
     });
 
     it("devuelve null cuando el viaje todavía no tiene posiciones", async () => {
@@ -5213,5 +5357,157 @@ describe("reorderTripStops (D2)", () => {
     ).resolves.toBeDefined();
     expect(tx.cargoItem.update).toHaveBeenCalledTimes(2);
     vi.mocked(notifyUsers).mockResolvedValue(1);
+  });
+});
+
+// U8: las paradas son para el fletero y las empresas con carga viva. Quien
+// retiró su carga (CANCELLED) deja de ver por dónde pasa el camión.
+describe("getTripStops: acceso", () => {
+  function viajeCon(
+    cargoItems: { status: string; company: { id: string; name: string } }[]
+  ) {
+    vi.mocked(prisma.trip.findUnique).mockResolvedValue(
+      baseTrip({
+        carrier: { id: "u1", name: "Flete" },
+        cargoItems,
+      }) as never
+    );
+  }
+
+  beforeEach(() => {
+    vi.mocked(prisma.trip.findUnique).mockReset();
+  });
+
+  it("la empresa con su única carga CANCELLED recibe 403", async () => {
+    viajeCon([{ status: "CANCELLED", company: { id: "c1", name: "Empresa Uno" } }]);
+
+    await expect(tripsService.getTripStops("t1", "c1")).rejects.toMatchObject({
+      statusCode: 403,
+      code: "FORBIDDEN",
+    });
+    // no llega a leer las paradas
+    expect(prisma.trip.findUnique).toHaveBeenCalledTimes(1);
+  });
+
+  it("la empresa con una carga viva las ve", async () => {
+    viajeCon([
+      { status: "CANCELLED", company: { id: "c1", name: "Empresa Uno" } },
+      { status: "PENDING", company: { id: "c1", name: "Empresa Uno" } },
+    ]);
+
+    await expect(tripsService.getTripStops("t1", "c1")).resolves.toBeInstanceOf(Array);
+  });
+
+  it("el fletero del viaje las ve aunque no quede ninguna carga viva", async () => {
+    viajeCon([{ status: "CANCELLED", company: { id: "c1", name: "Empresa Uno" } }]);
+
+    // solo verifica que no hay 403: el mock devuelve las cargas sin aplicar el
+    // `where: { status: { not: "CANCELLED" } }` de la consulta, así que no puede
+    // comprobar que la lista llegue vacía.
+    await expect(tripsService.getTripStops("t1", "u1")).resolves.toBeInstanceOf(Array);
+  });
+});
+
+// U19: cada empresa ve su parada completa y las ajenas solo como "otra parada",
+// con el orden y el volumen. El fletero ve todas.
+describe("getTripStops por rol (U19)", () => {
+  function parada(o: {
+    id: string;
+    companyId: string;
+    description: string;
+    pickupAddress: string;
+    trackingCode: string;
+    volume: number;
+    stopOrder: number;
+  }) {
+    return {
+      id: o.id,
+      companyId: o.companyId,
+      company: { id: o.companyId, name: `Empresa ${o.companyId}` },
+      status: "CONFIRMED",
+      description: o.description,
+      pickupAddress: o.pickupAddress,
+      pickupLat: -32.95,
+      pickupLng: -60.65,
+      trackingCode: o.trackingCode,
+      volume: o.volume,
+      stopOrder: o.stopOrder,
+    };
+  }
+
+  beforeEach(() => {
+    vi.mocked(prisma.trip.findUnique).mockReset();
+    // el mismo objeto sirve para resolveParticipants y para la consulta de paradas
+    vi.mocked(prisma.trip.findUnique).mockResolvedValue(
+      baseTrip({
+        carrier: { id: "u1", name: "Flete" },
+        originLat: null,
+        originLng: null,
+        destLat: null,
+        destLng: null,
+        cargoItems: [
+          parada({
+            id: "ci-norte",
+            companyId: "c-norte",
+            description: "Cajas de cerámicos",
+            pickupAddress: "Bv. Oroño 1200, Rosario",
+            trackingCode: "TP-NORTE-C1",
+            volume: 5,
+            stopOrder: 2,
+          }),
+          parada({
+            id: "ci-acero",
+            companyId: "c-acero",
+            description: "Bobinas de acero",
+            pickupAddress: "Av. Pellegrini 900, Rosario",
+            trackingCode: "TP-ACERO-C2",
+            volume: 4,
+            stopOrder: 1,
+          }),
+        ],
+      }) as never
+    );
+  });
+
+  const CLAVES_COMPLETA = [
+    "cargoItemId",
+    "description",
+    "kind",
+    "pickupAddress",
+    "pickupLat",
+    "pickupLng",
+    "status",
+    "stopOrder",
+    "trackingCode",
+    "volume",
+  ];
+
+  it("la empresa ve su parada completa y la ajena solo con orden y volumen", async () => {
+    const stops = await tripsService.getTripStops("t1", "c-norte");
+
+    expect(stops).toHaveLength(2);
+    // el orden del recorrido se mantiene: la ajena es la 1.ª
+    expect(stops[0]).toEqual({ kind: "OTHER", stopOrder: 1, volume: 4 });
+    expect(Object.keys(stops[1]!).sort()).toEqual(CLAVES_COMPLETA);
+    expect(stops[1]).toMatchObject({
+      kind: "FULL",
+      cargoItemId: "ci-norte",
+      pickupAddress: "Bv. Oroño 1200, Rosario",
+      trackingCode: "TP-NORTE-C1",
+      stopOrder: 2,
+    });
+
+    const json = JSON.stringify(stops);
+    for (const ajeno of ["ci-acero", "c-acero", "Bobinas", "Pellegrini", "TP-ACERO"]) {
+      expect(json).not.toContain(ajeno);
+    }
+  });
+
+  it("el fletero ve todas las paradas completas", async () => {
+    const stops = await tripsService.getTripStops("t1", "u1");
+
+    expect(stops.map((s) => s.kind)).toEqual(["FULL", "FULL"]);
+    for (const stop of stops) expect(Object.keys(stop).sort()).toEqual(CLAVES_COMPLETA);
+    expect(stops.map((s) => s.stopOrder)).toEqual([1, 2]);
   });
 });

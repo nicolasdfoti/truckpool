@@ -17,11 +17,10 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useTripStops, useReorderTripStops } from "../hooks/useTripStops";
-import { useAuth } from "../hooks/useAuth";
-import { useParams } from "react-router-dom";
+import type { FullStopItem } from "../types/trip";
 
 interface SortableItemProps {
-  item: StopItem;
+  item: FullStopItem;
   index: number;
 }
 
@@ -59,9 +58,23 @@ function SortableItem({ item, index }: SortableItemProps) {
           <path d="M4 9h16M4 15h16M4 21h16" />
         </svg>
       </button>
-      <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-canvas-line text-xs font-medium text-ink-soft">
-        {index + 1}
-      </span>
+      <StopNumber index={index} />
+      <FullStopBody item={item} />
+    </li>
+  );
+}
+
+function StopNumber({ index }: { index: number }) {
+  return (
+    <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-canvas-line text-xs font-medium text-ink-soft">
+      {index + 1}
+    </span>
+  );
+}
+
+function FullStopBody({ item }: { item: FullStopItem }) {
+  return (
+    <>
       <div className="flex-1 min-w-0">
         <p className="text-sm font-medium truncate">{item.pickupAddress}</p>
         <p className="text-[12px] text-ink-muted truncate">{item.description}</p>
@@ -84,33 +97,32 @@ function SortableItem({ item, index }: SortableItemProps) {
             ? "retirada"
             : "pendiente"}
       </span>
-    </li>
+    </>
   );
 }
 
-type StopItem = {
-  cargoItemId: string;
-  pickupAddress: string;
-  pickupLat: number | null;
-  pickupLng: number | null;
-  trackingCode: string;
-  description: string;
-  volume: number;
-  status: string;
-  stopOrder: number;
-};
+/** "3" o "2,5": los m³ como se leen en castellano */
+function formatM3(n: number) {
+  return n.toLocaleString("es-AR", { maximumFractionDigits: 1 });
+}
 
 /**
- * Lista de paradas (pickups) del viaje.
- * - Para cualquier participante: solo lectura.
- * - Para el transportista dueño: reordenable con drag & drop.
+ * Lista de paradas (pickups) del viaje. La página la monta solo para el
+ * fletero dueño y las empresas con carga viva (U19).
+ * - Para el fletero dueño: todas completas, reordenables con drag & drop.
+ * - Para la empresa: solo lectura; las suyas completas y las ajenas como
+ *   "otra parada", sin dirección ni código.
  */
-export function TripStops() {
-  const { id } = useParams<{ id: string }>();
-  const { user } = useAuth();
-  const { data: stops, isLoading, isError } = useTripStops(id ?? "");
-  const reorder = useReorderTripStops(id ?? "");
-  const [optimisticStops, setOptimisticStops] = useState<StopItem[] | null>(null);
+export function TripStops({
+  tripId,
+  canReorder,
+}: {
+  tripId: string;
+  canReorder: boolean;
+}) {
+  const { data: stops, isLoading, isError } = useTripStops(tripId);
+  const reorder = useReorderTripStops(tripId);
+  const [optimisticStops, setOptimisticStops] = useState<FullStopItem[] | null>(null);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -123,9 +135,10 @@ export function TripStops() {
     })
   );
 
-  const isCarrierOwner = user?.role === "CARRIER";
-
-  const displayStops = optimisticStops ?? stops ?? [];
+  // el fletero dueño recibe todas las paradas completas
+  const displayStops =
+    optimisticStops ??
+    (stops ?? []).filter((stop): stop is FullStopItem => stop.kind === "FULL");
 
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
@@ -183,14 +196,42 @@ export function TripStops() {
     );
   }
 
+  if (!canReorder) {
+    return (
+      <section aria-label="paradas del viaje">
+        <ul className="space-y-2" role="list">
+          {stops.map((stop, index) =>
+            stop.kind === "FULL" ? (
+              <li
+                key={stop.cargoItemId}
+                className="flex items-center gap-3 rounded-[10px] border border-line bg-white p-3"
+              >
+                <StopNumber index={index} />
+                <FullStopBody item={stop} />
+              </li>
+            ) : (
+              <li
+                key={`otra-${stop.stopOrder}-${index}`}
+                className="flex items-center gap-3 rounded-[10px] border border-line bg-white p-3"
+              >
+                <StopNumber index={index} />
+                <p className="flex-1 text-[13px] text-ink-muted">
+                  otra parada · {formatM3(stop.volume)} m³
+                </p>
+              </li>
+            )
+          )}
+        </ul>
+      </section>
+    );
+  }
+
   return (
     <section aria-label="paradas del viaje">
-      {isCarrierOwner && (
-        <p className="mb-2 text-[12px] text-ink-muted">
-          arrastrá los ítems para cambiar el orden de las paradas. el cambio se guarda al
-          soltar.
-        </p>
-      )}
+      <p className="mb-2 text-[12px] text-ink-muted">
+        arrastrá los ítems para cambiar el orden de las paradas. el cambio se guarda al
+        soltar.
+      </p>
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}

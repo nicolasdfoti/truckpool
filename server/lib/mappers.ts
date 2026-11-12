@@ -82,10 +82,8 @@ export function toTripSummary(trip: TripWithCargo) {
     // la comisión que se lleva la plataforma en este viaje. No es secreto:
     // sale de multiplicar el priceShare, que ya es público.
     platformFeePercent: trip.platformFeePercent,
-    // punto exacto de salida (depósito/galpón), distinto del origin general
-    departureAddress: trip.departureAddress,
-    departureLat: trip.departureLat,
-    departureLng: trip.departureLng,
+    // el punto exacto de salida (depósito/galpón) no va en el resumen: es
+    // público y la dirección del fletero solo la ven él y sus empresas (U7).
   };
 }
 
@@ -155,12 +153,23 @@ function toPaymentResponse(payment: Payment) {
   };
 }
 
+/**
+ * La carga completa: solo para el fletero del viaje y la empresa dueña. Por
+ * whitelist (U7): un campo nuevo del modelo no sale hasta que se agrega acá.
+ */
 export function toCargoItemResponse(item: CargoItemWithPayments) {
-  const { payments, company, ...rest } = item;
+  const { payments, company } = item;
   const deposit = payments?.find((p) => p.type === "DEPOSIT");
   const balance = payments?.find((p) => p.type === "BALANCE");
   return {
-    ...rest,
+    id: item.id,
+    tripId: item.tripId,
+    companyId: item.companyId,
+    description: item.description,
+    volume: item.volume,
+    status: item.status,
+    createdAt: item.createdAt,
+    cancelledAt: item.cancelledAt,
     priceShare: Number(item.priceShare),
     depositAmount: Number(item.depositAmount),
     cancellationFeeAmount:
@@ -177,6 +186,207 @@ export function toCargoItemResponse(item: CargoItemWithPayments) {
     pickupLng: item.pickupLng,
     trackingCode: item.trackingCode,
     stopOrder: item.stopOrder,
+  };
+}
+
+/**
+ * Quién mira el detalle de un viaje (U7). Sale de la sesión y del propio viaje,
+ * nunca del cliente:
+ * - CARRIER_OWNER: el fletero del viaje, ve todo;
+ * - PARTICIPANT: una empresa con alguna carga viva, ve las suyas completas y las
+ *   ajenas solo como volumen;
+ * - FORMER_PARTICIPANT: una empresa que retiró todas sus cargas, ve las suyas
+ *   (con el reembolso) y nada de las demás;
+ * - ANONYMOUS: el resto, también el ADMIN y otros fleteros (el admin necesita
+ *   su propia vista, L9): solo los agregados del viaje.
+ */
+export type TripViewerAccess =
+  "ANONYMOUS" | "CARRIER_OWNER" | "PARTICIPANT" | "FORMER_PARTICIPANT";
+
+export function tripViewerAccess(
+  trip: {
+    carrierId: string;
+    cargoItems: { companyId: string; status: CargoItemStatus }[];
+  },
+  viewer: { id: string } | null
+): TripViewerAccess {
+  if (!viewer) return "ANONYMOUS";
+  if (viewer.id === trip.carrierId) return "CARRIER_OWNER";
+  const own = trip.cargoItems.filter((item) => item.companyId === viewer.id);
+  if (own.some(isActiveCargo)) return "PARTICIPANT";
+  if (own.length > 0) return "FORMER_PARTICIPANT";
+  return "ANONYMOUS";
+}
+
+/**
+ * Reseña tal como sale de la base (con la relación al fletero). `fromUserId`
+ * se usa para calcular `viewerReviewed`, pero nunca sale en la respuesta.
+ */
+export type ReviewRow = {
+  id: string;
+  tripId: string;
+  fromUserId: string;
+  toUserId: string;
+  rating: number;
+  comment: string | null;
+  createdAt: Date;
+  toUser?: { name: string } | null;
+};
+
+/**
+ * Reseña en el detalle del viaje (L2 ítem 10): sin `fromUserId` ni `fromName`,
+ * para que nadie pueda ver qué empresas mandaron carga en un viaje leyendo
+ * quién lo calificó. El destinatario es siempre el fletero, que ya es público.
+ */
+export function toReviewResponse(review: ReviewRow) {
+  return {
+    id: review.id,
+    tripId: review.tripId,
+    toUserId: review.toUserId,
+    toName: review.toUser?.name ?? "",
+    rating: review.rating,
+    comment: review.comment,
+    createdAt: review.createdAt,
+  };
+}
+
+/** reseña en el perfil del fletero: el viaje sí, la empresa que calificó no */
+export function toCarrierReviewResponse(review: {
+  id: string;
+  rating: number;
+  comment: string | null;
+  createdAt: Date;
+  trip: { id: string; origin: string; destination: string };
+}) {
+  return {
+    id: review.id,
+    rating: review.rating,
+    comment: review.comment,
+    createdAt: review.createdAt,
+    trip: {
+      id: review.trip.id,
+      origin: review.trip.origin,
+      destination: review.trip.destination,
+    },
+  };
+}
+
+export type TripDetailSource = Trip & {
+  cargoItems: CargoItemWithPayments[];
+  carrier: { name: string };
+  reviews: ReviewRow[];
+};
+
+/**
+ * Detalle de un viaje según quién lo mira (U7). Todos ven el viaje y sus
+ * agregados (m³ ocupados y cantidad de cargas vivas); lo demás depende de
+ * `tripViewerAccess`. Las claves `cargoItems` y `otherCargo` van siempre, vacías
+ * si no corresponde, para que el cliente no tenga que preguntar si existen.
+ */
+export function toTripDetailResponse(
+  trip: TripDetailSource,
+  viewer: { id: string } | null
+) {
+  const access = tripViewerAccess(trip, viewer);
+  const active = trip.cargoItems.filter(isActiveCargo);
+
+  const cargoItems =
+    access === "CARRIER_OWNER"
+      ? trip.cargoItems
+      : access === "PARTICIPANT" || access === "FORMER_PARTICIPANT"
+        ? trip.cargoItems.filter((item) => item.companyId === viewer?.id)
+        : [];
+  // las ajenas, solo para la empresa con carga viva: el volumen y nada más
+  // (la ciudad de retiro llega con pickupCity, L6)
+  const otherCargo =
+    access === "PARTICIPANT"
+      ? active
+          .filter((item) => item.companyId !== viewer?.id)
+          .map((item) => ({ volume: item.volume }))
+      : [];
+  const seesDeparture = access === "CARRIER_OWNER" || access === "PARTICIPANT";
+
+  return {
+    id: trip.id,
+    origin: trip.origin,
+    destination: trip.destination,
+    date: trip.date,
+    departureTime: trip.departureTime,
+    truckType: trip.truckType,
+    capacityTotal: trip.capacityTotal,
+    capacityUsed: activeVolume(trip.cargoItems),
+    cargoCount: active.length,
+    price: Number(trip.price),
+    status: trip.status,
+    // misma bandera que manda en el listado: el cliente la usa para no
+    // ofrecer el formulario de carga.
+    acceptsCargo: tripAcceptsCargo(trip),
+    carrierId: trip.carrierId,
+    carrierName: trip.carrier.name,
+    depositPercent: trip.depositPercent,
+    // la comisión no es secreta (sale del priceShare, ver toTripSummary): el
+    // fletero la ve en su neto por carga
+    platformFeePercent: trip.platformFeePercent,
+    features: trip.features,
+    reviews: trip.reviews.map(toReviewResponse),
+    viewerAccess: access,
+    // si quien mira ya calificó el viaje: reemplaza comparar review.fromUserId
+    viewerReviewed: viewer
+      ? trip.reviews.some((review) => review.fromUserId === viewer.id)
+      : false,
+    // el punto exacto de salida, solo para el fletero y sus empresas activas
+    ...(seesDeparture ? { departureAddress: trip.departureAddress } : {}),
+    cargoItems: cargoItems.map(toCargoItemResponse),
+    otherCargo,
+  };
+}
+
+/**
+ * Una parada del recorrido (U19). `FULL` es la parada completa: para el fletero
+ * todas, para la empresa las suyas. `OTHER` es la parada de otra empresa: solo
+ * el lugar en el orden y el volumen (la ciudad llega con pickupCity, L6).
+ */
+export type StopItem =
+  | {
+      kind: "FULL";
+      cargoItemId: string;
+      pickupAddress: string;
+      pickupLat: number | null;
+      pickupLng: number | null;
+      trackingCode: string;
+      description: string;
+      volume: number;
+      status: CargoItemStatus;
+      stopOrder: number;
+    }
+  | { kind: "OTHER"; stopOrder: number; volume: number };
+
+export function toStopResponse(
+  item: {
+    id: string;
+    pickupAddress: string;
+    pickupLat: number | null;
+    pickupLng: number | null;
+    trackingCode: string;
+    description: string;
+    volume: number;
+    status: CargoItemStatus;
+  },
+  stopOrder: number,
+  kind: StopItem["kind"]
+): StopItem {
+  if (kind === "OTHER") return { kind, stopOrder, volume: item.volume };
+  return {
+    kind,
+    cargoItemId: item.id,
+    pickupAddress: item.pickupAddress,
+    pickupLat: item.pickupLat,
+    pickupLng: item.pickupLng,
+    trackingCode: item.trackingCode,
+    description: item.description,
+    volume: item.volume,
+    status: item.status,
+    stopOrder,
   };
 }
 

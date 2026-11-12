@@ -22,6 +22,13 @@ vi.mock("../lib/notifications.js", () => ({
   notifyUsers: vi.fn().mockResolvedValue(1),
 }));
 
+// aceptar una solicitud geocodifica origen y destino: sin este mock salía a
+// Nominatim de verdad y el test pasaba de 5 s cuando la red tardaba
+vi.mock("../lib/geocode.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/geocode.js")>();
+  return { ...actual, geocode: vi.fn().mockResolvedValue(null) };
+});
+
 type PrismaUser = Awaited<ReturnType<typeof prisma.user.findUnique>>;
 
 function baseUser(overrides: Partial<User> = {}): User {
@@ -67,7 +74,7 @@ describe("users.service", () => {
       _count: { _all: 0 },
     } as never);
 
-    await expect(usersService.getCarrierProfile("nope")).rejects.toThrow(
+    await expect(usersService.getCarrierProfile("nope", null)).rejects.toThrow(
       CarrierNotFoundError
     );
   });
@@ -85,7 +92,7 @@ describe("users.service", () => {
       _count: { _all: 0 },
     } as never);
 
-    await expect(usersService.getCarrierProfile("u2")).rejects.toThrow(
+    await expect(usersService.getCarrierProfile("u2", null)).rejects.toThrow(
       CarrierNotFoundError
     );
   });
@@ -116,7 +123,7 @@ describe("users.service", () => {
       _count: { _all: 0 },
     } as never);
 
-    const profile = await usersService.getCarrierProfile("u1");
+    const profile = await usersService.getCarrierProfile("u1", { id: "u2" });
     expect(profile).toMatchObject({
       id: "u1",
       name: "Transportes Flete",
@@ -125,6 +132,22 @@ describe("users.service", () => {
     });
     expect(profile.trips).toHaveLength(1);
     expect(profile.trips[0]).toMatchObject({ id: "t1", capacityUsed: 0 });
+  });
+
+  it("getCarrierProfile no le da el teléfono a un anónimo (02§2.1)", async () => {
+    vi.mocked(prisma.user.findUnique).mockResolvedValue({
+      ...baseUser({ bio: "fletero", phone: "351-555" }),
+      tripsAsCarrier: [],
+      reviewsReceived: [],
+    } as PrismaUser & { tripsAsCarrier: unknown[]; reviewsReceived: unknown[] });
+    vi.mocked(prisma.review.aggregate).mockResolvedValue({
+      _avg: { rating: null },
+      _count: { _all: 0 },
+    } as never);
+
+    const profile = await usersService.getCarrierProfile("u1", null);
+    expect(profile).not.toHaveProperty("phone");
+    expect(profile).toMatchObject({ id: "u1", bio: "fletero" });
   });
 
   it("listMyTrips filtra por carrierId", async () => {
@@ -152,7 +175,7 @@ describe("users.service", () => {
       _count: { _all: 0 },
     } as never);
 
-    await usersService.getCarrierProfile("u1");
+    await usersService.getCarrierProfile("u1", null);
 
     const include = vi.mocked(prisma.user.findUnique).mock.calls[0]?.[0]?.include as {
       tripsAsCarrier: { where: unknown };
@@ -175,7 +198,7 @@ describe("users.service", () => {
       _count: { _all: 0 },
     } as never);
 
-    await usersService.getCarrierProfile("u1");
+    await usersService.getCarrierProfile("u1", null);
 
     const include = vi.mocked(prisma.user.findUnique).mock.calls[0]?.[0]?.include as {
       tripsAsCarrier: { where: { carrier?: unknown } };
@@ -360,16 +383,18 @@ describe("calificaciones de fleteros", () => {
       _count: { _all: 3 },
     } as never);
 
-    const profile = await usersService.getCarrierProfile("u1");
+    const profile = await usersService.getCarrierProfile("u1", null);
 
     expect(profile.ratingAvg).toBe(4.33);
     expect(profile.ratingCount).toBe(3);
     expect(profile.reviews[0]).toMatchObject({
       rating: 5,
       comment: "cargó y descargó sin dramas",
-      fromName: "Comercial Norte",
       trip: { origin: "Rosario", destination: "Córdoba" },
     });
+    // sin quién calificó (L2 ítem 10)
+    expect(profile.reviews[0]).not.toHaveProperty("fromName");
+    expect(JSON.stringify(profile.reviews)).not.toContain("Comercial Norte");
   });
 
   it("getCarrierProfile devuelve ratingAvg null cuando no hay reseñas", async () => {
@@ -383,7 +408,7 @@ describe("calificaciones de fleteros", () => {
       _count: { _all: 0 },
     } as never);
 
-    const profile = await usersService.getCarrierProfile("u1");
+    const profile = await usersService.getCarrierProfile("u1", null);
     expect(profile.ratingAvg).toBeNull();
     expect(profile.ratingCount).toBe(0);
     expect(profile.reviews).toEqual([]);

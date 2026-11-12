@@ -14,6 +14,7 @@ import { calculateSuggestedPrice } from "../lib/pricing.js";
 import { AppError } from "../lib/errors.js";
 import { quoteCancellation, hoursUntilDeparture } from "../lib/cancellation.js";
 import { salidaEn } from "./helpers/salida.js";
+import { pdfText } from "./helpers/pdfText.js";
 import { CARRIER_CAN_CHARGE } from "../lib/mappers.js";
 
 // el token del transportista llega a la base cifrado (ver OAuth), así que los
@@ -1813,7 +1814,7 @@ describe("carriers públicos", () => {
     expect(res.body.code).toBe("CARRIER_NOT_FOUND");
   });
 
-  it("GET /api/carriers/:id devuelve el perfil con viajes OPEN (200)", async () => {
+  function mockPerfilFletero() {
     vi.mocked(prisma.review.aggregate).mockResolvedValue({
       _avg: { rating: 4.5 },
       _count: { _all: 2 },
@@ -1841,22 +1842,68 @@ describe("carriers públicos", () => {
         ],
       }) as unknown as PrismaUserWithTrips & { reviewsReceived: unknown[] }
     );
+  }
+
+  it("GET /api/carriers/:id devuelve el perfil con viajes OPEN (200)", async () => {
+    mockPerfilFletero();
     const res = await request(app).get("/api/carriers/u1");
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({
       id: "u1",
       name: "Transportes Flete",
       bio: "fletero",
-      phone: "351-555",
       trips: [],
       ratingAvg: 4.5,
       ratingCount: 2,
     });
-    expect(res.body.reviews[0]).toMatchObject({
-      rating: 5,
-      comment: "muy puntual",
-      fromName: "Comercial Norte",
-    });
+    expect(res.body.reviews[0]).toMatchObject({ rating: 5, comment: "muy puntual" });
+    // sin quién calificó (L2 ítem 10): la reseña es del viaje, no de la empresa
+    expect(Object.keys(res.body.reviews[0]).sort()).toEqual(
+      ["comment", "createdAt", "id", "rating", "trip"].sort()
+    );
+    expect(JSON.stringify(res.body.reviews)).not.toContain("Comercial Norte");
+  });
+
+  // 02§2.1: el teléfono del fletero es para quien tiene cuenta, no para cualquiera
+  it("GET /api/carriers/:id sin sesión no trae el teléfono", async () => {
+    mockPerfilFletero();
+    const res = await request(app).get("/api/carriers/u1");
+    expect(res.status).toBe(200);
+    expect(res.body).not.toHaveProperty("phone");
+  });
+
+  it("GET /api/carriers/:id con sesión trae el teléfono", async () => {
+    mockPerfilFletero();
+    vi.mocked(prisma.revokedToken.findUnique).mockResolvedValue(null as never);
+    const res = await request(app)
+      .get("/api/carriers/u1")
+      .set("Authorization", `Bearer ${companyToken}`);
+    expect(res.status).toBe(200);
+    expect(res.body.phone).toBe("351-555");
+  });
+
+  it("GET /api/carriers/:id con token inválido responde como anónimo", async () => {
+    mockPerfilFletero();
+    const res = await request(app)
+      .get("/api/carriers/u1")
+      .set("Authorization", "Bearer no-es-un-jwt");
+    expect(res.status).toBe(200);
+    expect(res.body).not.toHaveProperty("phone");
+  });
+
+  it("GET /api/carriers/:id con un token cerrado responde como anónimo", async () => {
+    mockPerfilFletero();
+    vi.mocked(prisma.revokedToken.findUnique).mockResolvedValue({ jti: "x" } as never);
+    try {
+      const res = await request(app)
+        .get("/api/carriers/u1")
+        .set("Authorization", `Bearer ${companyToken}`);
+      expect(res.status).toBe(200);
+      expect(res.body).not.toHaveProperty("phone");
+    } finally {
+      // el resto del archivo usa los tokens como sesiones abiertas
+      vi.mocked(prisma.revokedToken.findUnique).mockResolvedValue(null as never);
+    }
   });
 });
 
@@ -1959,12 +2006,13 @@ describe("POST /api/trips/:id/reviews", () => {
 
     expect(res.status).toBe(201);
     expect(res.body).toMatchObject({
-      fromUserId: "u2",
       toUserId: "u1",
       rating: 5,
-      fromName: "Comercial Norte",
       toName: "Transportes Flete",
     });
+    // misma forma que en el detalle: sin fromUserId ni fromName
+    expect(res.body).not.toHaveProperty("fromUserId");
+    expect(res.body).not.toHaveProperty("fromName");
   });
 
   it("ignora un toUserId que manda el cliente y califica al fletero del viaje", async () => {
@@ -2257,6 +2305,339 @@ describe("GET /api/trips/:id", () => {
   });
 });
 
+// U7: GET /trips/:id es público, pero cada rol ve solo lo que le corresponde.
+// Snapshot de claves por rol + chequeo de que ningún dato ajeno aparece en el JSON.
+describe("GET /api/trips/:id por rol (U7)", () => {
+  const norteToken = signToken({ id: "c-norte", role: "COMPANY" });
+  const vinoToken = signToken({ id: "c-vino", role: "COMPANY" });
+
+  function carga(o: {
+    id: string;
+    companyId: string;
+    companyName: string;
+    status: "PENDING" | "CONFIRMED" | "CANCELLED";
+    description: string;
+    volume: number;
+    pickupAddress: string;
+    trackingCode: string;
+  }) {
+    return {
+      id: o.id,
+      tripId: "t-roles",
+      companyId: o.companyId,
+      company: { name: o.companyName },
+      description: o.description,
+      volume: o.volume,
+      status: o.status,
+      priceShare: new Prisma.Decimal(o.volume * 100),
+      depositAmount: new Prisma.Decimal(o.volume * 20),
+      createdAt: new Date("2026-09-01T10:00:00.000Z"),
+      cancelledAt: o.status === "CANCELLED" ? new Date("2026-09-02T10:00:00.000Z") : null,
+      cancellationFeeAmount: o.status === "CANCELLED" ? new Prisma.Decimal(0) : null,
+      pickupAddress: o.pickupAddress,
+      pickupLat: -32.95,
+      pickupLng: -60.65,
+      trackingCode: o.trackingCode,
+      stopOrder: null,
+      payments: [
+        {
+          id: `pay-${o.id}`,
+          cargoItemId: o.id,
+          type: "DEPOSIT",
+          status: "APPROVED",
+          amount: new Prisma.Decimal(o.volume * 20),
+          refundedAmount: null,
+          mpPreferenceId: null,
+          mpPaymentId: null,
+          platformFeeAmount: null,
+          carrierAmount: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+      ],
+    };
+  }
+
+  const viaje = {
+    id: "t-roles",
+    origin: "Córdoba",
+    destination: "Rosario",
+    date: new Date("2026-12-01T10:00:00.000Z"),
+    departureTime: "08:30",
+    truckType: "Semi",
+    capacityTotal: 20,
+    price: new Prisma.Decimal(450000),
+    depositPercent: 20,
+    // distinta del 10 % por defecto: así se ve que sale del viaje
+    platformFeePercent: 12,
+    status: "OPEN" as const,
+    carrierId: "u1",
+    carrier: { name: "Transportes Flete" },
+    originLat: -31.4201,
+    originLng: -64.1888,
+    destLat: -32.9442,
+    destLng: -60.6505,
+    departureAddress: "Galpón Av. Circunvalación 5000, Córdoba",
+    departureLat: -31.45,
+    departureLng: -64.2,
+    features: ["seguro"],
+    reviews: [],
+    cargoItems: [
+      carga({
+        id: "ci-norte",
+        companyId: "c-norte",
+        companyName: "Comercial Norte",
+        status: "CONFIRMED",
+        description: "Cajas de cerámicos",
+        volume: 5,
+        pickupAddress: "Bv. Oroño 1200, Rosario",
+        trackingCode: "TP-NORTE-C1",
+      }),
+      carga({
+        id: "ci-acero",
+        companyId: "c-acero",
+        companyName: "Aceros del Sur",
+        status: "PENDING",
+        description: "Bobinas de acero",
+        volume: 4,
+        pickupAddress: "Av. Pellegrini 900, Rosario",
+        trackingCode: "TP-ACERO-C2",
+      }),
+      carga({
+        id: "ci-vino",
+        companyId: "c-vino",
+        companyName: "Bodega Vino",
+        status: "CANCELLED",
+        description: "Pallets de vino",
+        volume: 3,
+        pickupAddress: "Ruta 9 km 300",
+        trackingCode: "TP-VINO-C3",
+      }),
+    ],
+  };
+
+  /** lo que nadie salvo el fletero y la propia empresa puede ver de cada carga */
+  const secretosDe = {
+    norte: ["c-norte", "Comercial Norte", "Cajas de cerámicos", "Bv. Oroño", "TP-NORTE"],
+    acero: ["c-acero", "Aceros del Sur", "Bobinas de acero", "Pellegrini", "TP-ACERO"],
+    vino: ["c-vino", "Bodega Vino", "Pallets de vino", "Ruta 9", "TP-VINO"],
+    salida: ["Galpón", "-31.45", "-64.2"],
+  };
+
+  const CLAVES_BASE = [
+    "acceptsCargo",
+    "capacityTotal",
+    "capacityUsed",
+    "cargoCount",
+    "cargoItems",
+    "carrierId",
+    "carrierName",
+    "date",
+    "departureTime",
+    "depositPercent",
+    "destination",
+    "features",
+    "id",
+    "origin",
+    "otherCargo",
+    "platformFeePercent",
+    "price",
+    "reviews",
+    "status",
+    "truckType",
+    "viewerAccess",
+    "viewerReviewed",
+  ];
+  const CLAVES_PARTICIPANTE = [...CLAVES_BASE, "departureAddress"].sort();
+  const CLAVES_CARGA = [
+    "balancePayment",
+    "cancellationFeeAmount",
+    "cancelledAt",
+    "companyId",
+    "companyName",
+    "createdAt",
+    "depositAmount",
+    "depositPayment",
+    "description",
+    "id",
+    "pickupAddress",
+    "pickupLat",
+    "pickupLng",
+    "priceShare",
+    "status",
+    "stopOrder",
+    "trackingCode",
+    "tripId",
+    "volume",
+  ];
+
+  const claves = (o: object) => Object.keys(o).sort();
+
+  async function pedir(token?: string) {
+    vi.mocked(prisma.trip.findUnique).mockResolvedValue(viaje as never);
+    vi.mocked(prisma.revokedToken.findUnique).mockResolvedValue(null as never);
+    const req = request(app).get("/api/trips/t-roles");
+    const res = token ? await req.set("Authorization", `Bearer ${token}`) : await req;
+    expect(res.status).toBe(200);
+    return res.body;
+  }
+
+  function noContiene(body: unknown, secretos: string[]) {
+    const json = JSON.stringify(body);
+    for (const secreto of secretos) expect(json).not.toContain(secreto);
+  }
+
+  it.each([
+    ["anónimo", undefined],
+    ["otra empresa sin carga", "stranger"],
+    ["admin", "admin"],
+    ["otro fletero", "otroFletero"],
+  ])("%s: solo agregados del viaje", async (_rol, quien) => {
+    const token =
+      quien === "stranger"
+        ? strangerToken
+        : quien === "admin"
+          ? adminToken
+          : quien === "otroFletero"
+            ? signToken({ id: "u8", role: "CARRIER" })
+            : undefined;
+    const body = await pedir(token);
+
+    expect(claves(body)).toEqual(CLAVES_BASE);
+    expect(body.viewerAccess).toBe("ANONYMOUS");
+    expect(body.cargoItems).toEqual([]);
+    expect(body.otherCargo).toEqual([]);
+    // la retirada no cuenta: 2 cargas vivas, 5 + 4 m³
+    expect(body.cargoCount).toBe(2);
+    expect(body.capacityUsed).toBe(9);
+    expect(body.platformFeePercent).toBe(12);
+    noContiene(body, [
+      ...secretosDe.norte,
+      ...secretosDe.acero,
+      ...secretosDe.vino,
+      ...secretosDe.salida,
+    ]);
+  });
+
+  it("empresa dueña: su carga completa y las ajenas solo con volumen", async () => {
+    const body = await pedir(norteToken);
+
+    expect(claves(body)).toEqual(CLAVES_PARTICIPANTE);
+    expect(body.viewerAccess).toBe("PARTICIPANT");
+    expect(body.cargoItems).toHaveLength(1);
+    expect(claves(body.cargoItems[0])).toEqual(CLAVES_CARGA);
+    expect(body.cargoItems[0]).toMatchObject({
+      id: "ci-norte",
+      pickupAddress: "Bv. Oroño 1200, Rosario",
+      trackingCode: "TP-NORTE-C1",
+    });
+    // la retirada de otra empresa tampoco aparece entre las ajenas
+    expect(body.otherCargo).toEqual([{ volume: 4 }]);
+    expect(body.departureAddress).toBe("Galpón Av. Circunvalación 5000, Córdoba");
+    noContiene(body, [...secretosDe.acero, ...secretosDe.vino]);
+  });
+
+  it("fletero dueño: todas las cargas completas", async () => {
+    const body = await pedir(carrierToken);
+
+    expect(claves(body)).toEqual(CLAVES_PARTICIPANTE);
+    expect(body.viewerAccess).toBe("CARRIER_OWNER");
+    expect(body.cargoItems.map((c: { id: string }) => c.id)).toEqual([
+      "ci-norte",
+      "ci-acero",
+      "ci-vino",
+    ]);
+    for (const item of body.cargoItems) expect(claves(item)).toEqual(CLAVES_CARGA);
+    expect(body.otherCargo).toEqual([]);
+  });
+
+  it("ex participante: su carga retirada y nada de las demás", async () => {
+    const body = await pedir(vinoToken);
+
+    expect(claves(body)).toEqual(CLAVES_BASE);
+    expect(body.viewerAccess).toBe("FORMER_PARTICIPANT");
+    expect(body.cargoItems).toHaveLength(1);
+    expect(claves(body.cargoItems[0])).toEqual(CLAVES_CARGA);
+    expect(body.cargoItems[0]).toMatchObject({ id: "ci-vino", status: "CANCELLED" });
+    expect(body.otherCargo).toEqual([]);
+    noContiene(body, [...secretosDe.norte, ...secretosDe.acero, ...secretosDe.salida]);
+  });
+
+  it("un token vencido o inválido ve lo mismo que un anónimo", async () => {
+    const body = await pedir("no-es-un-jwt");
+    expect(body.viewerAccess).toBe("ANONYMOUS");
+    expect(body.cargoItems).toEqual([]);
+  });
+
+  describe("reseñas sin quién calificó (L2 ítem 10)", () => {
+    // el mismo viaje, ya completado, con la reseña de Comercial Norte
+    const completado = {
+      ...viaje,
+      status: "COMPLETED" as const,
+      reviews: [
+        {
+          id: "r-norte",
+          tripId: "t-roles",
+          fromUserId: "c-norte",
+          toUserId: "u1",
+          rating: 5,
+          comment: "puntual y prolijo",
+          createdAt: new Date("2026-12-02T10:00:00.000Z"),
+          fromUser: { name: "Comercial Norte" },
+          toUser: { name: "Transportes Flete" },
+        },
+      ],
+    };
+
+    async function pedirCompletado(token?: string) {
+      vi.mocked(prisma.trip.findUnique).mockResolvedValue(completado as never);
+      vi.mocked(prisma.revokedToken.findUnique).mockResolvedValue(null as never);
+      const req = request(app).get("/api/trips/t-roles");
+      const res = token ? await req.set("Authorization", `Bearer ${token}`) : await req;
+      expect(res.status).toBe(200);
+      return res.body;
+    }
+
+    const CLAVES_RESENA = [
+      "comment",
+      "createdAt",
+      "id",
+      "rating",
+      "toName",
+      "toUserId",
+      "tripId",
+    ];
+
+    it.each([
+      ["anónimo", undefined],
+      ["otra empresa del viaje", "acero"],
+      ["fletero dueño", "carrier"],
+    ])("%s ve la reseña sin el id ni el nombre de la empresa", async (_rol, quien) => {
+      const token =
+        quien === "acero"
+          ? signToken({ id: "c-acero", role: "COMPANY" })
+          : quien === "carrier"
+            ? carrierToken
+            : undefined;
+      const body = await pedirCompletado(token);
+
+      expect(body.reviews).toHaveLength(1);
+      expect(claves(body.reviews[0])).toEqual(CLAVES_RESENA);
+      expect(body.reviews[0]).toMatchObject({ rating: 5, comment: "puntual y prolijo" });
+      expect(JSON.stringify(body.reviews)).not.toContain("c-norte");
+      expect(JSON.stringify(body.reviews)).not.toContain("Comercial Norte");
+      expect(body.viewerReviewed).toBe(false);
+    });
+
+    it("la empresa que calificó lo sabe por viewerReviewed", async () => {
+      const body = await pedirCompletado(norteToken);
+
+      expect(body.viewerReviewed).toBe(true);
+      expect(claves(body.reviews[0])).toEqual(CLAVES_RESENA);
+    });
+  });
+});
+
 describe("GET /api/trips/:id/manifest.pdf", () => {
   const manifestTrip = {
     id: "clx1234abcd",
@@ -2284,16 +2665,44 @@ describe("GET /api/trips/:id/manifest.pdf", () => {
     departureAddress: null,
     departureLat: null,
     departureLng: null,
+    // u2 (Comercial Norte) y u7 (Aceros del Sur) con carga viva; u8 retiró la suya
     cargoItems: [
       {
+        status: "CONFIRMED" as const,
         description: "Cajas deurado",
         volume: 8,
         priceShare: new Prisma.Decimal(180000),
         company: { id: "u2", name: "Comercial Norte" },
       },
+      {
+        status: "PENDING" as const,
+        description: "Vigas de acero",
+        volume: 6,
+        priceShare: new Prisma.Decimal(135000),
+        company: { id: "u7", name: "Aceros del Sur" },
+      },
+      {
+        status: "CANCELLED" as const,
+        description: "Barricas de vino",
+        volume: 3,
+        priceShare: new Prisma.Decimal(67500),
+        company: { id: "u8", name: "Bodega Retirada" },
+      },
     ],
     platformFeePercent: 10,
   };
+
+  /** el texto del PDF que recibe quien tiene ese token */
+  async function textoDelManifiesto(token: string) {
+    vi.mocked(prisma.trip.findUnique).mockResolvedValue(manifestTrip);
+    const res = await asPdf(
+      request(app)
+        .get("/api/trips/clx1234abcd/manifest.pdf")
+        .set("Authorization", `Bearer ${token}`)
+    );
+    expect(res.status).toBe(200);
+    return pdfText(res.body as Buffer);
+  }
 
   // supertest no parsea application/pdf: le pasamos un parser binario
   const asPdf = (req: request.Test) =>
@@ -2339,6 +2748,56 @@ describe("GET /api/trips/:id/manifest.pdf", () => {
     expect(res.headers["content-disposition"]).toContain("attachment");
     expect(res.headers["content-disposition"]).toContain(".pdf");
     expect(res.body.subarray(0, 4).toString()).toBe("%PDF");
+  });
+
+  it("el fletero recibe todas las cargas vivas, con empresa y parte", async () => {
+    const texto = await textoDelManifiesto(carrierToken);
+
+    for (const dato of [
+      "Cajas deurado",
+      "Comercial Norte",
+      "$180.000",
+      "Vigas de acero",
+      "Aceros del Sur",
+      "$135.000",
+      "$315.000",
+      "2 cargas",
+    ]) {
+      expect(texto).toContain(dato);
+    }
+    // la retirada no viaja
+    expect(texto).not.toContain("Barricas de vino");
+  });
+
+  it("la empresa recibe solo su carga y los totales del viaje (U7)", async () => {
+    const texto = await textoDelManifiesto(companyToken);
+
+    expect(texto).toContain("Cajas deurado");
+    expect(texto).toContain("$180.000");
+    // totales del viaje: m³ ocupados y cantidad de cargas, como en el detalle
+    expect(texto).toContain("14 m³ de 20 m³ ocupados");
+    expect(texto).toContain("2 cargas");
+    // nada de la otra empresa: ni qué lleva, ni quién es, ni cuánto paga, ni
+    // el total en plata del viaje (dejaría deducir la parte ajena)
+    for (const ajeno of [
+      "Vigas de acero",
+      "Aceros del Sur",
+      "$135.000",
+      "$315.000",
+      "Barricas de vino",
+      "Bodega Retirada",
+    ]) {
+      expect(texto).not.toContain(ajeno);
+    }
+  });
+
+  it("la empresa que retiró su carga ya no puede pedirlo (403)", async () => {
+    vi.mocked(prisma.trip.findUnique).mockResolvedValue(manifestTrip);
+    const res = await request(app)
+      .get("/api/trips/clx1234abcd/manifest.pdf")
+      .set("Authorization", `Bearer ${signToken({ id: "u8", role: "COMPANY" })}`);
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("FORBIDDEN");
   });
 
   it("una empresa con carga en el viaje también puede pedirlo", async () => {

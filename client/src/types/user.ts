@@ -34,7 +34,6 @@ export type CarrierReview = {
   rating: number;
   comment: string | null;
   createdAt: string;
-  fromName: string;
   trip: { id: string; origin: string; destination: string };
 };
 
