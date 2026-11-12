@@ -14,6 +14,7 @@
     "db:seed": "npm run db:seed:demo",
     "db:seed:demo": "tsx prisma/seed-demo.ts",
     "db:seed:prod": "tsx prisma/seed-prod.ts",
+    "admin:create": "tsx prisma/create-admin.ts",
     "db:seed:e2e": "tsx prisma/seed-e2e.ts",
     "seed:geocode": "tsx prisma/backfill-geocode.ts"
   },
