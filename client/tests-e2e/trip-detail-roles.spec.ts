@@ -97,7 +97,7 @@ test.describe("ocupación y cargas por rol", () => {
     });
   }
 
-  test("empresa dueña: su carga completa y la ajena como otra carga", async ({
+  test("empresa dueña: su carga completa y la ajena como otra carga con su ciudad", async ({
     page,
   }) => {
     await openTrip(page, ROLES_TRIP, "company");
@@ -106,10 +106,14 @@ test.describe("ocupación y cargas por rol", () => {
     await expect(list.getByText(cargo.owner.description)).toBeVisible();
     await expect(list.getByText(`retiro: ${cargo.owner.pickupAddress}`)).toBeVisible();
     await expect(list.getByText(`código: ${cargo.owner.trackingCode}`)).toBeVisible();
-    await expect(list.getByText("otra carga · 3 m³")).toBeVisible();
+    await expect(
+      list.getByText(`otra carga · 3 m³ · retiro en ${E2E.cargo.second.pickupCity}`)
+    ).toBeVisible();
     // la retirada del ex participante no aparece ni como "otra carga"
     await expect(list.getByText(/otra carga/)).toHaveCount(1);
     await expectHidden(page, cargo.second);
+    // de la ajena va la localidad, nunca la calle (L6)
+    await expect(page.locator("body")).not.toContainText("Calle Segunda");
     await expectHidden(page, cargo.former);
   });
 
@@ -150,16 +154,19 @@ test.describe("paradas por rol", () => {
     });
   }
 
-  test("empresa dueña: su parada completa y la ajena como otra parada", async ({
+  test("empresa dueña: su parada completa y la ajena como otra parada con su ciudad", async ({
     page,
   }) => {
     await openTrip(page, ROLES_TRIP, "company");
     const stops = page.getByRole("region", { name: "paradas del viaje" });
     await expect(stops.getByText(cargo.owner.pickupAddress)).toBeVisible();
-    await expect(stops.getByText("otra parada · 3 m³")).toBeVisible();
+    await expect(
+      stops.getByText(`otra parada · 3 m³ · retiro en ${E2E.cargo.second.pickupCity}`)
+    ).toBeVisible();
     // la empresa no reordena: sin manijas de arrastre
     await expect(stops.getByRole("button", { name: /^mover/ })).toHaveCount(0);
     await expectHidden(page, cargo.second);
+    await expect(page.locator("body")).not.toContainText("Calle Segunda");
   });
 
   test("fletero: todas las paradas, reordenables", async ({ page }) => {

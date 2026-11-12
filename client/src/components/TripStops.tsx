@@ -217,6 +217,7 @@ export function TripStops({
                 <StopNumber index={index} />
                 <p className="flex-1 text-[13px] text-ink-muted">
                   otra parada · {formatM3(stop.volume)} m³
+                  {stop.pickupCity && ` · retiro en ${stop.pickupCity}`}
                 </p>
               </li>
             )
