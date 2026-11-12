@@ -4064,3 +4064,44 @@ describe("GET /api/trips/cancellation-quote", () => {
     });
   });
 });
+
+// L5 (02§2.1): el body del reorden se valida con Zod en la ruta, como el resto
+describe("PATCH /api/trips/:id/stops/reorder valida el body", () => {
+  it.each([
+    ["sin items", {}],
+    ["items vacío", { items: [] }],
+    ["items que no es un array", { items: "c1" }],
+    ["order como texto", { items: [{ cargoItemId: "c1", order: "1" }] }],
+    ["order negativo", { items: [{ cargoItemId: "c1", order: -1 }] }],
+    ["order con decimales", { items: [{ cargoItemId: "c1", order: 1.5 }] }],
+    [
+      "order fuera del rango de la columna",
+      { items: [{ cargoItemId: "c1", order: 2 ** 31 }] },
+    ],
+    ["sin order", { items: [{ cargoItemId: "c1" }] }],
+    ["cargoItemId vacío", { items: [{ cargoItemId: "", order: 1 }] }],
+  ])("%s → 400 VALIDATION_ERROR sin llegar al service", async (_caso, body) => {
+    vi.mocked(prisma.trip.findUnique).mockClear();
+
+    const res = await request(app)
+      .patch("/api/trips/t1/stops/reorder")
+      .set("Authorization", `Bearer ${carrierToken}`)
+      .send(body);
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("VALIDATION_ERROR");
+    expect(prisma.trip.findUnique).not.toHaveBeenCalled();
+  });
+
+  it("un body válido llega al service", async () => {
+    vi.mocked(prisma.trip.findUnique).mockResolvedValueOnce(null);
+
+    const res = await request(app)
+      .patch("/api/trips/t1/stops/reorder")
+      .set("Authorization", `Bearer ${carrierToken}`)
+      .send({ items: [{ cargoItemId: "c1", order: 1 }] });
+
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe("TRIP_NOT_FOUND");
+  });
+});

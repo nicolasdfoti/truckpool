@@ -88,7 +88,10 @@ function nextCalendarDay(day: CalendarParts): CalendarParts {
 
 /** Instante de las 00:00 ART del día calendario argentino en que cae `instant`. */
 export function startOfArgentinaDay(instant: Date): Date {
-  return startOfDayInstant(calendarParts(instant, ARGENTINA_TIME_ZONE), ARGENTINA_TIME_ZONE);
+  return startOfDayInstant(
+    calendarParts(instant, ARGENTINA_TIME_ZONE),
+    ARGENTINA_TIME_ZONE
+  );
 }
 
 const DATE_ONLY = /^(\d{4})-(\d{2})-(\d{2})$/;

@@ -14,6 +14,7 @@ import {
   listTripsQuerySchema,
   locationQuerySchema,
   priceEstimateQuerySchema,
+  reorderStopsSchema,
   updateTripStatusSchema,
 } from "./trips.schemas.js";
 
@@ -127,6 +128,7 @@ tripsRouter.patch(
   "/:id/stops/reorder",
   requireAuth,
   requireRole("CARRIER"),
+  validateBody(reorderStopsSchema),
   tripsController.reorderTripStops
 );
 
