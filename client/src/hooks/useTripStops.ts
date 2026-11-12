@@ -31,11 +31,15 @@ export function useReorderTripStops(tripId: string) {
   });
 }
 
-/** tracking público por trackingCode — sin auth */
-export function usePublicTracking(trackingCode: string) {
+/**
+ * tracking público por trackingCode — sin auth. Se busca el código que se
+ * envió, no lo que se va escribiendo; un 404 es la respuesta, no se reintenta.
+ */
+export function usePublicTracking(trackingCode: string | null) {
   return useQuery({
     queryKey: ["publicTracking", trackingCode],
     queryFn: () => api.get<PublicTracking | null>(`/tracking/${trackingCode}`),
     enabled: Boolean(trackingCode),
+    retry: retryUnlessDenied,
   });
 }

@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
+import { ApiError } from "../api/client";
 import { Button } from "../components/Button";
 import { usePublicTracking } from "../hooks/useTripStops";
 import { LoadingBlock, SkeletonBar } from "../components/Loading";
@@ -50,23 +51,29 @@ function tripStatusLabel(status: string): { label: string; className: string } {
 
 export default function TrackPackage() {
   const [code, setCode] = useState("");
-  const [submitted, setSubmitted] = useState(false);
+  /** el código que se envió: la búsqueda sale recién al enviar el form */
+  const [submittedCode, setSubmittedCode] = useState<string | null>(null);
+  const submitted = submittedCode !== null;
   const {
     data: tracking,
     isLoading,
     isError,
-  } = usePublicTracking(code.trim().toUpperCase());
+    error,
+    isFetching,
+  } = usePublicTracking(submittedCode);
+  // un 404 es "ese código no existe"; un 5xx o la red caída no dicen nada del código
+  const searchFailed = isError && !(error instanceof ApiError && error.status === 404);
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
     const trimmed = code.trim().toUpperCase();
     if (trimmed.length < 3) return;
-    setSubmitted(true);
+    setSubmittedCode(trimmed);
   };
 
   const handleClear = () => {
     setCode("");
-    setSubmitted(false);
+    setSubmittedCode(null);
   };
 
   if (submitted && isLoading) {
@@ -102,13 +109,13 @@ export default function TrackPackage() {
             ← Buscar otro código
           </Link>
           <div className="mt-8 rounded-[10px] border border-line bg-white p-6 text-center">
-            <h2 className="font-display text-xl font-medium">Código no encontrado</h2>
+            <h2 className="font-display text-xl font-medium">
+              {searchFailed ? "Algo falló" : "Código no encontrado"}
+            </h2>
             <p className="mt-2 text-sm text-ink-muted">
-              No existe ningún envío con el código{" "}
-              <code className="font-mono">{code.toUpperCase()}</code>.
-            </p>
-            <p className="mt-2 text-sm text-ink-muted">
-              Verificá que lo hayas copiado bien (formato: TP-XXXX-C#).
+              {searchFailed
+                ? "no pudimos buscar el código. probá de nuevo en un rato."
+                : "no encontramos ese código. revisá que esté completo o pedíselo de nuevo a quien te lo pasó."}
             </p>
             <Button asChild variant="outline" size="md" className="mt-4">
               <Link to="/rastrear" onClick={handleClear}>
@@ -137,14 +144,14 @@ export default function TrackPackage() {
               type="text"
               value={code}
               onChange={(e) => setCode(e.target.value)}
-              placeholder="TP-XXXX-C#"
+              placeholder="pegá el código que te pasaron"
               inputMode="text"
               autoComplete="off"
               className="flex-1 rounded-md border border-line-strong px-3 py-2 text-sm outline-none placeholder:text-ink-muted focus:border-brand font-mono"
-              disabled={submitted}
+              disabled={isFetching}
             />
-            <Button type="submit" size="md" disabled={!code.trim() || submitted}>
-              {submitted ? "buscando…" : "rastrear"}
+            <Button type="submit" size="md" disabled={!code.trim() || isFetching}>
+              {isFetching ? "buscando…" : "rastrear"}
             </Button>
             {submitted && (
               <Button type="button" variant="ghost" size="sm" onClick={handleClear}>

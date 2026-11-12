@@ -275,3 +275,65 @@ test.describe("reseñas sin la empresa que calificó", () => {
     );
   });
 });
+
+test.describe("/rastrear", () => {
+  const NOT_FOUND =
+    "no encontramos ese código. revisá que esté completo o pedíselo de nuevo a quien te lo pasó.";
+  const SERVER_ERROR = "no pudimos buscar el código. probá de nuevo en un rato.";
+
+  test("el campo no muestra el formato del código", async ({ page }) => {
+    await page.goto("/rastrear");
+    await expect(page.getByLabel("código de seguimiento")).not.toHaveAttribute(
+      "placeholder",
+      /TP-/
+    );
+  });
+
+  test("un código inexistente responde en menos de 2 s", async ({ page }) => {
+    await page.goto("/rastrear");
+    await page.getByLabel("código de seguimiento").fill("TP-ZZZZ-ZZZZ-ZZZZ-ZZZZ");
+    await page.getByRole("button", { name: "rastrear" }).click();
+    await expect(page.getByText(NOT_FOUND)).toBeVisible({ timeout: 2000 });
+    await expect(page.locator("body")).not.toContainText("formato");
+  });
+
+  test("si la API falla, no dice que el código no existe", async ({ page }) => {
+    await page.route(`${API_URL}/tracking/**`, (route) =>
+      route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "error interno", code: "INTERNAL_ERROR" }),
+      })
+    );
+    await page.goto("/rastrear");
+    await page.getByLabel("código de seguimiento").fill(cargo.owner.trackingCode);
+    await page.getByRole("button", { name: "rastrear" }).click();
+    // un 5xx sí se reintenta (3 veces, con espera creciente) antes del mensaje
+    await expect(page.getByText(SERVER_ERROR)).toBeVisible({ timeout: 15000 });
+    await expect(page.getByText(NOT_FOUND)).toHaveCount(0);
+  });
+
+  test("un código válido muestra la carga y el botón vuelve a rastrear", async ({
+    page,
+  }) => {
+    await page.goto("/rastrear");
+    await page.getByLabel("código de seguimiento").fill(cargo.owner.trackingCode);
+    await page.getByRole("button", { name: "rastrear" }).click();
+    await expect(
+      page.getByRole("heading", { name: cargo.owner.description })
+    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "rastrear" })).toBeVisible();
+    await expect(page.getByText("buscando…")).toHaveCount(0);
+  });
+
+  test("escribir el código no busca hasta enviarlo", async ({ page }) => {
+    const requests: string[] = [];
+    page.on("request", (req) => {
+      if (req.url().includes("/tracking/")) requests.push(req.url());
+    });
+    await page.goto("/rastrear");
+    await page.getByLabel("código de seguimiento").pressSequentially("TP-ABCD");
+    await page.waitForLoadState("networkidle");
+    expect(requests).toEqual([]);
+  });
+});
