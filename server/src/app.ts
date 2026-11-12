@@ -13,6 +13,7 @@ import { paymentsRouter } from "../modules/payments/payments.routes.js";
 import { notificationsRouter } from "../modules/notifications/notifications.routes.js";
 import { AppError } from "../lib/errors.js";
 import { applyTrustProxy, securityHeaders } from "../lib/security.js";
+import { trackingRateLimit } from "../lib/rateLimit.js";
 
 const API_PREFIX = process.env.API_PREFIX ?? "/api";
 
@@ -71,7 +72,8 @@ app.use(`${API_PREFIX}/auth`, authRouter);
 app.use(`${API_PREFIX}/trips`, tripsRouter);
 
 // Tracking público (sin auth): /api/tracking/:trackingCode
-app.get(`${API_PREFIX}/tracking/:trackingCode`, getPublicTracking);
+// comparte el límite con /api/trips/tracking/:trackingCode
+app.get(`${API_PREFIX}/tracking/:trackingCode`, trackingRateLimit, getPublicTracking);
 
 app.use(`${API_PREFIX}/users`, usersRouter);
 app.use(`${API_PREFIX}/carriers`, carriersRouter);

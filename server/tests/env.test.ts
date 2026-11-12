@@ -19,6 +19,7 @@ const KEYS = [
   "RESEND_API_KEY",
   "CORS_ORIGIN",
   "TRUST_PROXY",
+  "RATE_LIMITS",
 ] as const;
 const ORIGINAL = Object.fromEntries(KEYS.map((key) => [key, process.env[key]]));
 
@@ -164,6 +165,31 @@ describe("assertServerEnv", () => {
     it("fuera de producción no exige nada de esto", () => {
       for (const key of Object.keys(PROD_COMPLETO)) delete process.env[key];
       expect(() => assertServerEnv()).not.toThrow();
+    });
+  });
+
+  // L5: RATE_LIMITS apaga los límites solo fuera de producción (e2e, pruebas)
+  describe("RATE_LIMITS", () => {
+    it.each([["on"], ["off"], [""]])("acepta RATE_LIMITS=%j en development", (valor) => {
+      process.env.RATE_LIMITS = valor;
+      expect(() => assertServerEnv()).not.toThrow();
+    });
+
+    it("aborta en producción con RATE_LIMITS=off", () => {
+      setProd();
+      process.env.RATE_LIMITS = "off";
+      expect(() => assertServerEnv()).toThrow(/RATE_LIMITS=off/);
+    });
+
+    it("arranca en producción con RATE_LIMITS=on", () => {
+      setProd();
+      process.env.RATE_LIMITS = "on";
+      expect(() => assertServerEnv()).not.toThrow();
+    });
+
+    it.each([["false"], ["ON"], ["0"]])("aborta con RATE_LIMITS=%j", (valor) => {
+      process.env.RATE_LIMITS = valor;
+      expect(() => assertServerEnv()).toThrow(/RATE_LIMITS=.* no es válido/);
     });
   });
 

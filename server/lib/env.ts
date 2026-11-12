@@ -143,6 +143,20 @@ function trustProxyProblem(): string | undefined {
   return `TRUST_PROXY="${raw}" no es válido: usá la cantidad de proxies delante de la API (0, 1, 2…)`;
 }
 
+/**
+ * `RATE_LIMITS`: "on", "off" o vacío (= prendidos; lib/rateLimit.ts). "off" es
+ * solo para pruebas locales: en producción no se acepta.
+ */
+function rateLimitsProblem(): string | undefined {
+  const raw = process.env.RATE_LIMITS;
+  if (raw === undefined || raw === "" || raw === "on") return undefined;
+  if (raw !== "off") return `RATE_LIMITS="${raw}" no es válido: usá on, off o vacío`;
+  if (process.env.NODE_ENV === "production") {
+    return "RATE_LIMITS=off apaga los rate limits: no se puede usar en producción";
+  }
+  return undefined;
+}
+
 function isBlank(value: string | undefined): boolean {
   return value === undefined || value.trim() === "";
 }
@@ -257,6 +271,8 @@ export function assertServerEnv(): void {
 
   const trustProxy = trustProxyProblem();
   if (trustProxy) problems.push(trustProxy);
+  const rateLimits = rateLimitsProblem();
+  if (rateLimits) problems.push(rateLimits);
 
   const mpTestToken = readMpOAuthTestToken();
   if (mpTestToken.problem) problems.push(mpTestToken.problem);

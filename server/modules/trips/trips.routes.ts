@@ -1,6 +1,15 @@
 import { Router } from "express";
 import { optionalAuth, requireAuth, requireRole } from "../../lib/auth.js";
 import { validateBody, validateQuery } from "../../lib/validate.js";
+import {
+  cargoItemsRateLimit,
+  cargoQuoteRateLimit,
+  geocodeRateLimit,
+  messagesRateLimit,
+  priceEstimateRateLimit,
+  routeGeometryRateLimit,
+  trackingRateLimit,
+} from "../../lib/rateLimit.js";
 import * as tripsController from "./trips.controller.js";
 import {
   cancellationQuoteQuerySchema,
@@ -23,12 +32,14 @@ export const tripsRouter = Router();
 tripsRouter.get("/", validateQuery(listTripsQuerySchema), tripsController.getTrips);
 tripsRouter.get(
   "/geocode",
+  geocodeRateLimit,
   validateQuery(geocodeQuerySchema),
   tripsController.getGeocode
 );
 // antes de "/:id": si no, el router matchearía "price-estimate" como un id
 tripsRouter.get(
   "/price-estimate",
+  priceEstimateRateLimit,
   validateQuery(priceEstimateQuerySchema),
   tripsController.getPriceEstimate
 );
@@ -41,6 +52,7 @@ tripsRouter.get(
 // cotización de una carga por volumen, antes de reservar (pública)
 tripsRouter.get(
   "/:id/cargo-quote",
+  cargoQuoteRateLimit,
   validateQuery(cargoQuoteQuerySchema),
   tripsController.getCargoQuote
 );
@@ -71,6 +83,7 @@ tripsRouter.post(
   "/:id/cargo-items",
   requireAuth,
   requireRole("COMPANY"),
+  cargoItemsRateLimit,
   validateBody(createCargoItemSchema),
   tripsController.postCargoItem
 );
@@ -103,6 +116,7 @@ tripsRouter.get("/:id/messages", requireAuth, tripsController.getTripMessages);
 tripsRouter.post(
   "/:id/messages",
   requireAuth,
+  messagesRateLimit,
   validateBody(createMessageSchema),
   tripsController.postTripMessage
 );
@@ -135,7 +149,17 @@ tripsRouter.patch(
 // Recorrido del viaje para el mapa. Con sesión y solo para participantes
 // activos (U7): el service decide qué paradas ve cada uno.
 tripsRouter.get("/:id/route", requireAuth, tripsController.getTripRoute);
-tripsRouter.get("/:id/route-geometry", requireAuth, tripsController.getTripRouteGeometry);
+tripsRouter.get(
+  "/:id/route-geometry",
+  requireAuth,
+  routeGeometryRateLimit,
+  tripsController.getTripRouteGeometry
+);
 
 // Tracking público (sin auth)
-tripsRouter.get("/tracking/:trackingCode", tripsController.getPublicTracking);
+// comparte el límite con /api/tracking/:trackingCode (src/app.ts)
+tripsRouter.get(
+  "/tracking/:trackingCode",
+  trackingRateLimit,
+  tripsController.getPublicTracking
+);
