@@ -30,7 +30,8 @@ export async function sendEmail(
 ): Promise<boolean> {
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey) {
-    console.warn(`[email] sin RESEND_API_KEY, se omite el envío a ${to}: ${subject}`);
+    // sin destinatario ni asunto: el asunto trae nombres y rutas (U6)
+    console.warn("[email] sin RESEND_API_KEY: se omite el envío");
     return false;
   }
 
@@ -45,14 +46,18 @@ export async function sendEmail(
     });
 
     if (!res.ok) {
-      const detail = await res.text().catch(() => "");
-      console.error(`[email] Resend respondió ${res.status} para ${to}: ${detail}`);
+      // solo el status: el body de Resend repite el destinatario (U6)
+      console.error("[email] Resend rechazó el envío", { status: res.status });
       return false;
     }
 
     return true;
   } catch (err) {
-    console.error(`[email] no se pudo enviar a ${to}:`, err);
+    // nunca el error entero: puede traer la request con el Authorization
+    console.error("[email] no se pudo enviar", {
+      name: err instanceof Error ? err.name : typeof err,
+      code: (err as { code?: unknown } | null)?.code,
+    });
     return false;
   }
 }
@@ -67,12 +72,7 @@ export async function sendEmailToUser(
   html: string
 ): Promise<boolean> {
   if (!user) return false;
-  if (!user.emailNotifications) {
-    console.log(
-      `[email] ${user.email} tiene las notificaciones apagadas: se omite "${subject}"`
-    );
-    return false;
-  }
+  if (!user.emailNotifications) return false;
   return sendEmail(user.email, subject, html);
 }
 

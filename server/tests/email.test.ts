@@ -92,6 +92,72 @@ describe("sendEmail", () => {
   });
 });
 
+// L5 (U6): los logs del email no llevan el destinatario, el asunto (trae
+// nombres y rutas) ni la respuesta de Resend, que repite el email
+describe("logs del envío sin datos personales", () => {
+  function logged(): string {
+    const spies = [console.log, console.warn, console.error] as unknown as {
+      mock: { calls: unknown[][] };
+    }[];
+    return spies
+      .flatMap((spy) => spy.mock.calls.flat())
+      .map((arg) => (typeof arg === "string" ? arg : JSON.stringify(arg)))
+      .join("\n");
+  }
+
+  it("sin RESEND_API_KEY no loguea el destinatario ni el asunto", async () => {
+    delete process.env.RESEND_API_KEY;
+
+    await sendEmail("privado@empresa.com", "tu carga Córdoba → Rosario", "<p>x</p>");
+
+    expect(console.warn).toHaveBeenCalled();
+    expect(logged()).not.toContain("privado@empresa.com");
+    expect(logged()).not.toContain("Córdoba");
+  });
+
+  it("si Resend responde con error loguea solo el status", async () => {
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 422,
+      text: async () => '{"message":"invalid `to`: privado@empresa.com"}',
+    } as unknown as Response);
+
+    await sendEmail("privado@empresa.com", "asunto", "<p>x</p>");
+
+    expect(console.error).toHaveBeenCalledWith("[email] Resend rechazó el envío", {
+      status: 422,
+    });
+    expect(logged()).not.toContain("privado@empresa.com");
+  });
+
+  it("si la request explota loguea solo name y code", async () => {
+    const err = Object.assign(
+      new Error("connect ECONNREFUSED, Authorization: Bearer re_test_123"),
+      { code: "ECONNREFUSED" }
+    );
+    fetchMock.mockRejectedValue(err);
+
+    await sendEmail("privado@empresa.com", "asunto", "<p>x</p>");
+
+    expect(console.error).toHaveBeenCalledWith("[email] no se pudo enviar", {
+      name: "Error",
+      code: "ECONNREFUSED",
+    });
+    expect(logged()).not.toContain("privado@empresa.com");
+    expect(logged()).not.toContain("re_test_123");
+  });
+
+  it("con las notificaciones apagadas no loguea el email", async () => {
+    await sendEmailToUser(
+      { email: "privado@empresa.com", emailNotifications: false },
+      "asunto",
+      "<p>x</p>"
+    );
+
+    expect(logged()).not.toContain("privado@empresa.com");
+  });
+});
+
 describe("sendEmailToUser", () => {
   it("manda si la persona tiene las notificaciones prendidas", async () => {
     const ok = await sendEmailToUser(

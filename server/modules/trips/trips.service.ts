@@ -145,7 +145,11 @@ async function bestEffortNotify(send: () => Promise<unknown>): Promise<void> {
   try {
     await send();
   } catch (err) {
-    console.error("[notificaciones] falló el aviso, la operación sigue:", err);
+    // name y code: un error de Prisma trae la consulta y sus parámetros (U6)
+    console.error("[notificaciones] falló el aviso, la operación sigue", {
+      name: err instanceof Error ? err.name : typeof err,
+      code: (err as { code?: unknown } | null)?.code,
+    });
   }
 }
 
@@ -1569,9 +1573,10 @@ export async function addCargoItem(
                 );
               }
             } else {
+              // el viaje y no la dirección de retiro (U6)
               console.warn(
-                "[addCargoItem] no se pudo obtener geometría del trayecto (OSRM falló o no hay puntos); se omite validación de distancia para pickup:",
-                data.pickupAddress
+                "[addCargoItem] sin geometría del trayecto (OSRM falló o no hay puntos): se omite validar la distancia del retiro",
+                { tripId }
               );
             }
           }
