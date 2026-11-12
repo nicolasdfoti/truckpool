@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
 import request from "supertest";
 import type { Express } from "express";
 import { signToken } from "../lib/auth.js";
@@ -29,6 +29,13 @@ async function appConLimites(): Promise<Express> {
   const { app } = await import("../src/app.js");
   return app;
 }
+
+// La primera importación de la app transforma todos sus módulos: sola tarda
+// ~3 s y con la suite en paralelo pasaba los 5 s del timeout del primer test.
+// Se hace una vez acá; después cada test la recarga ya transformada.
+beforeAll(async () => {
+  await import("../src/app.js");
+}, 30_000);
 
 beforeEach(() => {
   vi.spyOn(console, "error").mockImplementation(() => {});
