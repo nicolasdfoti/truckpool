@@ -337,3 +337,20 @@ test.describe("/rastrear", () => {
     expect(requests).toEqual([]);
   });
 });
+
+test.describe("sumar carga", () => {
+  test("fletero dueño: no ve el formulario para sumar carga", async ({ page }) => {
+    await openTrip(page, ROLES_TRIP, "carrier");
+    await expect(
+      page.getByRole("heading", { name: "sumar carga a este viaje" })
+    ).toHaveCount(0);
+  });
+
+  test("otra empresa: ve el formulario para sumar carga", async ({ page }) => {
+    await openTrip(page, ROLES_TRIP, "otherCompany");
+    await expect(
+      page.getByRole("heading", { name: "sumar carga a este viaje" })
+    ).toBeVisible();
+    await expect(page.getByLabel("qué mandás")).toBeVisible();
+  });
+});

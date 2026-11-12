@@ -845,98 +845,101 @@ export default function TripDetail() {
           </section>
         )}
 
-        <form
-          onSubmit={handleAddCargo}
-          className="mt-10 rounded-[10px] border border-line bg-white p-6"
-        >
-          <h2 className="font-display text-[17px] font-medium">
-            sumar carga a este viaje
-          </h2>
-          {/* La fecha manda aunque el estado siga OPEN: un viaje de hoy ya no
-              admite cargas, y el badge sigue mostrando el estado real. */}
-          {trip.status === "OPEN" && !trip.acceptsCargo && (
-            <p className="mt-2 text-[13px] text-ink-muted">
-              este viaje ya comenzó y no admite cargas nuevas.
-            </p>
-          )}
-          {trip.status !== "OPEN" && (
-            <p className="mt-2 text-[13px] text-ink-muted">
-              este viaje está {TRIP_STATUS_LABELS[trip.status]} y ya no admite cargas
-              nuevas.
-            </p>
-          )}
-          {trip.acceptsCargo && !user && (
-            <p className="mt-2 text-[13px] text-ink-muted">
-              para sumar carga necesitás una cuenta de empresa:{" "}
-              <Link
-                to="/ingresar?tab=register&role=company"
-                className="text-brand underline"
-              >
-                crear cuenta
-              </Link>{" "}
-              ·{" "}
-              <Link to="/ingresar" className="text-brand underline">
-                ingresar
-              </Link>
-            </p>
-          )}
-          {trip.acceptsCargo && user && user.role !== "COMPANY" && (
-            <p className="mt-2 text-[13px] text-ink-muted">
-              para sumar carga necesitás una cuenta de empresa.{" "}
-              <Link
-                to="/ingresar?tab=register&role=company"
-                className="text-brand underline"
-              >
-                crear cuenta de empresa
-              </Link>
-            </p>
-          )}
-          {canAddCargo && trip.acceptsCargo && (
-            <>
-              <div className="mt-4 grid gap-4">
-                <div>
-                  <label className="text-[13px] text-ink-soft" htmlFor="description">
-                    qué mandás
-                  </label>
-                  <input
-                    id="description"
-                    value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                    placeholder="ej: heladera, 6 sillas, 10 cajas"
-                    className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm outline-none placeholder:text-ink-muted focus:border-brand"
+        {/* el fletero no carga en su propio viaje */}
+        {trip.viewerAccess !== "CARRIER_OWNER" && (
+          <form
+            onSubmit={handleAddCargo}
+            className="mt-10 rounded-[10px] border border-line bg-white p-6"
+          >
+            <h2 className="font-display text-[17px] font-medium">
+              sumar carga a este viaje
+            </h2>
+            {/* La fecha manda aunque el estado siga OPEN: un viaje de hoy ya no
+                admite cargas, y el badge sigue mostrando el estado real. */}
+            {trip.status === "OPEN" && !trip.acceptsCargo && (
+              <p className="mt-2 text-[13px] text-ink-muted">
+                este viaje ya comenzó y no admite cargas nuevas.
+              </p>
+            )}
+            {trip.status !== "OPEN" && (
+              <p className="mt-2 text-[13px] text-ink-muted">
+                este viaje está {TRIP_STATUS_LABELS[trip.status]} y ya no admite cargas
+                nuevas.
+              </p>
+            )}
+            {trip.acceptsCargo && !user && (
+              <p className="mt-2 text-[13px] text-ink-muted">
+                para sumar carga necesitás una cuenta de empresa:{" "}
+                <Link
+                  to="/ingresar?tab=register&role=company"
+                  className="text-brand underline"
+                >
+                  crear cuenta
+                </Link>{" "}
+                ·{" "}
+                <Link to="/ingresar" className="text-brand underline">
+                  ingresar
+                </Link>
+              </p>
+            )}
+            {trip.acceptsCargo && user && user.role !== "COMPANY" && (
+              <p className="mt-2 text-[13px] text-ink-muted">
+                para sumar carga necesitás una cuenta de empresa.{" "}
+                <Link
+                  to="/ingresar?tab=register&role=company"
+                  className="text-brand underline"
+                >
+                  crear cuenta de empresa
+                </Link>
+              </p>
+            )}
+            {canAddCargo && trip.acceptsCargo && (
+              <>
+                <div className="mt-4 grid gap-4">
+                  <div>
+                    <label className="text-[13px] text-ink-soft" htmlFor="description">
+                      qué mandás
+                    </label>
+                    <input
+                      id="description"
+                      value={description}
+                      onChange={(e) => setDescription(e.target.value)}
+                      placeholder="ej: heladera, 6 sillas, 10 cajas"
+                      className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm outline-none placeholder:text-ink-muted focus:border-brand"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[13px] text-ink-soft" htmlFor="volume">
+                      volumen (m³)
+                    </label>
+                    <input
+                      id="volume"
+                      value={volume}
+                      onChange={(e) => setVolume(e.target.value)}
+                      placeholder="ej: 1.5"
+                      inputMode="decimal"
+                      className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm outline-none placeholder:text-ink-muted focus:border-brand"
+                    />
+                  </div>
+                  <PickupAddressField
+                    value={pickupAddress}
+                    onChange={setPickupAddress}
+                    error={formError ?? undefined}
                   />
                 </div>
-                <div>
-                  <label className="text-[13px] text-ink-soft" htmlFor="volume">
-                    volumen (m³)
-                  </label>
-                  <input
-                    id="volume"
-                    value={volume}
-                    onChange={(e) => setVolume(e.target.value)}
-                    placeholder="ej: 1.5"
-                    inputMode="decimal"
-                    className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm outline-none placeholder:text-ink-muted focus:border-brand"
-                  />
-                </div>
-                <PickupAddressField
-                  value={pickupAddress}
-                  onChange={setPickupAddress}
-                  error={formError ?? undefined}
-                />
-              </div>
 
-              <Button
-                type="submit"
-                size="md"
-                disabled={addCargoItem.isPending}
-                className="mt-5"
-              >
-                {addCargoItem.isPending ? "sumando…" : "sumar carga"}
-              </Button>
-            </>
-          )}
-        </form>
+                <Button
+                  type="submit"
+                  size="md"
+                  disabled={addCargoItem.isPending}
+                  className="mt-5"
+                >
+                  {addCargoItem.isPending ? "sumando…" : "sumar carga"}
+                </Button>
+              </>
+            )}
+          </form>
+        )}
 
         {stopDistanceError && (
           <Modal
