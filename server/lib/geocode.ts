@@ -171,6 +171,28 @@ export async function geocode(address: string): Promise<GeocodedPlace | null> {
   return value;
 }
 
+/**
+ * Caja de Argentina continental. Es una aproximación: deja afuera lo que el
+ * geocode resolvió en otro continente ("Córdoba" en España) y adentro algo de
+ * los países vecinos (Montevideo, Santiago), que se acepta. La usa
+ * `npm run seed:geocode` para encontrar coordenadas viejas fuera del país.
+ */
+export const ARGENTINA_BOX = {
+  minLat: -55.2,
+  maxLat: -21.7,
+  minLng: -73.7,
+  maxLng: -53.5,
+};
+
+export function isInArgentinaBox(point: LatLng): boolean {
+  return (
+    point.lat >= ARGENTINA_BOX.minLat &&
+    point.lat <= ARGENTINA_BOX.maxLat &&
+    point.lng >= ARGENTINA_BOX.minLng &&
+    point.lng <= ARGENTINA_BOX.maxLng
+  );
+}
+
 const EARTH_RADIUS_KM = 6371;
 
 /** distancia en km entre dos puntos, con la fórmula de haversine */

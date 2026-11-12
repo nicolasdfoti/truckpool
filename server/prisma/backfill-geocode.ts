@@ -1,61 +1,52 @@
-/**
- * Backfill de coordenadas para los viajes que se crearon antes de la feature
- * de geocodificación (o cuyo geocode falló en su momento).
- *
- * Uso: npm run seed:geocode
- *
- * Geocodifica contra Nominatim con el rate limit de lib/geocode.ts (1 req/s),
- * así que con muchos viajes huérfanos tarda: es un script de una sola vez.
- * Para los viajes que no se puedan resolver deja las coords en null y los
- * reporta, no inventa una posición.
- */
+// `npm run seed:geocode`: corrige coordenadas de viajes con el geocode de
+// lib/geocode.ts (solo Argentina, 1 pedido por segundo). La lógica está en
+// geocode-backfill-lib.ts. Ver HELP para el uso.
+//
+// dotenv va primero: DATABASE_URL viene de server/.env.
+import "dotenv/config";
 import { prisma } from "../lib/prisma.js";
-import { geocode, clearGeocodeCache, geocodeCacheSize } from "../lib/geocode.js";
+import { geocode, clearGeocodeCache } from "../lib/geocode.js";
+import {
+  BackfillArgsError,
+  parseBackfillArgs,
+  runGeocodeBackfill,
+} from "./geocode-backfill-lib.js";
 
-const orphans = await prisma.trip.findMany({
-  where: { OR: [{ originLat: null }, { destLat: null }] },
-  select: { id: true, origin: true, destination: true },
-  orderBy: { date: "desc" },
-});
+const HELP = `uso: npm run seed:geocode -- [modo] [--escribir]
 
-if (orphans.length === 0) {
-  console.log("no hay viajes sin coordenadas.");
-} else {
-  console.log(`geocodificando ${orphans.length} viajes (1 req/s contra Nominatim)…`);
-  let updated = 0;
-  const failed: string[] = [];
+en seco por defecto: muestra cada cambio (antes → después) y no escribe nada.
+con --escribir guarda los cambios.
 
-  for (const trip of orphans) {
-    const origin = await geocode(trip.origin);
-    const destination = await geocode(trip.destination);
-    if (!origin || !destination) {
-      failed.push(
-        `${trip.id} (${trip.origin} → ${trip.destination})${
-          !origin ? " · origen" : ""
-        }${!destination ? " · destino" : ""}`
-      );
-      continue;
-    }
-    await prisma.trip.update({
-      where: { id: trip.id },
-      data: {
-        originLat: origin.lat,
-        originLng: origin.lng,
-        destLat: destination.lat,
-        destLng: destination.lng,
-      },
-    });
-    updated += 1;
-    console.log(`  ✓ ${trip.id} ${trip.origin} → ${trip.destination}`);
+modos:
+  (sin flag)     viajes sin coordenadas de origen o destino: los geocodifica
+  --fuera-de-ar  viajes con origen, destino o salida fuera de Argentina: vuelve
+                 a geocodificar ese punto; sin match en Argentina queda en null
+
+consulta Nominatim con las direcciones de la base, 1 pedido por segundo: con
+muchos registros tarda.
+`;
+
+async function main(): Promise<void> {
+  const argv = process.argv.slice(2);
+  if (argv.includes("--help") || argv.includes("-h")) {
+    console.log(HELP);
+    return;
   }
-
-  console.log(`\n${updated} viajes con coordenadas.`);
-  if (failed.length > 0) {
-    console.log(`${failed.length} sin resolver (sus coords siguen en null):`);
-    for (const line of failed) console.log(`  ✗ ${line}`);
-  }
+  const args = parseBackfillArgs(argv);
+  await runGeocodeBackfill(args, { db: prisma, geocode, log: console.log });
 }
 
-console.log(`entradas en el cache de geocode: ${geocodeCacheSize()}`);
-clearGeocodeCache();
-await prisma.$disconnect();
+try {
+  await main();
+} catch (err) {
+  if (err instanceof BackfillArgsError) {
+    console.error(`${err.message}\n`);
+    console.error(HELP);
+    process.exitCode = 1;
+  } else {
+    throw err;
+  }
+} finally {
+  clearGeocodeCache();
+  await prisma.$disconnect();
+}

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { geocode, clearGeocodeCache } from "../lib/geocode.js";
+import { geocode, clearGeocodeCache, isInArgentinaBox } from "../lib/geocode.js";
 
 // Acá se prueba el geocoder de verdad (sin vi.mock): lo que se stubea es fetch,
 // así ningún test sale a Nominatim. La cola de 1 pedido por segundo usa
@@ -153,5 +153,21 @@ describe("geocode contra Nominatim", () => {
   it("sin resultados devuelve null", async () => {
     fetchMock.mockResolvedValue(nominatimReply([]));
     await expect(run("asdlkjasd")).resolves.toBeNull();
+  });
+});
+
+describe("isInArgentinaBox", () => {
+  // la caja de Argentina continental (lat -55,2 a -21,7, lng -73,7 a -53,5):
+  // alcanza para separar "Córdoba, Argentina" de "Córdoba, España"
+  it.each([
+    ["Córdoba, Argentina", { lat: -31.4135, lng: -64.1811 }, true],
+    ["Ushuaia", { lat: -54.8019, lng: -68.303 }, true],
+    ["La Quiaca", { lat: -22.1056, lng: -65.5969 }, true],
+    ["Posadas", { lat: -27.3671, lng: -55.8961 }, true],
+    ["Córdoba, España", { lat: 37.8846, lng: -4.776 }, false],
+    ["Madrid", { lat: 40.4168, lng: -3.7038 }, false],
+    ["Lima", { lat: -12.0464, lng: -77.0428 }, false],
+  ])("%s", (_lugar, point, adentro) => {
+    expect(isInArgentinaBox(point)).toBe(adentro);
   });
 });
