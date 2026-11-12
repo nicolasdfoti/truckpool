@@ -3138,15 +3138,29 @@ describe("GET /api/trips/geocode", () => {
     vi.mocked(geocode).mockReset();
   });
 
-  it("devuelve lat/lng cuando Nominatim resuelve la dirección", async () => {
-    vi.mocked(geocode).mockResolvedValue({ lat: -32.9442, lng: -60.6505 });
+  it("devuelve lat/lng y el lugar resuelto en texto cuando Nominatim resuelve", async () => {
+    vi.mocked(geocode).mockResolvedValue({
+      lat: -32.9442,
+      lng: -60.6505,
+      label: "Rosario, Santa Fe, Argentina",
+      city: "Rosario",
+    });
     const res = await request(app).get("/api/trips/geocode?address=Rosario, Santa Fe");
     expect(res.status).toBe(200);
+    // el label es lo que el fletero confirma en publicar; la ciudad no hace falta
     expect(res.body).toEqual({
       address: "Rosario, Santa Fe",
       lat: -32.9442,
       lng: -60.6505,
+      label: "Rosario, Santa Fe, Argentina",
     });
+  });
+
+  it("sin lugar en texto responde label null", async () => {
+    vi.mocked(geocode).mockResolvedValue({ lat: -32.9442, lng: -60.6505 });
+    const res = await request(app).get("/api/trips/geocode?address=Rosario");
+    expect(res.status).toBe(200);
+    expect(res.body.label).toBeNull();
   });
 
   it("devuelve 400 con mensaje claro si no encuentra la dirección", async () => {

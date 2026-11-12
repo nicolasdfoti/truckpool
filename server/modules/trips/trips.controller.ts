@@ -98,7 +98,9 @@ export async function getGeocode(_req: Request, res: Response) {
       "GEOCODE_NOT_FOUND"
     );
   }
-  res.json({ address, ...point });
+  // campos explícitos: el label es lo que el fletero confirma al publicar
+  // ("Córdoba, Córdoba, Argentina"); la ciudad sola no hace falta acá
+  res.json({ address, lat: point.lat, lng: point.lng, label: point.label ?? null });
 }
 
 export async function getTrip(req: Request, res: Response) {

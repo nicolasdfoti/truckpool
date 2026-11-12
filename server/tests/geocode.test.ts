@@ -55,6 +55,101 @@ describe("geocode contra Nominatim", () => {
     await expect(run("Córdoba")).resolves.toMatchObject({ lat: -31.4135, lng: -64.1811 });
   });
 
+  it("pide el desglose de la dirección (addressdetails=1)", async () => {
+    await run("Córdoba");
+    expect(requestedUrl().searchParams.get("addressdetails")).toBe("1");
+  });
+
+  it("arma el lugar en texto con ciudad, provincia y país", async () => {
+    fetchMock.mockResolvedValue(
+      nominatimReply([
+        {
+          lat: "-31.4135",
+          lon: "-64.1811",
+          address: {
+            city: "Córdoba",
+            county: "Departamento Capital",
+            state: "Córdoba",
+            postcode: "X5000",
+            country: "Argentina",
+            country_code: "ar",
+          },
+        },
+      ])
+    );
+
+    await expect(run("Córdoba")).resolves.toEqual({
+      lat: -31.4135,
+      lng: -64.1811,
+      label: "Córdoba, Córdoba, Argentina",
+      city: "Córdoba",
+    });
+  });
+
+  it("con una dirección con calle, ni la ciudad ni el texto llevan la calle", async () => {
+    fetchMock.mockResolvedValue(
+      nominatimReply([
+        {
+          lat: "-32.6986",
+          lon: "-62.1036",
+          address: {
+            house_number: "222",
+            road: "Calle Segunda",
+            suburb: "Centro",
+            town: "Marcos Juárez",
+            state: "Córdoba",
+            country: "Argentina",
+          },
+        },
+      ])
+    );
+
+    const place = await run("Calle Segunda 222, Marcos Juárez");
+
+    expect(place).toMatchObject({
+      city: "Marcos Juárez",
+      label: "Marcos Juárez, Córdoba, Argentina",
+    });
+    expect(JSON.stringify(place)).not.toMatch(/Segunda|222|Centro/);
+  });
+
+  it.each([
+    [
+      "village",
+      { village: "Las Rosas", state: "Santa Fe", country: "Argentina" },
+      "Las Rosas",
+    ],
+    [
+      "municipality",
+      { municipality: "Tigre", state: "Buenos Aires", country: "Argentina" },
+      "Tigre",
+    ],
+  ])("toma la localidad de %s si no hay city ni town", async (_key, address, city) => {
+    fetchMock.mockResolvedValue(nominatimReply([{ lat: "-32", lon: "-61", address }]));
+    await expect(run("x")).resolves.toMatchObject({ city });
+  });
+
+  it("sin localidad: city null y el texto con lo que haya", async () => {
+    fetchMock.mockResolvedValue(
+      nominatimReply([
+        { lat: "-38", lon: "-65", address: { state: "La Pampa", country: "Argentina" } },
+      ])
+    );
+    await expect(run("La Pampa")).resolves.toMatchObject({
+      city: null,
+      label: "La Pampa, Argentina",
+    });
+  });
+
+  it("sin desglose de la dirección: city y label en null", async () => {
+    await expect(run("Córdoba")).resolves.toEqual({
+      lat: -31.4135,
+      lng: -64.1811,
+      label: null,
+      city: null,
+    });
+  });
+
   it("sin resultados devuelve null", async () => {
     fetchMock.mockResolvedValue(nominatimReply([]));
     await expect(run("asdlkjasd")).resolves.toBeNull();
