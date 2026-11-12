@@ -197,6 +197,29 @@ describe("notifyUsers", () => {
       ).resolves.toBe(1);
       await vi.waitFor(() => expect(console.error).toHaveBeenCalled());
     });
+
+    // L5 (U6): el log no lleva el email de la persona ni el error entero
+    it("si el email falla loguea el tipo, el id y name/code", async () => {
+      vi.mocked(prisma.user.findMany).mockResolvedValue([user()] as never);
+      vi.mocked(prisma.notification.createMany).mockResolvedValue({ count: 1 } as never);
+
+      await notifyUsers(["u1"], {
+        ...aviso,
+        email: () => {
+          throw Object.assign(new TypeError("no se pudo armar para uno@empresa.com"), {
+            code: "BUILDER",
+          });
+        },
+      });
+      await vi.waitFor(() => expect(console.error).toHaveBeenCalled());
+
+      expect(console.error).toHaveBeenCalledWith(
+        "[notificaciones] no se pudo encolar un email",
+        { type: "CARGO_ADDED", userId: "u1", name: "TypeError", code: "BUILDER" }
+      );
+      const logged = JSON.stringify(vi.mocked(console.error).mock.calls);
+      expect(logged).not.toContain("uno@empresa.com");
+    });
   });
 });
 
