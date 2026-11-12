@@ -7,6 +7,7 @@ import bcrypt from "bcryptjs";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
 import { generateTrackingCode } from "../lib/trackingCode.js";
+import { assertNotProduction } from "./seed-guard.js";
 
 // los mismos ids y textos los usa client/tests-e2e/fixtures.ts
 const E2E_ROLES_TRIP_ID = "e2e-trip-roles";
@@ -47,9 +48,7 @@ async function deleteTrip(id: string) {
 }
 
 async function main() {
-  if (process.env.NODE_ENV === "production") {
-    throw new Error("seed-e2e no corre con NODE_ENV=production");
-  }
+  assertNotProduction("seed-e2e");
 
   const password = await bcrypt.hash("truckpool123", 10);
 

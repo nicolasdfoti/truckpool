@@ -11,7 +11,9 @@
     "lint": "eslint .",
     "test": "vitest run",
     "format": "prettier --write \"src/**/*.ts\" \"lib/**/*.ts\" \"modules/**/*.ts\" \"tests/**/*.ts\" \"prisma/**/*.ts\" \"*.{ts,json}\"",
-    "db:seed": "tsx prisma/seed.ts",
+    "db:seed": "npm run db:seed:demo",
+    "db:seed:demo": "tsx prisma/seed-demo.ts",
+    "db:seed:prod": "tsx prisma/seed-prod.ts",
     "db:seed:e2e": "tsx prisma/seed-e2e.ts",
     "seed:geocode": "tsx prisma/backfill-geocode.ts"
   },
