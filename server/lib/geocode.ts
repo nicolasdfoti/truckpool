@@ -7,7 +7,9 @@
  *    pasan por una cola serial con 1s de separación entre requests.
  * 2. User-Agent obligatorio y único: Nominatim bloquea requests sin uno, y
  *    también los que son genéricos ("curl"). Configurable por env.
- * 3. La red puede no estar. Un geocode que falla devuelve `null` y nunca
+ * 3. Solo Argentina (`countrycodes=ar`): una coordenada en otro país es peor
+ *    que ninguna, porque el viaje miente con seguridad (03/Sin coords#2).
+ * 4. La red puede no estar. Un geocode que falla devuelve `null` y nunca
  *    rompe la operación de negocio: publicar un viaje no puede fallar porque
  *    Nominatim esté caído.
  */
@@ -84,6 +86,8 @@ async function fetchLatLng(address: string): Promise<LatLng | null> {
   url.searchParams.set("q", address);
   url.searchParams.set("format", "jsonv2");
   url.searchParams.set("limit", "1");
+  // TruckPool opera en Argentina: sin esto "Córdoba" caía en España (03/Publicar#1)
+  url.searchParams.set("countrycodes", "ar");
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
