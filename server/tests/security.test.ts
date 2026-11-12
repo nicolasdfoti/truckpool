@@ -4,6 +4,7 @@ import type { Express } from "express";
 import { app } from "../src/app.js";
 import bcrypt from "bcryptjs";
 import { prisma } from "../lib/prisma.js";
+import { applyTrustProxy } from "../lib/security.js";
 
 // el test del login exitoso necesita que la contraseña "matchee"
 vi.mock("bcryptjs", () => ({
@@ -241,5 +242,81 @@ describe("rate limit en /api/auth", () => {
 
     expect((await register(limited)).status).toBe(400);
     expect((await register(limited)).status).toBe(429);
+  });
+});
+
+// L5 (02§2.6): en producción sin CORS_ORIGIN, cors() quedaba con origin: * para
+// cualquier sitio. Ahora no deja pasar a nadie (y el arranque ya aborta antes).
+describe("CORS en producción", () => {
+  afterEach(() => {
+    process.env.NODE_ENV = "test";
+    delete process.env.CORS_ORIGIN;
+  });
+
+  it("sin CORS_ORIGIN no responde Access-Control-Allow-Origin a ningún origen", async () => {
+    delete process.env.CORS_ORIGIN;
+    const prodApp = await freshApp({ NODE_ENV: "production" });
+
+    const res = await request(prodApp)
+      .options("/api/auth/login")
+      .set("Origin", "https://otro-sitio.example")
+      .set("Access-Control-Request-Method", "POST");
+
+    expect(res.headers["access-control-allow-origin"]).toBeUndefined();
+  });
+
+  it("con CORS_ORIGIN deja pasar solo ese origen", async () => {
+    const prodApp = await freshApp({
+      NODE_ENV: "production",
+      CORS_ORIGIN: "https://app.truckpool.app",
+    });
+
+    const permitido = await request(prodApp)
+      .options("/api/auth/login")
+      .set("Origin", "https://app.truckpool.app")
+      .set("Access-Control-Request-Method", "POST");
+    const otro = await request(prodApp)
+      .options("/api/auth/login")
+      .set("Origin", "https://otro-sitio.example")
+      .set("Access-Control-Request-Method", "POST");
+
+    expect(permitido.headers["access-control-allow-origin"]).toBe(
+      "https://app.truckpool.app"
+    );
+    expect(otro.headers["access-control-allow-origin"]).toBeUndefined();
+  });
+});
+
+// L5: TRUST_PROXY es obligatorio en producción (assertServerEnv). Si igual
+// falta, no se confía en X-Forwarded-For: antes asumía 1 proxy y, sin proxy
+// delante, cualquiera elegía su IP para el rate limit.
+describe("trust proxy", () => {
+  afterEach(() => {
+    process.env.NODE_ENV = "test";
+    delete process.env.TRUST_PROXY;
+  });
+
+  function trustProxyCon(env: Record<string, string | undefined>): unknown {
+    for (const [key, value] of Object.entries(env)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    const set = vi.fn();
+    applyTrustProxy({ set });
+    return set.mock.calls.find((call) => call[0] === "trust proxy")?.[1];
+  }
+
+  it("en producción sin TRUST_PROXY no confía en ningún proxy", () => {
+    expect(trustProxyCon({ NODE_ENV: "production", TRUST_PROXY: undefined })).toBe(false);
+  });
+
+  it.each([
+    ["2", 2],
+    ["1", 1],
+    ["true", 1],
+    ["0", false],
+    ["false", false],
+  ])("TRUST_PROXY=%j → %j", (valor, esperado) => {
+    expect(trustProxyCon({ NODE_ENV: "production", TRUST_PROXY: valor })).toBe(esperado);
   });
 });

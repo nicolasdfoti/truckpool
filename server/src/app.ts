@@ -36,10 +36,16 @@ function corsOptions(): cors.CorsOptions {
       exposedHeaders: EXPOSED_HEADERS,
     };
   }
-  const corsOrigin = process.env.CORS_ORIGIN?.split(",").map((s) => s.trim());
-  return corsOrigin
-    ? { origin: corsOrigin, exposedHeaders: EXPOSED_HEADERS }
-    : { exposedHeaders: EXPOSED_HEADERS };
+  const corsOrigin = (process.env.CORS_ORIGIN ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  // sin CORS_ORIGIN, cors() respondía origin: * a cualquier sitio. Ahora no deja
+  // pasar a nadie; igual el arranque aborta antes (assertServerEnv).
+  return {
+    origin: corsOrigin.length > 0 ? corsOrigin : false,
+    exposedHeaders: EXPOSED_HEADERS,
+  };
 }
 
 // va después de helmet: cors pisa los headers de access-control y los dos
