@@ -40,6 +40,7 @@ import {
   tripStatusEmail,
 } from "../../lib/email.js";
 import { notifyUsers } from "../../lib/notifications.js";
+import { RESERVATION_TTL_MS, depositHoldsReservation } from "../../lib/reservations.js";
 import {
   endOfArgentinaDay,
   isTripDateAvailable,
@@ -99,13 +100,6 @@ async function retryOnConflict<T>(run: () => Promise<T>): Promise<T> {
   }
   throw lastError;
 }
-
-/**
- * Una reserva de espacio vale 24hs: si en ese plazo la empresa no abonó la
- * seña, el lugar vuelve a estar disponible para otro. La libera el scheduler
- * (ver releaseExpiredReservations y lib/jobs.ts).
- */
-const RESERVATION_TTL_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Una seña que sostiene la reserva: cobrada (APPROVED) o por acreditarse (pago
@@ -270,9 +264,7 @@ function isExpiredReservation(
   cutoff: Date
 ): boolean {
   if (item.status !== "PENDING" || item.createdAt >= cutoff) return false;
-  const deposit = item.payments.find((p) => p.type === "DEPOSIT");
-  if (deposit?.status === "APPROVED") return false;
-  if (deposit?.status === "PENDING" && deposit.mpPaymentId !== null) return false;
+  if (depositHoldsReservation(item.payments)) return false;
   return true;
 }
 

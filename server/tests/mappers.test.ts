@@ -141,6 +141,65 @@ describe("toPaymentResponse: comisión neta derivada de lo devuelto (D7 c)", () 
   });
 });
 
+// L7: la fila de la carga dice hasta cuándo vale la reserva y cuánto falta de
+// saldo, con la misma regla que el server: el cliente no recalcula nada.
+describe("toCargoItemResponse: reserva y saldo (L7)", () => {
+  const creada = new Date("2026-12-01T12:00:00.000Z");
+  const pendiente = (payments: Record<string, unknown>[]) =>
+    ({
+      ...(carga(seña()) as unknown as Record<string, unknown>),
+      status: "PENDING",
+      createdAt: creada,
+      payments,
+    }) as unknown as Parameters<typeof toCargoItemResponse>[0];
+
+  it("PENDING sin seña: vence 24 h después de reservar", () => {
+    expect(toCargoItemResponse(pendiente([])).reservationExpiresAt).toEqual(
+      new Date("2026-12-02T12:00:00.000Z")
+    );
+  });
+
+  it("una seña rechazada o una preference sin pago en MP no sostienen la reserva", () => {
+    for (const payment of [
+      seña({ status: "REJECTED" }),
+      seña({ status: "PENDING", mpPaymentId: null }),
+    ]) {
+      expect(toCargoItemResponse(pendiente([payment])).reservationExpiresAt).toEqual(
+        new Date("2026-12-02T12:00:00.000Z")
+      );
+    }
+  });
+
+  it("con la seña cobrada o por acreditarse no vence: null", () => {
+    for (const payment of [
+      seña({ status: "APPROVED" }),
+      seña({ status: "PENDING", mpPaymentId: "mp-9" }),
+    ]) {
+      expect(toCargoItemResponse(pendiente([payment])).reservationExpiresAt).toBeNull();
+    }
+  });
+
+  it("una carga que no está PENDING no tiene reserva que venza", () => {
+    expect(toCargoItemResponse(carga(seña())).reservationExpiresAt).toBeNull();
+  });
+
+  it("sin los pagos cargados no se puede saber: null antes que una fecha falsa", () => {
+    const sinPagos = { ...pendiente([]), payments: undefined } as unknown as Parameters<
+      typeof toCargoItemResponse
+    >[0];
+    expect(toCargoItemResponse(sinPagos).reservationExpiresAt).toBeNull();
+  });
+
+  it("el saldo es el total menos la seña, a centavos", () => {
+    const item = {
+      ...(carga(seña()) as unknown as Record<string, unknown>),
+      priceShare: new Prisma.Decimal("100.01"),
+      depositAmount: new Prisma.Decimal("20.00"),
+    } as unknown as Parameters<typeof toCargoItemResponse>[0];
+    expect(toCargoItemResponse(item).balanceAmount).toBe(80.01);
+  });
+});
+
 // U7: DTOs por whitelist. Un campo nuevo en el modelo no sale en la respuesta
 // hasta que alguien lo agrega al mapper a propósito.
 describe("mappers por whitelist (U7)", () => {
@@ -152,6 +211,7 @@ describe("mappers por whitelist (U7)", () => {
     } as unknown as Parameters<typeof toCargoItemResponse>[0];
 
     expect(Object.keys(toCargoItemResponse(item)).sort()).toEqual([
+      "balanceAmount",
       "balancePayment",
       "cancellationFeeAmount",
       "cancelledAt",
@@ -166,6 +226,7 @@ describe("mappers por whitelist (U7)", () => {
       "pickupLat",
       "pickupLng",
       "priceShare",
+      "reservationExpiresAt",
       "status",
       "stopOrder",
       "trackingCode",

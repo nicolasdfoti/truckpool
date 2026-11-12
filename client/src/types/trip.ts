@@ -126,6 +126,13 @@ export type CargoItem = {
   priceShare: number;
   /** la seña que se paga para reservar el lugar */
   depositAmount: number;
+  /** lo que falta pagar cuando el viaje sale (priceShare − seña), del server */
+  balanceAmount: number;
+  /**
+   * hasta cuándo vale la reserva si no se paga la seña (ISO). null si no vence:
+   * la carga no está PENDING o la seña está cobrada o por acreditarse.
+   */
+  reservationExpiresAt: string | null;
   status: CargoItemStatus;
   createdAt: string;
   cancelledAt: string | null;

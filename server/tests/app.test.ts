@@ -2580,6 +2580,7 @@ describe("GET /api/trips/:id por rol (U7)", () => {
   ];
   const CLAVES_PARTICIPANTE = [...CLAVES_BASE, "departureAddress"].sort();
   const CLAVES_CARGA = [
+    "balanceAmount",
     "balancePayment",
     "cancellationFeeAmount",
     "cancelledAt",
@@ -2594,6 +2595,7 @@ describe("GET /api/trips/:id por rol (U7)", () => {
     "pickupLat",
     "pickupLng",
     "priceShare",
+    "reservationExpiresAt",
     "status",
     "stopOrder",
     "trackingCode",
