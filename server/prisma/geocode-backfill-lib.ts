@@ -257,6 +257,13 @@ async function backfillCargo(
   return { examined: rows.length, changed, points, cities };
 }
 
+const VIAJES = ["viaje", "viajes"] as const;
+
+/** "1 viaje", "2 viajes", "0 viajes" */
+function count(n: number, [one, many]: readonly [string, string]): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
 const MODE_TITLE: Record<BackfillMode, string> = {
   "sin-coordenadas": "viajes sin coordenadas",
   "fuera-de-ar": "viajes con coordenadas fuera de Argentina",
@@ -279,20 +286,24 @@ export async function runGeocodeBackfill(
       : await backfillTrips(args.mode, args.write, deps);
   const summary: BackfillSummary = { mode: args.mode, written: args.write, ...result };
 
-  const unit = args.mode === "cargas" ? "cargas" : "viajes";
+  const unit = args.mode === "cargas" ? (["carga", "cargas"] as const) : VIAJES;
   const what =
     args.mode === "cargas"
-      ? `${summary.cities} ciudades y ${summary.points} coordenadas en ${summary.changed} cargas`
-      : `${summary.points} puntos en ${summary.changed} viajes`;
+      ? `${count(summary.cities, ["ciudad", "ciudades"])} y ` +
+        `${count(summary.points, ["coordenada", "coordenadas"])} en ` +
+        count(summary.changed, unit)
+      : `${count(summary.points, ["punto", "puntos"])} en ${count(summary.changed, unit)}`;
+  // el sujeto es lo que cambia: "cambiaría 1 punto", "cambiarían 2 ciudades y 0…"
+  const many = (args.mode === "cargas" ? summary.cities : 0) + summary.points > 1;
   log("");
-  log(`revisados: ${summary.examined} ${unit}.`);
+  log(`revisados: ${count(summary.examined, unit)}.`);
   if (summary.changed === 0) {
     log("no hay nada para cambiar.");
   } else if (args.write) {
     log(`escrito: ${what}.`);
   } else {
     const flag = Object.entries(MODE_FLAGS).find(([, mode]) => mode === args.mode)?.[0];
-    log(`en seco: ${what} para cambiar. no se escribió nada.`);
+    log(`en seco: ${many ? "cambiarían" : "cambiaría"} ${what}. no se escribió nada.`);
     log(`para escribir: npm run seed:geocode -- ${flag ? `${flag} ` : ""}${WRITE_FLAG}`);
   }
   return summary;

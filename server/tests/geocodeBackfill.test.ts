@@ -385,3 +385,35 @@ describe("seed:geocode --cargas (pickupCity de las cargas existentes)", () => {
     expect(output).toMatch(/sigue sin ciudad/);
   });
 });
+
+describe("seed:geocode: el resumen", () => {
+  it("en singular con un registro y un punto", async () => {
+    const db = fakeDb([viaje({ id: "t-sin", destLat: null, destLng: null })]);
+    const geocode = fakeGeocode({ Rosario: ROSARIO });
+
+    const seco = await run([], db, geocode);
+    expect(seco.output).toContain("revisados: 1 viaje.");
+    expect(seco.output).toContain("en seco: cambiaría 1 punto en 1 viaje.");
+
+    const escrito = await run(["--escribir"], db, geocode);
+    expect(escrito.output).toContain("escrito: 1 punto en 1 viaje.");
+  });
+
+  it("en plural con varios", async () => {
+    const db = fakeDb(
+      [],
+      [
+        carga({ id: "ci-1", pickupLat: CORDOBA_ES.lat, pickupLng: CORDOBA_ES.lng }),
+        carga({ id: "ci-2" }),
+      ]
+    );
+    const geocode = fakeGeocode({ "Bv. Oroño 1200, Rosario": ROSARIO });
+
+    const { output } = await run(["--cargas"], db, geocode);
+
+    expect(output).toContain("revisados: 2 cargas.");
+    expect(output).toContain(
+      "en seco: cambiarían 2 ciudades y 1 coordenada en 2 cargas."
+    );
+  });
+});
