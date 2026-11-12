@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { assertServerEnv, EnvError, LEGACY_DEV_SECRET } from "../lib/env.js";
+import { assertServerEnv, EnvError, jobsStatus, LEGACY_DEV_SECRET } from "../lib/env.js";
 
 /**
  * Estos tests mueven process.env, así que guardan y restauran lo que tocan:
@@ -127,6 +127,43 @@ describe("assertServerEnv", () => {
     it("aborta con un valor desconocido", () => {
       process.env.MP_CHECKOUT_SANDBOX = "si";
       expect(() => assertServerEnv()).toThrow(/MP_CHECKOUT_SANDBOX="si" no es válido/);
+    });
+  });
+
+  describe("JOBS_ENABLED", () => {
+    afterEach(() => {
+      delete process.env.JOBS_ENABLED;
+    });
+
+    it.each([
+      ["sin definir", undefined, true],
+      ["vacío", "", true],
+      ["true", "true", true],
+      ["false", "false", false],
+    ])("arranca con JOBS_ENABLED %s", (_caso, valor, prendidos) => {
+      if (valor === undefined) delete process.env.JOBS_ENABLED;
+      else process.env.JOBS_ENABLED = valor;
+      expect(() => assertServerEnv()).not.toThrow();
+      expect(jobsStatus().enabled).toBe(prendidos);
+    });
+
+    it.each([["False"], ["0"], ['"false"'], ["false "]])(
+      "aborta con JOBS_ENABLED=%j: un typo no deja los jobs prendidos en silencio",
+      (valor) => {
+        process.env.JOBS_ENABLED = valor;
+        expect(() => assertServerEnv()).toThrow(EnvError);
+        expect(() => assertServerEnv()).toThrow(/JOBS_ENABLED=.* no es válido/);
+        expect(() => jobsStatus()).toThrow(EnvError);
+      }
+    );
+
+    it("el log de arranque dice si los jobs quedaron prendidos o apagados", () => {
+      process.env.JOBS_ENABLED = "false";
+      expect(jobsStatus().message).toBe("jobs apagados (JOBS_ENABLED=false)");
+      delete process.env.JOBS_ENABLED;
+      expect(jobsStatus().message).toBe(
+        "jobs prendidos (JOBS_ENABLED=true o sin definir)"
+      );
     });
   });
 

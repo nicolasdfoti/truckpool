@@ -104,6 +104,34 @@ export function mpOAuthTestToken(): boolean {
 }
 
 /**
+ * `JOBS_ENABLED`: si arrancan las tareas periódicas (lib/jobs.ts). Valores:
+ * "true", "false" o vacío (= prendidas, el default de siempre). Otro valor es
+ * un error: con un typo los jobs quedaban prendidos en silencio, devolviendo
+ * señas y conciliando pagos contra la base de desarrollo.
+ */
+function readJobsEnabled(): { enabled: boolean; problem?: string } {
+  const raw = process.env.JOBS_ENABLED;
+  if (raw === undefined || raw === "" || raw === "true") return { enabled: true };
+  if (raw === "false") return { enabled: false };
+  return {
+    enabled: false,
+    problem: `JOBS_ENABLED="${raw}" no es válido: usá true o false`,
+  };
+}
+
+/**
+ * Para src/index.ts, después de assertServerEnv: si arrancan los jobs y la
+ * línea que lo deja dicho en el log de arranque.
+ */
+export function jobsStatus(): { enabled: boolean; message: string } {
+  const { enabled, problem } = readJobsEnabled();
+  if (problem) throw new EnvError([problem]);
+  return enabled
+    ? { enabled, message: "jobs prendidos (JOBS_ENABLED=true o sin definir)" }
+    : { enabled, message: "jobs apagados (JOBS_ENABLED=false)" };
+}
+
+/**
  * Aborta el arranque si la configuración no alcanza para operar.
  *
  * Sólo chequea lo que rompería la seguridad o dejaría el server sin poder hacer
@@ -161,6 +189,8 @@ export function assertServerEnv(): void {
   if (mpTestToken.problem) problems.push(mpTestToken.problem);
   const checkoutSandbox = readMpCheckoutSandbox();
   if (checkoutSandbox.problem) problems.push(checkoutSandbox.problem);
+  const jobs = readJobsEnabled();
+  if (jobs.problem) problems.push(jobs.problem);
 
   if (problems.length > 0) {
     throw new EnvError(problems);
