@@ -4,8 +4,9 @@
  *
  * La idea es que el fletero no arranque a inventar un número desde cero (la
  * mayoría se sube o se cuelga mucho) y que la empresa vea precios que se
- * pueden comparar entre viajes. El fletero igual manda el precio: la
- * sugerencia solo acota el rango a ±15%.
+ * pueden comparar entre viajes. El fletero manda el precio: la sugerencia y su
+ * rango de ±15% son una referencia, y fuera del rango el client solo avisa
+ * (D5 = b). El server no rechaza ningún precio por estar lejos del sugerido.
  *
  * ---------------------------------------------------------------------------
  * CÓMO SALIERON LOS NÚMEROS (agosto 2026, valores de referencia, no una lista
@@ -56,7 +57,10 @@ export const RATE_TABLE: Record<string, Rate> = {
   Semi: TRAILER,
 };
 
-/** Cuánto puede mover el fletero el precio respecto de la sugerencia. */
+/**
+ * El ancho del rango de referencia alrededor de la sugerencia. Fuera de él el
+ * client avisa, pero no bloquea (D5 = b).
+ */
 export const PRICE_TOLERANCE = 0.15;
 
 /**
@@ -80,8 +84,13 @@ export const ROAD_DISTANCE_FACTOR = 1.25;
  */
 const FALLBACK_RATE: Rate = CAMION;
 
-/** Ningún viaje real pasa los 20.000 km: el corte evita sugerencias absurdas. */
-const MAX_DISTANCE_KM = 20_000;
+/**
+ * Con más distancia que esto (en línea recta, la `distanceKm` que se muestra)
+ * no se sugiere precio: ningún viaje dentro de Argentina se acerca, así que lo
+ * más probable es que el geocode haya resuelto mal una punta ("Córdoba" en
+ * España daba 10.412 km y un sugerido que pisaba el precio real).
+ */
+export const SUGGESTION_MAX_DISTANCE_KM = 5_000;
 
 function roundToHundreds(value: number): number {
   return Math.round(value / 100) * 100;
@@ -106,7 +115,7 @@ export function rateFor(truckType: string): Rate {
  */
 export function calculateSuggestedPrice(truckType: string, distanceKm: number): number {
   const { baseFee, perKm } = rateFor(truckType);
-  const km = Math.max(0, Math.min(distanceKm * ROAD_DISTANCE_FACTOR, MAX_DISTANCE_KM));
+  const km = Math.max(0, distanceKm * ROAD_DISTANCE_FACTOR);
   return roundToHundreds(baseFee + perKm * km);
 }
 
@@ -118,11 +127,13 @@ export type PriceRange = {
 };
 
 /**
- * El rango que puede elegir el fletero. El piso se redondea para abajo y el
+ * La sugerencia y su rango de referencia. El piso se redondea para abajo y el
  * techo para arriba, así el rango que ve en pantalla nunca es más angosto que
- * el ±15% real: nadie puede quedar afuera del rango que le mostramos.
+ * el ±15% real. `null` con más de `SUGGESTION_MAX_DISTANCE_KM`: no hay
+ * sugerencia.
  */
-export function priceRangeFor(truckType: string, distanceKm: number): PriceRange {
+export function priceRangeFor(truckType: string, distanceKm: number): PriceRange | null {
+  if (distanceKm > SUGGESTION_MAX_DISTANCE_KM) return null;
   const suggestedPrice = calculateSuggestedPrice(truckType, distanceKm);
   return {
     distanceKm,
@@ -130,15 +141,6 @@ export function priceRangeFor(truckType: string, distanceKm: number): PriceRange
     minPrice: Math.floor((suggestedPrice * (1 - PRICE_TOLERANCE)) / 100) * 100,
     maxPrice: Math.ceil((suggestedPrice * (1 + PRICE_TOLERANCE)) / 100) * 100,
   };
-}
-
-export function isPriceInRange(price: number, range: PriceRange): boolean {
-  return price >= range.minPrice && price <= range.maxPrice;
-}
-
-/** $1.234.567 — el mensaje de error va crudo a la pantalla, así que va formateado. */
-export function formatPesos(value: number): string {
-  return `$${Math.round(value).toLocaleString("es-AR")}`;
 }
 
 export type CargoPrice = {

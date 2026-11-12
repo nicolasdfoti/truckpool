@@ -3250,16 +3250,21 @@ describe("GET /api/trips/price-estimate", () => {
     expect(res.body.rate).toEqual({ baseFee: 5000, perKm: 260 });
   });
 
-  it("el rango de la API es el que valida createTrip", async () => {
+  it("el rango de la API es una referencia: adentro y afuera se publica (D5)", async () => {
     byAddress();
     const res = await request(app).get(
       "/api/trips/price-estimate?origin=Rosario&destination=Córdoba&truckType=Semi"
     );
     const { minPrice, maxPrice, suggestedPrice } = res.body;
 
-    // lo que el front ofrece como extremos tiene que ser lo que el server
-    // acepta: si no, el fletero choca contra un 400 con el slider arriba
-    for (const price of [minPrice, suggestedPrice, maxPrice]) {
+    // D5 = (b): fuera del ±15 % el client avisa, pero el server no rechaza
+    for (const price of [
+      minPrice - 100,
+      minPrice,
+      suggestedPrice,
+      maxPrice,
+      maxPrice * 2,
+    ]) {
       vi.mocked(prisma.user.findUnique).mockResolvedValue({
         verificationStatus: "VERIFIED",
         mpUserId: "mp-user-123",
@@ -3293,6 +3298,25 @@ describe("GET /api/trips/price-estimate", () => {
         })
       ).resolves.toBeDefined();
     }
+  });
+
+  it("con más de 5.000 km entre las puntas no sugiere precio (D5)", async () => {
+    // "Córdoba" resuelta en España, como pasaba antes de countrycodes=ar
+    vi.mocked(geocode).mockImplementation(async (address: string) =>
+      address === "Rosario" ? rosario : { lat: 37.8846, lng: -4.776 }
+    );
+    const res = await request(app).get(
+      "/api/trips/price-estimate?origin=Rosario&destination=Córdoba&truckType=Camión"
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.geocoded).toBe(true);
+    expect(res.body.distanceKm).toBeGreaterThan(5_000);
+    expect(res.body).toMatchObject({
+      suggestedPrice: null,
+      minPrice: null,
+      maxPrice: null,
+    });
   });
 
   it("responde 200 con geocoded false si no puede calcular la distancia", async () => {

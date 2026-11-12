@@ -4636,37 +4636,38 @@ describe("addCargoItem", () => {
       }
     });
 
-    it("rechaza un precio fuera del rango con el rango válido en el mensaje", async () => {
+    // D5 = (b): el ±15 % es solo un aviso en el client; el server publica el
+    // precio que pone el fletero aunque esté lejos del sugerido
+    it.each([
+      ["la mitad del sugerido", 90_000],
+      ["casi 5 veces el sugerido", 900_000],
+    ])("publica un precio fuera del rango sugerido: %s (D5)", async (_caso, price) => {
       vi.mocked(geocode).mockImplementation(async (address: string) =>
         address === "Rosario"
           ? { lat: -32.9442, lng: -60.6505 }
           : { lat: -31.4201, lng: -64.1888 }
       );
+      vi.mocked(prisma.trip.create).mockResolvedValue(baseTrip({ id: "t1" }) as never);
 
-      // la mitad de lo sugerido: un fletero que se cuelga con el número
-      await expect(
-        tripsService.createTrip("u1", { ...validTrip, price: 90_000 })
-      ).rejects.toMatchObject({ statusCode: 400, code: "PRICE_OUT_OF_RANGE" });
+      const trip = await tripsService.createTrip("u1", { ...validTrip, price });
 
-      // y el mensaje dice qué sí vale, para que el fletero se arregle solo
-      await expect(tripsService.createTrip("u1", { ...validTrip, price: 90_000 })).rejects.toThrow(
-        /\$158\.500/
-      );
-
-      expect(prisma.trip.create).not.toHaveBeenCalled();
+      expect(trip.id).toBe("t1");
+      const data = vi.mocked(prisma.trip.create).mock.calls[0]?.[0].data;
+      expect(Number(data?.price)).toBe(price);
     });
 
-    it("rechaza un precio inflado por encima del rango", async () => {
+    it("publica aunque las puntas estén a más de 5.000 km (sin sugerencia, D5)", async () => {
+      // Rosario → Madrid: lo que pasaba con "Córdoba" en España
       vi.mocked(geocode).mockImplementation(async (address: string) =>
         address === "Rosario"
           ? { lat: -32.9442, lng: -60.6505 }
-          : { lat: -31.4201, lng: -64.1888 }
+          : { lat: 40.4168, lng: -3.7038 }
       );
+      vi.mocked(prisma.trip.create).mockResolvedValue(baseTrip({ id: "t1" }) as never);
 
-      await expect(
-        tripsService.createTrip("u1", { ...validTrip, price: 900_000 })
-      ).rejects.toMatchObject({ code: "PRICE_OUT_OF_RANGE" });
-      expect(prisma.trip.create).not.toHaveBeenCalled();
+      await tripsService.createTrip("u1", { ...validTrip, price: 900_000 });
+
+      expect(prisma.trip.create).toHaveBeenCalled();
     });
 
     it("no bloquea la publicación si el geocode falla", async () => {

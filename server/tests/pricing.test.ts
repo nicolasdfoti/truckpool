@@ -3,8 +3,7 @@ import { Prisma } from "@prisma/client";
 import {
   calculateSuggestedPrice,
   cargoPrice,
-  formatPesos,
-  isPriceInRange,
+  SUGGESTION_MAX_DISTANCE_KM,
   priceRangeFor,
   rateFor,
   RATE_TABLE,
@@ -86,7 +85,7 @@ describe("calculateSuggestedPrice", () => {
 
 describe("priceRangeFor", () => {
   it("el rango es el sugerido ±15%", () => {
-    const range = priceRangeFor("Camión", 500);
+    const range = priceRangeFor("Camión", 500)!;
     const sugerido = calculateSuggestedPrice("Camión", 500);
     expect(range.suggestedPrice).toBe(sugerido);
     expect(PRICE_TOLERANCE).toBe(0.15);
@@ -100,27 +99,26 @@ describe("priceRangeFor", () => {
   it("el rango nunca es más angosto que el ±15% real", () => {
     // un precio apenas por debajo del -15% exacto tiene que entrar: el fletero
     // no puede quedar afuera del rango que le mostramos
-    const range = priceRangeFor("Tráiler", 137);
+    const range = priceRangeFor("Tráiler", 137)!;
     const exacto = range.suggestedPrice * (1 - PRICE_TOLERANCE);
     expect(range.minPrice).toBeLessThanOrEqual(exacto);
     const techo = range.suggestedPrice * (1 + PRICE_TOLERANCE);
     expect(range.maxPrice).toBeGreaterThanOrEqual(techo);
   });
 
-  it("armar el rango y el check usan el mismo criterio", () => {
-    const range = priceRangeFor("Chasis", 250);
-    expect(isPriceInRange(range.minPrice, range)).toBe(true);
-    expect(isPriceInRange(range.maxPrice, range)).toBe(true);
-    expect(isPriceInRange(range.suggestedPrice, range)).toBe(true);
-    expect(isPriceInRange(range.minPrice - 100, range)).toBe(false);
-    expect(isPriceInRange(range.maxPrice + 100, range)).toBe(false);
+  // D5: con más de 5.000 km (más que cualquier viaje dentro de Argentina) el
+  // geocode casi seguro resolvió mal una punta: no se sugiere nada
+  it("sin sugerencia con más de 5.000 km", () => {
+    expect(SUGGESTION_MAX_DISTANCE_KM).toBe(5_000);
+    expect(priceRangeFor("Camión", 5_000.1)).toBeNull();
+    expect(priceRangeFor("Camión", 10_412)).toBeNull();
   });
-});
 
-describe("formatPesos", () => {
-  it("usa el separador de miles argentino", () => {
-    expect(formatPesos(88_200)).toBe("$88.200");
-    expect(formatPesos(1_234_567)).toBe("$1.234.567");
+  it("hasta 5.000 km justos sí sugiere", () => {
+    expect(priceRangeFor("Camión", 5_000)).toMatchObject({
+      distanceKm: 5_000,
+      suggestedPrice: calculateSuggestedPrice("Camión", 5_000),
+    });
   });
 });
 

@@ -18,13 +18,7 @@ import { geocode, haversineKm, type LatLng } from "../../lib/geocode.js";
 import { fetchRouteGeometry } from "../../lib/routing.js";
 import { generateTrackingCode, normalizeTrackingCode } from "../../lib/trackingCode.js";
 import { point, lineString, pointToLineDistance } from "@turf/turf";
-import {
-  cargoPrice,
-  formatPesos,
-  isPriceInRange,
-  priceRangeFor,
-  rateFor,
-} from "../../lib/pricing.js";
+import { cargoPrice, priceRangeFor, rateFor } from "../../lib/pricing.js";
 import {
   departureInstant,
   hoursUntilDeparture,
@@ -389,7 +383,7 @@ export async function getTripById(id: string, viewer: { id: string } | null) {
 }
 
 /**
- * Precio sugerido + rango válido para un viaje que aún no existe.
+ * Precio sugerido + rango de referencia (±15 %) para un viaje que aún no existe.
  *
  * Los dos strings llegan al mismo `geocode()` que usa createTrip, así que si el
  * front ya geocodificó cada campo para mover el pin, esta llamada pega
@@ -419,7 +413,15 @@ export async function estimateTripPrice(input: {
   }
 
   const distanceKm = haversineKm(origin, destination);
-  return { ...base, geocoded: true, ...priceRangeFor(input.truckType, distanceKm) };
+  // más de 5.000 km: sin sugerencia (D5), pero con la distancia para que el
+  // client explique por qué
+  const range = priceRangeFor(input.truckType, distanceKm) ?? {
+    distanceKm,
+    suggestedPrice: null,
+    minPrice: null,
+    maxPrice: null,
+  };
+  return { ...base, geocoded: true, ...range };
 }
 
 /**
@@ -571,21 +573,9 @@ export async function createTrip(carrierId: string, data: CreateTripInput) {
     data.departureAddress ? geocode(data.departureAddress) : Promise.resolve(null),
   ]);
 
-  // Con las dos puntas ya geocodificadas se puede sugerir precio y acotar lo
-  // que el fletero puede pedir. Si falta alguna, no hay distancia: se deja el
-  // precio sin restringir en vez de frenar la publicación por un geocode caído.
-  if (origin && destination) {
-    const range = priceRangeFor(data.truckType, haversineKm(origin, destination));
-    if (!isPriceInRange(data.price, range)) {
-      throw new AppError(
-        `el precio está fuera del rango razonable para ${Math.round(range.distanceKm)} km: ` +
-          `tiene que estar entre ${formatPesos(range.minPrice)} y ${formatPesos(range.maxPrice)} ` +
-          `(sugerido ${formatPesos(range.suggestedPrice)}).`,
-        400,
-        "PRICE_OUT_OF_RANGE"
-      );
-    }
-  }
+  // El precio no se valida contra la sugerencia (D5 = b): la sugerencia
+  // depende de un geocode best-effort, así que es una referencia que el client
+  // muestra con un aviso fuera de ±15 %, no un límite.
 
   const trip = await prisma.trip.create({
     data: {
