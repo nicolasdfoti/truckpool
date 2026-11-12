@@ -29,7 +29,7 @@ import type { CargoItem, CargoItemStatus } from "../types/trip";
 import { TRIP_STATUS_LABELS } from "../types/trip";
 import { cancellationNote, fetchCancellationQuote } from "../lib/cancellation";
 import type { CancellationQuote } from "../lib/cancellation";
-import { formatTripDate } from "../lib/tripWhen";
+import { formatInstant, formatTripDate } from "../lib/tripWhen";
 
 const CARGO_STATUS_LABELS: Record<CargoItemStatus, string> = {
   PENDING: "pendiente",
@@ -259,9 +259,9 @@ export default function TripDetail() {
   // mientras está abierto o lleno las cargas pueden cambiar.
   const canDownloadManifest =
     isActiveViewer && (trip.status === "IN_TRANSIT" || trip.status === "COMPLETED");
-  const canConfirm = (companyId: string) =>
-    (user?.role === "CARRIER" && user.id === trip.carrierId) ||
-    (user?.role === "COMPANY" && user.id === companyId);
+  // D1 = a: confirmar es el compromiso de llevar la carga, solo del fletero
+  // (el server le responde 403 a la empresa)
+  const canConfirm = isCarrierOwner;
   // el backend solo deja retirar carga con el viaje abierto o lleno.
   const canCancelTrip = trip.status === "OPEN" || trip.status === "FULL";
 
@@ -666,6 +666,17 @@ export default function TripDetail() {
                             admin.
                           </p>
                         )}
+                        {/* D1: el fletero sabe por qué todavía no puede confirmar */}
+                        {isCarrierOwner &&
+                          item.status === "PENDING" &&
+                          !depositApproved &&
+                          !chargedBack && (
+                            <p className="text-[13px] text-ink-muted">
+                              {item.reservationExpiresAt
+                                ? `esperando la seña de la empresa (vence ${formatInstant(item.reservationExpiresAt)})`
+                                : "esperando que se acredite la seña de la empresa"}
+                            </p>
+                          )}
                         {showDepositPayButton && deposit?.status === "REJECTED" && (
                           <p className="text-[13px] text-ink-muted">
                             el pago anterior fue rechazado, probá de nuevo.
@@ -717,7 +728,7 @@ export default function TripDetail() {
                     ) : (
                       item.status === "PENDING" &&
                       depositApproved &&
-                      canConfirm(item.companyId) && (
+                      canConfirm && (
                         <Button
                           variant="primary"
                           size="sm"

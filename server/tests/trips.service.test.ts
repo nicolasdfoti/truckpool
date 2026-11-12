@@ -3988,19 +3988,21 @@ describe("addCargoItem", () => {
       expect(notifyUsers).not.toHaveBeenCalled();
     });
 
-    it("la empresa dueña de la carga puede confirmarla", async () => {
+    // D1 = a: confirmar es el compromiso del fletero de llevar la carga
+    it("la empresa dueña de la carga no puede confirmarla (D1): 403", async () => {
       (
         prisma.cargoItem.findUnique as unknown as ReturnType<typeof vi.fn>
       ).mockResolvedValue(basePaidCargoItem({ companyId: "c1" }));
       (prisma.trip.findUnique as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
         carrierId: "u1",
       });
-      (prisma.cargoItem.update as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(
-        basePaidCargoItem({ status: "CONFIRMED" })
-      );
 
-      const result = await tripsService.confirmCargoItem("t1", "i1", "c1");
-      expect(result.status).toBe("CONFIRMED");
+      await expect(tripsService.confirmCargoItem("t1", "i1", "c1")).rejects.toMatchObject({
+        statusCode: 403,
+        code: "FORBIDDEN",
+      });
+      expect(prisma.cargoItem.update).not.toHaveBeenCalled();
+      expect(notifyUsers).not.toHaveBeenCalled();
     });
 
     it("lanza FORBIDDEN para un tercero", async () => {
@@ -4053,7 +4055,7 @@ describe("addCargoItem", () => {
         carrierId: "u1",
       });
 
-      await expect(tripsService.confirmCargoItem("t1", "i1", "c1")).rejects.toMatchObject({
+      await expect(tripsService.confirmCargoItem("t1", "i1", "u1")).rejects.toMatchObject({
         statusCode: 409,
         code: "PAYMENT_REQUIRED",
       });
@@ -4072,7 +4074,7 @@ describe("addCargoItem", () => {
         carrierId: "u1",
       });
 
-      await expect(tripsService.confirmCargoItem("t1", "i1", "c1")).rejects.toMatchObject({
+      await expect(tripsService.confirmCargoItem("t1", "i1", "u1")).rejects.toMatchObject({
         statusCode: 409,
         code: "PAYMENT_REQUIRED",
       });

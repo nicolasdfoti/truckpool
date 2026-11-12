@@ -423,14 +423,39 @@ export async function handlePaymentNotification(input: PaymentNotificationInput)
     if (refunded) return { updated: true, status: refunded };
 
     const esSeña = payment.type === "DEPOSIT";
-    await notifyUsers([payment.cargoItem.companyId], {
-      type: "PAYMENT_APPROVED",
-      title: esSeña ? "acreditamos tu seña" : "acreditamos tu saldo",
-      body: esSeña
-        ? `tu seña de $${Number(payment.amount)} entró. ya podés confirmar la carga en el viaje.`
-        : `tu saldo de $${Number(payment.amount)} entró. gracias por cerrar el viaje.`,
-      tripId: payment.cargoItem.tripId,
-    });
+    const { cargoItem } = payment;
+    const avisos: Promise<number>[] = [
+      notifyUsers([cargoItem.companyId], {
+        type: "PAYMENT_APPROVED",
+        title: esSeña ? "acreditamos tu seña" : "acreditamos tu saldo",
+        // D1 = a: confirmar es del fletero, la empresa espera
+        body: esSeña
+          ? `tu seña de $${Number(payment.amount)} entró. ahora el fletero tiene que confirmar tu carga; te avisamos cuando lo haga.`
+          : `tu saldo de $${Number(payment.amount)} entró. gracias por cerrar el viaje.`,
+        tripId: cargoItem.tripId,
+      }),
+    ];
+    // D1: el fletero se entera de que tiene una carga con seña para confirmar.
+    // Las que no confirme se cancelan al salir (D3), con la seña devuelta.
+    if (esSeña) {
+      avisos.push(
+        notifyUsers([cargoItem.trip.carrierId], {
+          type: "PAYMENT_APPROVED",
+          title: `${cargoItem.company.name} pagó la seña: ${cargoItem.trip.origin} → ${cargoItem.trip.destination}`,
+          body: `entró la seña de ${cargoItem.description.toLowerCase()} (${cargoItem.volume} m³). confirmá la carga antes de salir: si salís sin confirmarla, se cancela y le devolvemos la seña a la empresa.`,
+          tripId: cargoItem.tripId,
+        })
+      );
+    }
+    // best-effort: el pago ya quedó asentado. Un aviso que falla no se
+    // reintenta (el webhook repetido no vuelve a ganar el CAS) ni frena el otro.
+    for (const aviso of await Promise.allSettled(avisos)) {
+      if (aviso.status === "rejected") {
+        console.error("[payments] falló el aviso de un pago acreditado", {
+          name: aviso.reason instanceof Error ? aviso.reason.name : typeof aviso.reason,
+        });
+      }
+    }
   }
 
   return { updated: true, status: state };
@@ -733,7 +758,8 @@ async function releaseCargoAfterExternalRefund(
   }
 }
 
-// companyId y el viaje se piden para poder avisarle a la empresa qué se acreditó.
+// companyId y el viaje se piden para poder avisarle a la empresa qué se acreditó
+// y, si es la seña, al fletero que tiene una carga para confirmar (D1).
 // El estado de la carga no: se relee después del CAS (ver refundIfCancelled).
 const LOOKUP = {
   include: {
@@ -741,8 +767,17 @@ const LOOKUP = {
       select: {
         companyId: true,
         tripId: true,
+        // para el aviso al fletero cuando entra la seña (D1)
+        description: true,
+        volume: true,
+        company: { select: { name: true } },
         trip: {
-          select: { carrier: { select: { mpUserId: true, mpAccessToken: true } } },
+          select: {
+            carrierId: true,
+            origin: true,
+            destination: true,
+            carrier: { select: { mpUserId: true, mpAccessToken: true } },
+          },
         },
       },
     },

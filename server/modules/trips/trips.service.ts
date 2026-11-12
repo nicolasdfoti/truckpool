@@ -1107,10 +1107,14 @@ export async function confirmCargoItem(
     where: { id: tripId },
     select: { carrierId: true },
   });
-  const isCarrier = trip?.carrierId === userId;
-  const isCompany = item.companyId === userId;
-  if (!isCarrier && !isCompany) {
-    throw new AppError("no tenés permisos para confirmar esta carga", 403, "FORBIDDEN");
+  // D1 = a: confirmar es el compromiso de llevar la carga, así que es solo del
+  // fletero del viaje. La empresa dueña tampoco puede (antes sí).
+  if (trip?.carrierId !== userId) {
+    throw new AppError(
+      "solo el fletero del viaje puede confirmar la carga",
+      403,
+      "FORBIDDEN"
+    );
   }
 
   // lo que confirma la carga es la seña, no cualquier pago: el saldo todavía ni
@@ -1135,8 +1139,8 @@ export async function confirmCargoItem(
       where: { id: cargoItemId },
       include: { payments: true },
     });
-    // la confirmó otro (el transportista y la empresa a la vez): ya está, y el
-    // aviso lo manda el que ganó
+    // la confirmó otro pedido del fletero (doble clic, dos pestañas): ya está,
+    // y el aviso lo manda el que ganó
     if (current?.status === "CONFIRMED") return toCargoItemResponse(current);
     throw new CargoItemCancelledError();
   }

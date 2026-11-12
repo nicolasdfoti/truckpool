@@ -50,6 +50,7 @@ vi.mock("../lib/mercadopago", async (importOriginal) => ({
 }));
 
 const companyUserId = "c1";
+const carrierUserId = "u-flete";
 const otherCompanyId = "c9";
 
 // en la base el token nunca está en claro: el mock usa el mismo sobre que
@@ -98,8 +99,14 @@ function basePayment(overrides: Record<string, unknown> = {}) {
       status: "PENDING",
       companyId: companyUserId,
       tripId: "t1",
+      description: "Heladera",
+      volume: 4,
+      company: { name: "Comercial Norte" },
       trip: {
         platformFeePercent: 10,
+        carrierId: carrierUserId,
+        origin: "Rosario",
+        destination: "Mendoza",
         carrier: { mpUserId: "mp-user-123", mpAccessToken: MP_TOKEN_STORED },
       },
     },
@@ -502,6 +509,48 @@ describe("handlePaymentNotification", () => {
         tripId: "t1",
       })
     );
+  });
+
+  // D1 = a: confirmar es del fletero. La empresa no recibe «ya podés
+  // confirmar»; el fletero se entera de que tiene una carga para confirmar.
+  it("seña acreditada: la empresa no lee que puede confirmar y el fletero recibe el aviso", async () => {
+    await handlePaymentNotification(notificacion);
+
+    const aEmpresa = vi
+      .mocked(notifyUsers)
+      .mock.calls.find(([ids]) => ids.includes(companyUserId));
+    expect(aEmpresa?.[1].body).not.toMatch(/podés confirmar/);
+    expect(aEmpresa?.[1].body).toContain("el fletero tiene que confirmar tu carga");
+
+    expect(notifyUsers).toHaveBeenCalledWith(
+      [carrierUserId],
+      expect.objectContaining({
+        type: "PAYMENT_APPROVED",
+        title: "Comercial Norte pagó la seña: Rosario → Mendoza",
+        body: expect.stringContaining("confirmá la carga antes de salir"),
+        tripId: "t1",
+      })
+    );
+  });
+
+  it("si falla el aviso a la empresa, el del fletero sale igual y el webhook no se cae", async () => {
+    vi.mocked(notifyUsers).mockRejectedValueOnce(new Error("db caída"));
+
+    const result = await handlePaymentNotification(notificacion);
+
+    expect(result).toEqual({ updated: true, status: "APPROVED" });
+    expect(notifyUsers).toHaveBeenCalledWith([carrierUserId], expect.anything());
+  });
+
+  it("saldo acreditado: el fletero no recibe el aviso de confirmar", async () => {
+    vi.mocked(prisma.payment.findFirst).mockResolvedValue(
+      basePayment({ type: "BALANCE", amount: new Prisma.Decimal("400.00") }) as never
+    );
+    mpDice("APPROVED", "pay1", { amount: 400, currencyId: "ARS" });
+
+    await handlePaymentNotification(notificacion);
+
+    expect(notifyUsers).not.toHaveBeenCalledWith([carrierUserId], expect.anything());
   });
 
   it("avisa del saldo con su propio texto cuando se acredita el saldo", async () => {
