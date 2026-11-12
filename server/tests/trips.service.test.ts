@@ -304,11 +304,14 @@ describe("listOpenTrips", () => {
     );
   });
 
-  it("traduce dateFrom/dateTo a un rango UTC del día completo y conserva el corte", async () => {
+  // el día de los filtros es el día argentino, como el de los viajes: desde las
+  // 00:00 ART del primero hasta el último milisegundo ART del último
+  it("traduce dateFrom/dateTo a días completos en Argentina y conserva el corte", async () => {
     await tripsService.listOpenTrips(
       {
-        dateFrom: new Date("2026-10-01T00:00:00.000Z"),
-        dateTo: new Date("2026-10-31T00:00:00.000Z"),
+        // como llegan del schema: el mediodía ART de cada día
+        dateFrom: new Date("2026-10-01T15:00:00.000Z"),
+        dateTo: new Date("2026-10-31T15:00:00.000Z"),
       },
       AHORA
     );
@@ -320,8 +323,8 @@ describe("listOpenTrips", () => {
           carrier: CARRIER_CAN_CHARGE,
           date: {
             gt: CORTE_ARGENTINA,
-            gte: new Date("2026-10-01T00:00:00.000Z"),
-            lte: new Date("2026-10-31T23:59:59.999Z"),
+            gte: new Date("2026-10-01T03:00:00.000Z"),
+            lte: new Date("2026-11-01T02:59:59.999Z"),
           },
         },
       })

@@ -411,7 +411,8 @@ describe("GET /api/trips con filtros", () => {
     );
   });
 
-  it("traduce el rango de fechas", async () => {
+  // el client manda días sueltos (input type=date): son días argentinos
+  it("traduce el rango de fechas a días completos en Argentina", async () => {
     vi.mocked(prisma.trip.findMany).mockResolvedValue([]);
 
     const res = await request(app).get(
@@ -426,8 +427,8 @@ describe("GET /api/trips con filtros", () => {
           carrier: CARRIER_CAN_CHARGE,
           date: {
             gt: expect.any(Date),
-            gte: new Date("2026-10-01T00:00:00.000Z"),
-            lte: new Date("2026-10-31T23:59:59.999Z"),
+            gte: new Date("2026-10-01T03:00:00.000Z"),
+            lte: new Date("2026-11-01T02:59:59.999Z"),
           },
         },
       })

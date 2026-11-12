@@ -1,9 +1,11 @@
 import { describe, it, expect } from "vitest";
 import {
   ARGENTINA_TIME_ZONE,
+  argentinaNoonOfDay,
   calendarDayKey,
   endOfArgentinaDay,
   isTripDateAvailable,
+  startOfArgentinaDay,
 } from "../lib/dates.js";
 
 /**
@@ -98,5 +100,38 @@ describe("isTripDateAvailable", () => {
   it("acepta la fecha como string ISO, como la manda el cliente", () => {
     expect(isTripDateAvailable("2026-10-01T15:00:00.000Z", HOY_9AM_ART)).toBe(true);
     expect(isTripDateAvailable("2026-09-30T15:00:00.000Z", HOY_9AM_ART)).toBe(false);
+  });
+});
+
+// Una fecha sin hora ("YYYY-MM-DD") que manda el client es un día calendario
+// argentino: se guarda al mediodía ART, como los viajes que publica el fletero.
+// new Date("2026-11-13") daba medianoche UTC = 12/11 21:00 ART (un día antes).
+describe("argentinaNoonOfDay", () => {
+  it("devuelve las 12:00 ART del día", () => {
+    expect(argentinaNoonOfDay("2026-11-13")).toEqual(AR("2026-11-13T15:00:00.000Z"));
+    expect(calendarDayKey(argentinaNoonOfDay("2026-11-13")!)).toBe("2026-11-13");
+  });
+
+  it.each([
+    "2026-02-30",
+    "2026-13-01",
+    "2026-11-1",
+    "13/11/2026",
+    "2026-11-13T10:00:00Z",
+    "",
+  ])("no acepta %j", (value) => {
+    expect(argentinaNoonOfDay(value)).toBeNull();
+  });
+});
+
+describe("startOfArgentinaDay", () => {
+  it("es la medianoche ART del día del instante", () => {
+    expect(startOfArgentinaDay(viajeDe("2026-11-13"))).toEqual(
+      AR("2026-11-13T03:00:00.000Z")
+    );
+    // 13/11 01:00Z todavía es el 12/11 en Argentina
+    expect(startOfArgentinaDay(AR("2026-11-13T01:00:00.000Z"))).toEqual(
+      AR("2026-11-12T03:00:00.000Z")
+    );
   });
 });
