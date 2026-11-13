@@ -1,0 +1,120 @@
+/* Dirección B — Remito. El papel de la carga: hojas con campos en caja (como una carta de
+   porte), el piso del camión visto desde arriba con una celda por m³ y la plata como un
+   talonario de cupones. Tinta azul de carbónico en lugar del navy. */
+:root {
+  --desk: #f2f4f5;
+  --sheet: #ffffff;
+  --carbon: #2a4793;
+  --carbon-deep: #1d3370;
+  --carbon-tint: #e4eaf6;
+  --ink: #1b1f27;
+  --ink-soft: #535b68;
+  --rule: #c3cad3;
+  --field: #6a7280;
+  --orange: #f58220;
+  --orange-hover: #e17516;
+  --orange-ink: #3a1606;
+  --sello: #1f7a48;
+  --sello-bg: #e2f1e8;
+  --danger: #b3261e;
+  --wait-bg: #eceef1;
+
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 20px; --s6: 32px; --s7: 48px; --s8: 72px;
+  --font: "Public Sans", system-ui, sans-serif;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--desk); color: var(--ink); font: 400 15px/1.5 var(--font); font-variant-numeric: tabular-nums; }
+a { color: var(--carbon); text-underline-offset: 3px; }
+:focus-visible { outline: 2px solid #c25f0d; outline-offset: 2px; }
+h1, h2, h3 { margin: 0; font-weight: 800; letter-spacing: -0.02em; }
+h1 { font-size: clamp(36px, 5.4vw, 64px); line-height: 1.02; }
+h2 { font-size: 22px; line-height: 1.2; letter-spacing: -0.01em; }
+p { margin: 0; }
+.wrap { max-width: 1180px; margin: 0 auto; padding: 0 var(--s6); }
+@media (max-width: 640px) { .wrap { padding: 0 var(--s4); } }
+
+/* header: membrete */
+.top { background: var(--sheet); border-bottom: 2px solid var(--carbon); }
+.top .wrap { display: flex; align-items: center; gap: var(--s6); height: 64px; }
+.logo { font-weight: 800; font-size: 20px; letter-spacing: -0.02em; color: var(--carbon); text-decoration: none; display: flex; align-items: center; gap: var(--s2); }
+.nav { display: flex; gap: var(--s5); flex: 1; }
+.nav a { color: var(--ink); text-decoration: none; font-weight: 500; }
+.nav a[aria-current] { color: var(--carbon); text-decoration: underline; text-decoration-thickness: 2px; }
+.top-actions { display: flex; gap: var(--s2); align-items: center; }
+.menu-btn { display: none; }
+@media (max-width: 860px) {
+  .nav, .hide-sm { display: none !important; }
+  .top .wrap { justify-content: space-between; }
+  .menu-btn { display: grid; place-items: center; width: 44px; height: 44px; border: 1.5px solid var(--rule); border-radius: 6px; background: none; }
+}
+
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: var(--s2); min-height: 44px; padding: 0 var(--s5); border-radius: 6px; font: 600 15px var(--font); text-decoration: none; border: 1.5px solid transparent; cursor: pointer; white-space: nowrap; }
+.btn-next { background: var(--orange); color: var(--orange-ink); font-weight: 700; }
+.btn-solid { background: var(--carbon); color: #fff; }
+.btn-line { border-color: var(--carbon); color: var(--carbon); background: var(--sheet); }
+.btn-danger { border-color: var(--danger); color: var(--danger); background: var(--sheet); }
+.btn-quiet { color: var(--carbon); padding: 0 var(--s3); }
+.btn-wide { width: 100%; }
+
+/* hoja y campos en caja */
+.sheet { background: var(--sheet); border: 1px solid var(--rule); border-radius: 3px; box-shadow: 0 1px 0 #dfe3e7, 0 2px 0 #eef0f2; }
+.fields { display: grid; grid-template-columns: repeat(var(--cols, 3), 1fr); border-top: 1px solid var(--rule); border-left: 1px solid var(--rule); }
+.fields > div { border-right: 1px solid var(--rule); border-bottom: 1px solid var(--rule); padding: var(--s2) var(--s3) var(--s3); min-width: 0; }
+.fields dt, .lbl { font-size: 12px; font-weight: 500; color: var(--carbon); }
+.fields dd { margin: 2px 0 0; font-weight: 600; font-size: 16px; }
+@media (max-width: 640px) { .fields { --cols: 2 !important; } }
+
+/* sello de estado */
+.chip { display: inline-flex; align-items: center; height: 26px; padding: 0 10px; border-radius: 3px; font-size: 13px; font-weight: 600; border: 1.5px solid currentColor; white-space: nowrap; }
+.chip-wait { color: var(--ink-soft); background: var(--wait-bg); border-color: transparent; }
+.chip-ok { color: var(--sello); background: var(--sello-bg); }
+.chip-open { color: var(--carbon); background: var(--carbon-tint); border-color: transparent; }
+
+/* piso del camión, una celda por m³ */
+.floor { display: flex; align-items: stretch; gap: 6px; }
+.floor .bed { flex: 1; display: grid; grid-template-columns: repeat(15, 1fr); grid-template-rows: repeat(2, auto); grid-auto-flow: column; gap: 3px; padding: 6px; border: 2px solid var(--carbon); border-radius: 2px; }
+.floor .bed span { aspect-ratio: 1; border: 1.5px dashed #a9b3c0; border-radius: 1px; }
+.floor .bed .m { background: var(--carbon); border: 0; }
+.floor .bed .o { border: 0; background: repeating-linear-gradient(-45deg, var(--carbon) 0 1.5px, var(--carbon-tint) 1.5px 5px); }
+.floor .cab { width: 9%; border: 2px solid var(--carbon); border-radius: 2px 14px 14px 2px; background: linear-gradient(90deg, transparent 55%, var(--carbon-tint) 55%); }
+.floor-key { display: flex; flex-wrap: wrap; gap: var(--s2) var(--s5); margin-top: var(--s3); font-size: 14px; color: var(--ink-soft); }
+.floor-key i { display: inline-block; width: 14px; height: 14px; vertical-align: -2px; margin-right: 6px; border-radius: 1px; }
+.k-m { background: var(--carbon); }
+.k-o { background: repeating-linear-gradient(-45deg, var(--carbon) 0 1.5px, var(--carbon-tint) 1.5px 5px); }
+.k-f { border: 1.5px dashed #a9b3c0; }
+
+/* talonario: cada paso de la plata es un cupón */
+.stubs { display: grid; grid-template-columns: repeat(5, 1fr); list-style: none; margin: 0; padding: 0; }
+.stub { position: relative; padding: var(--s4); background: var(--sheet); min-height: 150px; }
+.stub + .stub { border-left: 2px dashed var(--rule); }
+.stub + .stub::before, .stub + .stub::after { content: ""; position: absolute; left: -9px; width: 16px; height: 16px; border-radius: 50%; background: var(--desk); }
+.stub + .stub::before { top: -8px; } .stub + .stub::after { bottom: -8px; }
+.stub .lbl { display: block; }
+.stub .what { font-weight: 800; font-size: 18px; letter-spacing: -0.01em; margin-top: 2px; }
+.stub .amount { font-weight: 700; font-size: 20px; margin-top: var(--s2); }
+.stub .when { color: var(--ink-soft); font-size: 14px; margin-top: var(--s1); }
+.stamp { position: absolute; right: 12px; top: 12px; transform: rotate(-8deg); border: 2px solid var(--sello); color: var(--sello); border-radius: 4px; padding: 0 6px; font-weight: 800; font-size: 13px; line-height: 22px; opacity: 0.9; }
+.stub.now { box-shadow: inset 0 0 0 2px var(--carbon); }
+.stub.later .what, .stub.later .amount { color: var(--ink-soft); }
+@media (max-width: 860px) {
+  .stubs { grid-template-columns: 1fr; }
+  .stub { min-height: 0; }
+  .stub + .stub { border-left: 0; border-top: 2px dashed var(--rule); }
+  .stub + .stub::before { top: -9px; left: -8px; } .stub + .stub::after { top: -9px; bottom: auto; left: auto; right: -8px; }
+}
+.stubs.vertical { grid-template-columns: 1fr; }
+.stubs.vertical .stub { min-height: 0; padding: var(--s3) var(--s4); display: grid; grid-template-columns: 1fr auto; column-gap: var(--s3); }
+.stubs.vertical .stub + .stub { border-left: 0; border-top: 2px dashed var(--rule); }
+.stubs.vertical .stub + .stub::before { top: -9px; left: -8px; } .stubs.vertical .stub + .stub::after { top: -9px; bottom: auto; left: auto; right: -8px; }
+.stubs.vertical .stub > :not(.amount):not(.stamp) { grid-column: 1; }
+.stubs.vertical .amount { grid-column: 2; grid-row: 1 / span 3; align-self: center; margin: 0; }
+.stubs.vertical .stamp { position: static; transform: rotate(-6deg); grid-column: 2; grid-row: 1 / span 3; align-self: center; }
+
+.footer { border-top: 2px solid var(--carbon); background: var(--sheet); padding: var(--s6) 0; margin-top: var(--s8); font-size: 14px; color: var(--ink-soft); }
+.footer .wrap { display: flex; flex-wrap: wrap; gap: var(--s5); justify-content: space-between; align-items: center; }
+.footer nav { display: flex; gap: var(--s5); flex-wrap: wrap; }
+.footer nav a { color: var(--ink); text-decoration: none; padding: 12px 0; }
+
+/* el ³ de Public Sans es muy grande en tamaños de título */
+.cube { font-size: 0.55em; vertical-align: 0.7em; line-height: 0; }

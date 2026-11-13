@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="es-AR">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Córdoba → Mendoza — B · Remito · Detalle (empresa)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="estilos.css" />
+<style>
+  .back { display: inline-flex; align-items: center; min-height: 44px; margin-top: var(--s4); font-weight: 600; text-decoration: none; }
+  .title-row { display: flex; align-items: center; gap: var(--s4); flex-wrap: wrap; margin: var(--s2) 0 var(--s5); }
+  .title-row h1 { font-size: clamp(32px, 4.4vw, 52px); }
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: var(--s6); align-items: start; }
+  .part { padding: var(--s5); }
+  .part + .part { border-top: 1px solid var(--rule); }
+  .part-head { display: flex; justify-content: space-between; align-items: baseline; gap: var(--s3); margin-bottom: var(--s4); flex-wrap: wrap; }
+  .part-head p { color: var(--ink-soft); font-size: 14px; }
+  .main .fields { --cols: 4; border-left: 0; border-top: 0; }
+  .main .fields > div:nth-child(4n) { border-right: 0; }
+  .state { display: grid; grid-template-columns: repeat(4, 1fr); border-bottom: 1px solid var(--rule); }
+  .state span { padding: var(--s2) var(--s3); font-size: 14px; color: var(--ink-soft); border-right: 1px solid var(--rule); }
+  .state span:last-child { border-right: 0; }
+  .state .on { background: var(--carbon-tint); color: var(--carbon-deep); font-weight: 700; }
+  .plan-row { display: grid; grid-template-columns: 1fr auto; gap: var(--s6); align-items: center; }
+  .free-big b { display: block; font-size: 44px; font-weight: 800; letter-spacing: -0.03em; line-height: 1; color: var(--carbon); }
+  .free-big span { color: var(--ink-soft); font-size: 14px; }
+  .map { display: block; width: 100%; height: auto; border: 1px solid var(--rule); }
+  table.stops { width: 100%; border-collapse: collapse; margin-top: var(--s4); }
+  .stops th { text-align: left; font-size: 12px; font-weight: 500; color: var(--carbon); padding: var(--s1) var(--s2); border-bottom: 2px solid var(--carbon); }
+  .stops td { padding: var(--s3) var(--s2); border-bottom: 1px solid var(--rule); }
+  .stops tr:last-child td { border-bottom: 0; }
+  .stops .n { width: 36px; font-weight: 800; color: var(--carbon); }
+  .stops .mine td { background: var(--carbon-tint); }
+  .msg { padding: var(--s3) var(--s4); border-left: 3px solid var(--carbon); background: var(--desk); max-width: 56ch; }
+  .msg .who { font-size: 12px; font-weight: 500; color: var(--carbon); }
+  .composer { display: flex; gap: var(--s3); align-items: end; margin-top: var(--s4); }
+  .composer label { flex: 1; display: grid; gap: 4px; font-size: 12px; font-weight: 500; color: var(--carbon); }
+  textarea { font: inherit; font-size: 15px; min-height: 44px; padding: 10px 12px; border: 1.5px solid var(--field); border-radius: 3px; resize: vertical; color: var(--ink); }
+
+  .panel { position: sticky; top: var(--s5); }
+  .panel-head { padding: var(--s3) var(--s4); display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid var(--carbon); }
+  .panel-head h2 { font-size: 20px; }
+  .panel .fields { --cols: 2; border-left: 0; border-top: 0; }
+  .panel .fields > div:nth-child(2n) { border-right: 0; }
+  .panel .fields .wide { grid-column: 1 / -1; border-right: 0; }
+  .panel .stubs { border-top: 0; }
+  .panel .stub { background: transparent; }
+  .panel .stub .btn { grid-column: 1 / -1; margin-top: var(--s3); }
+  .panel .stub .stub-note { grid-column: 1 / -1; font-size: 13px; color: var(--ink-soft); margin-top: var(--s2); }
+  .total { display: flex; justify-content: space-between; padding: var(--s3) var(--s4); border-top: 2px solid var(--carbon); font-weight: 800; font-size: 17px; }
+  .panel .actions { padding: 0 var(--s4) var(--s4); }
+  .bar { display: none; }
+
+  @media (max-width: 960px) {
+    .layout { grid-template-columns: 1fr; }
+    .panel { position: static; order: -1; }
+    .panel .stub .btn, .panel .stub .stub-note { display: none; }
+    .bar { display: flex; position: fixed; inset: auto 0 0 0; z-index: 10; background: var(--sheet); border-top: 2px solid var(--carbon); padding: var(--s3) var(--s4) calc(var(--s3) + env(safe-area-inset-bottom)); gap: var(--s3); align-items: center; }
+    .bar .t { flex: 1; font-size: 13px; color: var(--ink-soft); line-height: 1.3; }
+    .bar .t strong { display: block; color: var(--ink); font-size: 15px; }
+    body { padding-bottom: 84px; }
+    .footer { margin-top: var(--s7); }
+  }
+  @media (max-width: 640px) {
+    .main .fields > div:nth-child(4n) { border-right: 1px solid var(--rule); }
+    .main .fields > div:nth-child(2n) { border-right: 0; }
+    .part { padding: var(--s4); }
+    .plan-row { grid-template-columns: 1fr; gap: var(--s3); }
+    .free-big { display: flex; align-items: baseline; gap: var(--s2); }
+    .free-big b { font-size: 34px; }
+    .state span { font-size: 12px; padding: var(--s2); }
+    .composer { flex-direction: column; align-items: stretch; }
+    .stops .hide-xs { display: none; }
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <a class="logo" href="#"><svg width="26" height="20" viewBox="0 0 26 20" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="1" y="2" width="15" height="12"/><path d="M16 6h5l4 4v4h-9"/><circle cx="6" cy="16" r="2.4" fill="#fff"/><circle cx="20" cy="16" r="2.4" fill="#fff"/></svg>TruckPool</a>
+    <nav class="nav" aria-label="principal"><a href="#" aria-current="page">Viajes</a><a href="#">Fleteros</a><a href="#">Rastrear un envío</a><a href="#">Nosotros</a></nav>
+    <div class="top-actions">
+      <a class="btn btn-quiet hide-sm" href="#">Comercial Norte</a>
+      <button class="menu-btn" aria-label="abrir menú"><svg width="20" height="20" viewBox="0 0 20 20" stroke="currentColor" stroke-width="2"><path d="M3 5h14M3 10h14M3 15h14"/></svg></button>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+  <a class="back" href="#">← Viajes con lugar libre</a>
+  <div class="title-row"><h1>Córdoba → Mendoza</h1><span class="chip chip-open">abierto</span></div>
+
+  <div class="layout">
+    <div class="main sheet">
+      <dl class="fields" style="margin:0">
+        <div><dt>Sale</dt><dd>dom 22 nov, 08:00</dd></div>
+        <div><dt>Camión</dt><dd>Semi, 30 m³</dd></div>
+        <div><dt>Precio</dt><dd>$ 100 por m³</dd></div>
+        <div><dt>Fletero</dt><dd><a href="#">Transportes Flete</a></dd></div>
+      </dl>
+      <div class="state" aria-label="estado del viaje: abierto"><span class="on">Abierto</span><span>Lleno</span><span>En camino</span><span>Completado</span></div>
+
+      <section class="part">
+        <div class="part-head"><h2>Piso del camión</h2><p>4 cargas, 14 m³ de 30</p></div>
+        <div class="plan-row">
+          <div>
+            <div class="floor" role="img" aria-label="piso del camión: tu carga 4 m³, otras cargas 10 m³, 16 m³ libres">
+              <div class="bed" data-m="4" data-o="10"></div><div class="cab"></div>
+            </div>
+            <div class="floor-key"><span><i class="k-m"></i>Tu carga, 4 m³</span><span><i class="k-o"></i>Otras cargas, 10 m³</span><span><i class="k-f"></i>Libre</span></div>
+          </div>
+          <div class="free-big"><b>16 m<span class="cube">3</span></b><span>libres</span></div>
+        </div>
+      </section>
+
+      <section class="part">
+        <div class="part-head"><h2>Recorrido</h2><p>El número es el orden de retiro, igual en el mapa.</p></div>
+        <svg class="map" viewBox="0 0 640 240" role="img" aria-label="mapa: 4 retiros en Córdoba y destino en Mendoza">
+          <rect width="640" height="240" fill="#f2f4f5"/>
+          <g stroke="#dde2e8" stroke-width="6" fill="none"><path d="M0 70 C160 90 300 40 640 60"/><path d="M120 0 C140 100 100 180 130 240"/><path d="M0 190 C200 170 380 220 640 180"/><path d="M420 0 C400 90 460 160 430 240"/></g>
+          <path d="M150 90 L205 70 L250 118 L215 160 L470 195 L560 205" stroke="#2a4793" stroke-width="3" fill="none"/>
+          <g font-family="Public Sans" font-weight="800" font-size="15" text-anchor="middle">
+            <rect x="136" y="76" width="28" height="28" fill="#2a4793"/><text x="150" y="95" fill="#fff">1</text>
+            <rect x="191" y="56" width="28" height="28" fill="#fff" stroke="#2a4793" stroke-width="2"/><text x="205" y="75" fill="#2a4793">2</text>
+            <rect x="236" y="104" width="28" height="28" fill="#fff" stroke="#2a4793" stroke-width="2"/><text x="250" y="123" fill="#2a4793">3</text>
+            <rect x="201" y="146" width="28" height="28" fill="#fff" stroke="#2a4793" stroke-width="2"/><text x="215" y="165" fill="#2a4793">4</text>
+          </g>
+          <rect x="550" y="195" width="20" height="20" fill="#1b1f27" transform="rotate(45 560 205)"/>
+          <text x="560" y="236" text-anchor="middle" font-family="Public Sans" font-weight="600" font-size="20" fill="#1b1f27">Mendoza</text>
+          <text x="210" y="32" text-anchor="middle" font-family="Public Sans" font-weight="600" font-size="20" fill="#1b1f27">Córdoba</text>
+        </svg>
+        <table class="stops">
+          <thead><tr><th>N°</th><th>Retiro</th><th class="hide-xs">Carga</th><th>Estado</th></tr></thead>
+          <tbody>
+            <tr class="mine"><td class="n">1</td><td><strong>Bv. San Juan 700, Córdoba</strong><br><span style="color:var(--ink-soft);font-size:14px">Tu carga, 4 m³</span></td><td class="hide-xs">Repuestos de maquinaria</td><td><span class="chip chip-wait">pendiente</span></td></tr>
+            <tr><td class="n">2</td><td>Otra carga, 5 m³<br><span style="color:var(--ink-soft);font-size:14px">retiro en Córdoba</span></td><td class="hide-xs">—</td><td></td></tr>
+            <tr><td class="n">3</td><td>Otra carga, 3 m³<br><span style="color:var(--ink-soft);font-size:14px">retiro en Córdoba</span></td><td class="hide-xs">—</td><td></td></tr>
+            <tr><td class="n">4</td><td>Otra carga, 2 m³<br><span style="color:var(--ink-soft);font-size:14px">retiro en Córdoba</span></td><td class="hide-xs">—</td><td></td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="part">
+        <div class="part-head"><h2>Mensajes con el fletero</h2></div>
+        <div class="msg"><div class="who">Transportes Flete, ayer 18:40</div>Paso a retirar entre las 6 y las 7. Si el portón está cerrado, toco bocina.</div>
+        <form class="composer" onsubmit="return false">
+          <label>Mensaje<textarea rows="1" placeholder="Escribí tu mensaje"></textarea></label>
+          <button class="btn btn-solid">Enviar</button>
+        </form>
+      </section>
+    </div>
+
+    <aside class="panel sheet" aria-labelledby="tu-carga">
+      <div class="panel-head"><h2 id="tu-carga">Tu carga</h2><span class="chip chip-wait">falta la seña</span></div>
+      <dl class="fields" style="margin:0">
+        <div class="wide"><dt>Qué mandás</dt><dd>Repuestos de maquinaria</dd></div>
+        <div><dt>Volumen</dt><dd>4 m³</dd></div>
+        <div><dt>Código</dt><dd style="font-size:14px">TP-1PX2-DN28</dd></div>
+        <div class="wide"><dt>Retiro</dt><dd>Bv. San Juan 700, Córdoba</dd></div>
+      </dl>
+      <ol class="stubs vertical">
+        <li class="stub done"><span class="lbl">Reserva</span><div class="what">Reservaste</div><div class="when">vie 13 nov, 22:57</div><span class="stamp">hecho</span></li>
+        <li class="stub now"><span class="lbl">Seña</span><div class="what">Pagá la seña</div><div class="when">vence sáb 14 nov, 22:57</div><div class="amount">$ 80,00</div>
+          <a class="btn btn-next" href="#">Pagar seña de $ 80,00</a>
+          <p class="stub-note">Si no la pagás antes, el lugar se libera.</p></li>
+        <li class="stub later"><span class="lbl">Confirmación</span><div class="what">La hace el fletero</div><div class="when">después de la seña</div></li>
+        <li class="stub later"><span class="lbl">Salida</span><div class="what">Retiro de tu carga</div><div class="when">dom 22 nov, 08:00</div></li>
+        <li class="stub later"><span class="lbl">Saldo</span><div class="what">El resto</div><div class="when">cuando sale el viaje</div><div class="amount">$ 320,00</div></li>
+      </ol>
+      <div class="total"><span>Total</span><span>$ 400,00</span></div>
+      <div class="actions"><button class="btn btn-danger btn-wide">Retirar carga</button></div>
+    </aside>
+  </div>
+</div>
+
+<div class="bar" data-fija role="region" aria-label="próxima acción">
+  <div class="t"><strong>Seña de $ 80,00</strong>vence sáb 14 nov, 22:57</div>
+  <a class="btn btn-next" href="#">Pagar seña</a>
+</div>
+
+<footer class="footer">
+  <div class="wrap">
+    <a class="logo" href="#">TruckPool</a>
+    <nav aria-label="pie"><a href="#">Viajes</a><a href="#">Fleteros</a><a href="#">Rastrear un envío</a><a href="#">Nosotros</a></nav>
+    <span>© 2026 TruckPool</span>
+  </div>
+</footer>
+<script>
+  document.querySelectorAll(".bed").forEach((b) => {
+    const m = +b.dataset.m, o = +b.dataset.o;
+    for (let i = 0; i < 30; i++) { const s = document.createElement("span"); if (i < m) s.className = "m"; else if (i < m + o) s.className = "o"; b.append(s); }
+  });
+</script>
+</body>
+</html>

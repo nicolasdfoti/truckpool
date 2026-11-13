@@ -1,0 +1,110 @@
+/* Dirección C — Señalética vial. Overpass (deriva de la tipografía de las rutas), paneles
+   azules con el filete blanco de los carteles viales y el camión como pictograma macizo.
+   La plata se recorre como mojones al costado de la ruta. */
+:root {
+  --page: #edf0f2;
+  --white: #ffffff;
+  --sign: #0a4a7c;
+  --sign-deep: #073a62;
+  --sign-tint: #dbe7f1;
+  --road: #39434c;
+  --ink: #1a2530;
+  --ink-soft: #4f5b66;
+  --line: #c8cfd6;
+  --field: #66717c;
+  --orange: #f58220;
+  --orange-hover: #e17516;
+  --orange-ink: #3a1606;
+  --success: #1f7a48;
+  --success-bg: #e1f1e7;
+  --danger: #b3261e;
+  --wait-bg: #e3e7eb;
+
+  --s1: 8px; --s2: 16px; --s3: 24px; --s4: 32px; --s5: 48px; --s6: 80px; --s7: 120px;
+  --font: "Overpass", system-ui, sans-serif;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--page); color: var(--ink); font: 400 16px/1.55 var(--font); font-variant-numeric: tabular-nums; }
+a { color: var(--sign); text-underline-offset: 3px; }
+:focus-visible { outline: 3px solid #c25f0d; outline-offset: 3px; }
+h1, h2, h3 { margin: 0; font-weight: 800; letter-spacing: -0.015em; line-height: 1.05; }
+h1 { font-size: clamp(40px, 6vw, 76px); }
+h2 { font-size: clamp(24px, 2.6vw, 30px); }
+p { margin: 0; }
+.wrap { max-width: 1200px; margin: 0 auto; padding: 0 var(--s3); }
+@media (max-width: 640px) { .wrap { padding: 0 var(--s2); } }
+
+.top { background: var(--white); }
+.top .wrap { display: flex; align-items: center; gap: var(--s4); height: 72px; }
+.logo { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 22px; color: var(--sign); text-decoration: none; }
+.logo .mark { width: 32px; height: 32px; border-radius: 7px; background: var(--sign); box-shadow: inset 0 0 0 2px var(--sign), inset 0 0 0 3.5px #fff; display: grid; place-items: center; }
+.nav { display: flex; gap: var(--s3); flex: 1; }
+.nav a { color: var(--ink); text-decoration: none; font-weight: 600; }
+.nav a[aria-current] { color: var(--sign); box-shadow: inset 0 -3px var(--sign); padding-bottom: 24px; margin-bottom: -27px; }
+.top-actions { display: flex; gap: var(--s1); align-items: center; }
+.menu-btn { display: none; }
+@media (max-width: 860px) {
+  .nav, .hide-sm { display: none !important; }
+  .top .wrap { justify-content: space-between; height: 64px; }
+  .menu-btn { display: grid; place-items: center; width: 44px; height: 44px; border: 2px solid var(--line); border-radius: 10px; background: none; }
+}
+
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: var(--s1); min-height: 48px; padding: 0 var(--s3); border-radius: 10px; font: 700 16px var(--font); text-decoration: none; border: 2px solid transparent; cursor: pointer; white-space: nowrap; }
+.btn-next { background: var(--orange); color: var(--orange-ink); font-weight: 800; }
+.btn-solid { background: var(--sign); color: #fff; }
+.btn-line { border-color: var(--sign); color: var(--sign); background: var(--white); }
+.btn-line-inv { border-color: #fff; color: #fff; background: transparent; }
+.btn-danger { border-color: var(--danger); color: var(--danger); background: var(--white); }
+.btn-quiet { color: var(--sign); padding: 0 var(--s2); }
+.btn-wide { width: 100%; }
+
+/* el cartel: panel azul con filete blanco interior */
+.sign { background: var(--sign); color: #fff; border-radius: 18px; box-shadow: inset 0 0 0 7px var(--sign), inset 0 0 0 10px #fff; padding: var(--s4); }
+.sign a { color: #fff; }
+@media (max-width: 640px) { .sign { border-radius: 14px; box-shadow: inset 0 0 0 5px var(--sign), inset 0 0 0 7.5px #fff; padding: var(--s3) 22px; } }
+
+.chip { display: inline-flex; align-items: center; height: 28px; padding: 0 12px; border-radius: 6px; font-size: 14px; font-weight: 700; white-space: nowrap; }
+.chip-wait { background: var(--wait-bg); color: var(--ink-soft); }
+.chip-ok { background: var(--success-bg); color: var(--success); }
+.chip-open { background: #fff; color: var(--sign); }
+
+/* pictograma del camión */
+.picto svg { display: block; width: 100%; height: auto; }
+
+/* mojones: la plata a lo largo de la ruta */
+.road { position: relative; display: grid; grid-template-columns: repeat(5, 1fr); gap: var(--s2); list-style: none; margin: 0; padding: 0 0 52px; }
+.road::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 36px; border-radius: 6px; background: var(--road) linear-gradient(90deg, #fff 0 28px, transparent 28px 52px) 0 50% / 52px 3px repeat-x; }
+.post { position: relative; background: #fff; border: 2px solid var(--line); border-radius: 16px 16px 4px 4px; padding: var(--s2); }
+.post::after { content: ""; position: absolute; left: 50%; bottom: -54px; width: 4px; height: 52px; margin-left: -2px; background: var(--line); }
+.post .n { display: inline-grid; place-items: center; min-width: 30px; height: 30px; border-radius: 6px; background: var(--sign); color: #fff; font-weight: 800; }
+.post .what { display: block; font-weight: 800; font-size: 19px; margin-top: var(--s1); }
+.post .amount { display: block; font-weight: 800; font-size: 22px; color: var(--sign); }
+.post .when { display: block; color: var(--ink-soft); font-size: 15px; margin-top: 4px; }
+@media (max-width: 860px) {
+  .road { grid-template-columns: 1fr; padding: 0 0 0 56px; gap: var(--s2); }
+  .road::after { left: 0; right: auto; top: 0; bottom: 0; width: 32px; height: auto; background: var(--road) linear-gradient(180deg, #fff 0 22px, transparent 22px 40px) 50% 0 / 3px 40px repeat-y; }
+  .post::after { left: -26px; bottom: auto; top: 22px; width: 24px; height: 4px; margin: 0; }
+}
+
+/* mojones verticales (panel del detalle) */
+.posts { list-style: none; margin: 0; padding: 0 0 0 44px; position: relative; display: grid; gap: 10px; }
+.posts::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 26px; border-radius: 5px; background: var(--road) linear-gradient(180deg, #fff 0 16px, transparent 16px 30px) 50% 0 / 3px 30px repeat-y; }
+.posts li { position: relative; display: grid; grid-template-columns: 1fr auto; column-gap: var(--s1); padding: 10px var(--s2); border: 2px solid var(--line); border-radius: 12px 12px 4px 4px; background: #fff; }
+.posts li::before { content: ""; position: absolute; left: -20px; top: 20px; width: 18px; height: 4px; background: var(--line); }
+.posts .what { font-weight: 800; }
+.posts .when { grid-column: 1; color: var(--ink-soft); font-size: 15px; }
+.posts .amount { grid-column: 2; grid-row: 1 / span 2; align-self: center; font-weight: 800; font-size: 18px; }
+.posts .done { border-color: var(--success); }
+.posts .done .what::after { content: " ✓"; color: var(--success); }
+.posts .done::before { background: var(--success); }
+.posts .now { border-color: var(--sign); border-width: 3px; box-shadow: 0 6px 18px -10px rgba(10, 74, 124, 0.6); }
+.posts .now::before { background: var(--sign); }
+.posts .later { color: var(--ink-soft); }
+.posts .later .what, .posts .later .amount { font-weight: 700; color: var(--ink-soft); }
+
+.footer { background: var(--sign-deep); color: #d5e2ec; padding: var(--s4) 0; margin-top: var(--s6); font-size: 15px; }
+.footer .wrap { display: flex; flex-wrap: wrap; gap: var(--s3); justify-content: space-between; align-items: center; }
+.footer a { color: #fff; text-decoration: none; }
+.footer nav { display: flex; gap: var(--s3); flex-wrap: wrap; }
+.footer nav a { padding: 12px 0; }

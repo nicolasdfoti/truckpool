@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="es-AR">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>TruckPool — A · Plano de carga · Landing</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="estilos.css" />
+<style>
+  .hero { background: var(--paper); border-bottom: 1px solid var(--rule); }
+  .hero .wrap { display: grid; grid-template-columns: 5fr 7fr; gap: var(--s7); align-items: center; padding-top: var(--s7); padding-bottom: var(--s7); }
+  .hero .lead { font-size: 18px; color: var(--ink-soft); max-width: 46ch; margin-top: var(--s5); }
+  .hero .ctas { display: flex; flex-wrap: wrap; gap: var(--s3); margin-top: var(--s6); }
+  .trip-plan { border: 1px solid var(--rule); border-radius: 12px; padding: var(--s5); background: var(--paper); }
+  .trip-plan header { display: flex; justify-content: space-between; align-items: baseline; gap: var(--s4); margin-bottom: var(--s4); flex-wrap: wrap; }
+  .trip-plan .route { font: 600 24px var(--display); }
+  .trip-plan .meta { color: var(--ink-soft); font-size: 14px; }
+  .trip-plan footer { display: flex; justify-content: space-between; align-items: center; margin-top: var(--s4); padding-top: var(--s4); border-top: 1px solid var(--rule); flex-wrap: wrap; gap: var(--s3); }
+  .price { font: 600 22px var(--display); }
+  .price small { font: 400 14px var(--body); color: var(--ink-soft); }
+  section.block { padding-top: var(--s8); }
+  .block-head { display: flex; justify-content: space-between; align-items: end; gap: var(--s4); margin-bottom: var(--s6); flex-wrap: wrap; }
+  .block-head p { color: var(--ink-soft); max-width: 60ch; margin-top: var(--s2); }
+  .pay { background: var(--paper); border-radius: 12px; padding: var(--s6) var(--s5); }
+  .pay .note { margin-top: var(--s5); padding-top: var(--s4); border-top: 1px solid var(--rule); color: var(--ink-soft); font-size: 14px; }
+  .rows { list-style: none; margin: 0; padding: 0; background: var(--paper); border-radius: 12px; }
+  .rows li + li { border-top: 1px solid var(--rule); }
+  .rows a { display: grid; grid-template-columns: 2.2fr 1.3fr 2fr 1fr; gap: var(--s5); align-items: center; padding: var(--s5); text-decoration: none; color: inherit; }
+  .rows a:hover { background: #f7fafc; }
+  .rows .r-route { font: 600 17px var(--display); }
+  .rows .r-sub { color: var(--ink-soft); font-size: 14px; }
+  .mini { height: 14px; border: 1.5px solid var(--navy); border-radius: 3px; display: flex; overflow: hidden; }
+  .mini span { background: repeating-linear-gradient(45deg, var(--navy) 0 2px, var(--navy-tint) 2px 6px); }
+  .r-free { font-weight: 600; }
+  .r-price { text-align: right; font-weight: 600; }
+  .r-price small { display: block; font-weight: 400; color: var(--ink-soft); font-size: 13px; }
+  .carriers { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s7); align-items: start; border-top: 1px solid var(--rule); padding-top: var(--s6); }
+  .carriers ol { margin: 0; padding-left: 1.2em; display: grid; gap: var(--s3); color: var(--ink-soft); }
+  .carriers ol strong { color: var(--ink); font-weight: 500; }
+  @media (max-width: 960px) {
+    .hero .wrap { grid-template-columns: 1fr; gap: var(--s6); padding-top: var(--s6); padding-bottom: var(--s6); }
+    .carriers { grid-template-columns: 1fr; gap: var(--s5); }
+  }
+  @media (max-width: 760px) {
+    .rows a { grid-template-columns: 1fr auto; gap: var(--s2) var(--s4); padding: var(--s4); }
+    .rows .mini-cell { grid-column: 1 / -1; grid-row: 2; }
+    .rows .r-free { grid-row: 3; }
+    .rows .r-price { grid-column: 2; grid-row: 1; }
+    section.block { padding-top: var(--s7); }
+    .hero .ctas .btn { width: 100%; }
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <a class="logo" href="#"><svg width="28" height="20" viewBox="0 0 28 20" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="2" width="16" height="12" rx="1"/><path d="M17 6h5l4 4v4h-9"/><circle cx="6" cy="16" r="2.5" fill="#fff"/><circle cx="21" cy="16" r="2.5" fill="#fff"/></svg>TruckPool</a>
+    <nav class="nav" aria-label="principal">
+      <a href="#">Viajes</a><a href="#">Fleteros</a><a href="#">Rastrear un envío</a><a href="#">Nosotros</a>
+    </nav>
+    <div class="top-actions">
+      <a class="btn btn-quiet hide-sm" href="#">Ingresar</a>
+      <a class="btn btn-solid hide-sm" href="#">Crear cuenta</a>
+      <button class="menu-btn" aria-label="abrir menú"><svg width="20" height="20" viewBox="0 0 20 20" stroke="currentColor" stroke-width="2"><path d="M3 5h14M3 10h14M3 15h14"/></svg></button>
+    </div>
+  </div>
+</header>
+
+<main>
+  <section class="hero">
+    <div class="wrap">
+      <div>
+        <h1>Tu carga viaja en el lugar que le sobra a un camión.</h1>
+        <p class="lead">Los fleteros publican viajes con espacio libre. Vos reservás los m³ que necesitás a un precio fijo y asegurás el lugar con una seña.</p>
+        <div class="ctas">
+          <a class="btn btn-next" href="#">Buscar un viaje para mi carga</a>
+          <a class="btn btn-line" href="#">Publicar mi viaje</a>
+        </div>
+      </div>
+
+      <article class="trip-plan" aria-label="un viaje publicado hoy">
+        <header>
+          <div>
+            <div class="route">Rosario → Mendoza</div>
+            <div class="meta">mar 24 nov, sale 06:00. Semi de Transportes Andes</div>
+          </div>
+          <span class="chip chip-open">con lugar</span>
+        </header>
+        <div class="plano">
+          <svg viewBox="0 0 680 210" role="img" aria-label="Semi de 30 m³: 7 m³ reservados y 23 m³ libres">
+            <defs>
+              <pattern id="hatch" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="7" height="7" fill="#d6e3ec"/><line x1="0" y1="0" x2="0" y2="7" stroke="#0b3d5c" stroke-width="2"/></pattern>
+              <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#0b3d5c"/></marker>
+            </defs>
+            <!-- cota total -->
+            <g stroke="#4a5866" stroke-width="1">
+              <line x1="20" y1="18" x2="540" y2="18"/><line x1="20" y1="10" x2="20" y2="26"/><line x1="540" y1="10" x2="540" y2="26"/>
+            </g>
+            <rect x="244" y="2" width="72" height="30" fill="#fff"/>
+            <text x="280" y="24" text-anchor="middle" font-family="Inter" font-size="20" fill="#4a5866">30 m³</text>
+            <!-- caja -->
+            <rect x="20" y="36" width="520" height="118" fill="#fff" stroke="#0b3d5c" stroke-width="2.5"/>
+            <rect x="21.5" y="37.5" width="119.8" height="115" fill="url(#hatch)"/>
+            <!-- cota libre -->
+            <line x1="150" y1="95" x2="530" y2="95" stroke="#0b3d5c" stroke-width="1.5" marker-start="url(#arr)" marker-end="url(#arr)"/>
+            <rect x="246" y="74" width="188" height="42" fill="#fff"/>
+            <text x="340" y="104" text-anchor="middle" font-family="Space Grotesk" font-weight="600" font-size="28" fill="#0b3d5c">23 m³ libres</text>
+            <!-- chasis y cabina -->
+            <rect x="20" y="154" width="520" height="9" fill="#0b3d5c"/>
+            <path d="M552 74H618L656 112V163H552Z" fill="#fff" stroke="#0b3d5c" stroke-width="2.5"/>
+            <path d="M600 84H614L643 112H600Z" fill="#d6e3ec"/>
+            <rect x="546" y="154" width="114" height="9" fill="#0b3d5c"/>
+            <g fill="#0b3d5c"><circle cx="420" cy="178" r="15"/><circle cx="456" cy="178" r="15"/><circle cx="492" cy="178" r="15"/><circle cx="586" cy="178" r="15"/><circle cx="636" cy="178" r="15"/></g>
+            <g fill="#fff"><circle cx="420" cy="178" r="5"/><circle cx="456" cy="178" r="5"/><circle cx="492" cy="178" r="5"/><circle cx="586" cy="178" r="5"/><circle cx="636" cy="178" r="5"/></g>
+            <line x1="0" y1="194" x2="680" y2="194" stroke="#d5dee6" stroke-width="2"/>
+          </svg>
+          <div class="caption"><span>7 m³ ya reservados por 2 empresas</span></div>
+        </div>
+        <footer>
+          <div class="price">$ 85 <small>por m³</small></div>
+          <a href="#">Ver este viaje</a>
+        </footer>
+      </article>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="wrap">
+      <div class="block-head">
+        <div>
+          <h2>Así se paga una reserva</h2>
+          <p>Ejemplo: 4 m³ en el viaje de arriba, a $ 85 por m³, son $ 340. Ves cada monto antes de reservar.</p>
+        </div>
+      </div>
+      <div class="pay">
+        <ol class="tl-h">
+          <li><span class="what">Reserva</span><span class="amount">$ 0</span><span class="when">Elegís el viaje y los m³. El lugar es tuyo por 24 h.</span></li>
+          <li><span class="what">Seña</span><span class="amount">$ 68,00</span><span class="when">El 20 %, por Mercado Pago, dentro de esas 24 h.</span></li>
+          <li><span class="what">Confirmación</span><span class="when">El fletero confirma tu carga.</span></li>
+          <li><span class="what">Salida</span><span class="when">Retira tu carga en la dirección que dejaste.</span></li>
+          <li><span class="what">Saldo</span><span class="amount">$ 272,00</span><span class="when">El resto, cuando el viaje sale.</span></li>
+        </ol>
+        <p class="note">Si retirás la carga con más de 48 h de anticipación, te devolvemos toda la seña. Entre 24 y 48 h, la mitad. Con menos de 24 h, no hay devolución.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="wrap">
+      <div class="block-head">
+        <h2>Viajes con lugar libre</h2>
+        <a href="#">Ver todos los viajes</a>
+      </div>
+      <ul class="rows">
+        <li><a href="#">
+          <div><div class="r-route">Córdoba → Mendoza</div><div class="r-sub">dom 22 nov, sale 08:00. Semi</div></div>
+          <div class="r-free">16 m³ libres</div>
+          <div class="mini-cell"><div class="mini" aria-hidden="true"><span style="width:47%"></span></div></div>
+          <div class="r-price">$ 100 / m³<small>$ 3.000 el camión</small></div>
+        </a></li>
+        <li><a href="#">
+          <div><div class="r-route">Buenos Aires → Bahía Blanca</div><div class="r-sub">lun 23 nov, sale 22:00. Chasis</div></div>
+          <div class="r-free">9 m³ libres</div>
+          <div class="mini-cell"><div class="mini" aria-hidden="true"><span style="width:50%"></span></div></div>
+          <div class="r-price">$ 70 / m³<small>$ 1.260 el camión</small></div>
+        </a></li>
+        <li><a href="#">
+          <div><div class="r-route">Rosario → Mendoza</div><div class="r-sub">mar 24 nov, sale 06:00. Semi</div></div>
+          <div class="r-free">23 m³ libres</div>
+          <div class="mini-cell"><div class="mini" aria-hidden="true"><span style="width:23%"></span></div></div>
+          <div class="r-price">$ 85 / m³<small>$ 2.550 el camión</small></div>
+        </a></li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="wrap carriers">
+      <div>
+        <h2>¿Salís con el camión a medio llenar?</h2>
+        <p style="color:var(--ink-soft);margin-top:var(--s3);max-width:44ch">Publicá el viaje con el espacio que te queda. Las empresas reservan por m³ y cobrás en tu cuenta de Mercado Pago.</p>
+        <p style="margin-top:var(--s5)"><a href="#">Publicar mi viaje</a></p>
+      </div>
+      <ol>
+        <li><strong>Publicás el recorrido,</strong> la fecha y el precio. Te sugerimos uno por km.</li>
+        <li><strong>Aceptás las cargas</strong> que entran y confirmás cada una antes de salir.</li>
+        <li><strong>Cobrás la seña</strong> al reservar y el saldo cuando salís.</li>
+      </ol>
+    </div>
+  </section>
+</main>
+
+<footer class="footer">
+  <div class="wrap">
+    <a class="logo" href="#" style="color:#fff">TruckPool</a>
+    <nav aria-label="pie"><a href="#">Viajes</a><a href="#">Fleteros</a><a href="#">Rastrear un envío</a><a href="#">Nosotros</a></nav>
+    <span>© 2026 TruckPool</span>
+  </div>
+</footer>
+</body>
+</html>
