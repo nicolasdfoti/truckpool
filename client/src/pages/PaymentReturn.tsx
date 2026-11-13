@@ -44,7 +44,7 @@ function Card({
     <div className="bg-canvas font-sans text-ink">
       <main className="mx-auto max-w-xl px-4 py-16 sm:px-6">
         <div
-          className="rounded-[10px] border border-line bg-white p-8 text-center"
+          className="rounded-xl border border-line bg-white p-8 text-center"
           aria-live="polite"
         >
           {icon}
@@ -71,7 +71,7 @@ export default function PaymentReturn() {
   const isBalance = target?.type === "BALANCE";
 
   const backToTrip = (label: string, variant: "primary" | "outline" = "primary") => (
-    <Button asChild variant={variant} size="sm">
+    <Button asChild variant={variant} size="md">
       <Link to={tripUrl}>{label}</Link>
     </Button>
   );
@@ -82,10 +82,10 @@ export default function PaymentReturn() {
         title="no encontramos el pago"
         actions={
           <>
-            <Button asChild variant="primary" size="sm">
+            <Button asChild variant="primary" size="md">
               <Link to="/perfil">ver mis cargas</Link>
             </Button>
-            <Button asChild variant="outline" size="sm">
+            <Button asChild variant="outline" size="md">
               <Link to="/viajes">ver viajes</Link>
             </Button>
           </>
@@ -105,7 +105,7 @@ export default function PaymentReturn() {
       <Card
         title="ingresá para ver tu pago"
         actions={
-          <Button asChild variant="primary" size="sm">
+          <Button asChild variant="primary" size="md">
             <Link to={loginLink()}>ingresar</Link>
           </Button>
         }
@@ -126,7 +126,7 @@ export default function PaymentReturn() {
         actions={
           <>
             {backToTrip("volver al viaje")}
-            <Button asChild variant="outline" size="sm">
+            <Button asChild variant="outline" size="md">
               <Link to="/perfil">ver mis cargas</Link>
             </Button>
           </>
@@ -179,7 +179,7 @@ export default function PaymentReturn() {
           <>
             <Button
               variant="primary"
-              size="sm"
+              size="md"
               disabled={retry.isPending}
               onClick={() => retry.mutate({ cargoItemId: item.id, type: target.type })}
             >
