@@ -1,5 +1,5 @@
 import type { Locator, Page } from "@playwright/test";
-import { test, expect, loginAs, E2E } from "./fixtures.ts";
+import { test, expect, loginAs, apiGet, E2E } from "./fixtures.ts";
 
 /**
  * Revisión de diseño: a 390 px de ancho (un teléfono) la página no se ensancha
@@ -118,5 +118,29 @@ test.describe("RD3 / QW13: la fila de la carga en mobile", () => {
       expect(box.x + box.width).toBeLessThanOrEqual(card.x + card.width);
       expect(box.height).toBeGreaterThanOrEqual(44);
     }
+  });
+});
+
+test.describe("RD9: /rastrear con un resultado", () => {
+  test("la página no se ensancha y «limpiar» queda a mano", async ({ page }) => {
+    const trip = await apiGet<{
+      cargoItems: { description: string; trackingCode: string }[];
+    }>(`/trips/${E2E.rolesTripId}`, "carrier");
+    const own = trip.cargoItems.find(
+      (c) => c.description === E2E.cargo.owner.description
+    )!;
+
+    await page.goto("/rastrear");
+    await page.getByLabel("código de seguimiento").fill(own.trackingCode);
+    await page.getByRole("button", { name: "rastrear" }).click();
+    await expect(page.getByRole("heading", { name: own.description })).toBeVisible();
+
+    expect(await pageWidth(page)).toBeLessThanOrEqual(WIDTH);
+    await expectInsideViewport(page.getByRole("button", { name: "limpiar" }));
+    // «← volver al inicio» en una sola línea (antes se partía en 3)
+    const back = (await page
+      .getByRole("link", { name: "← volver al inicio" })
+      .boundingBox())!;
+    expect(back.height).toBeLessThan(30);
   });
 });
