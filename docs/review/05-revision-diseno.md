@@ -131,7 +131,7 @@ aviso de saldo al salir y el chat del ex participante (D9).
 ## 4. Decisiones (2026-11-13) y lo que se arregla antes del gate
 Se arregla en `feat/revision-diseno`, un commit por hallazgo, con e2e cuando aplica:
 - [x] RD1 — header del fletero y diálogos en mobile. A menos de 640 px, «publicar viaje» queda solo en el menú móvil. `ConfirmDialog`, `Modal` y el modal de solicitudes tienen un tope de alto con scroll. e2e `mobile-layout.spec.ts`.
-- [ ] RD2 / QW5 — copy de la landing.
+- [x] RD2 / QW5 — copy de la landing: fuera la línea «MVP… Próximamente: Pagos»; los CTA son «Buscar un viaje para mi carga» (`/viajes`) y «Publicar mi viaje» (`/viajes/nuevo`), también en «Nosotros»; los pasos y las tarjetas por rol dicen lo que hace cada uno (reservar y pagar la seña a precio fijo por m³, publicar el viaje y cobrar por MP). El ALL CAPS y el tuteo que quedan son Landing#2 (L10). e2e `landing.spec.ts`.
 - [x] RD3 / QW13 — fila de la carga en mobile: se apila (estados, datos y botones a lo ancho, de 44 px), y en desktop sigue en una línea con los botones sin partirse. e2e en `mobile-layout.spec.ts`.
 - [x] RD4 — invalidar paradas y recorrido al salir, cancelar el viaje y confirmar una carga. `hooks/invalidateTripCargo.ts`, usado por las cuatro mutaciones (también refresca la cotización de retiro y «mis cargas»). e2e: «cancelar de verdad» en `cargo-lifecycle.spec.ts`.
 - [x] RD5 — copy de la retención de la seña: «retirada: se retuvieron $ 21,00 de la seña y se devolvieron $ 21,00.», en impersonal porque la nota la leen la empresa y el fletero. e2e: «lo que se retuvo de la seña» en `cargo-lifecycle.spec.ts`.

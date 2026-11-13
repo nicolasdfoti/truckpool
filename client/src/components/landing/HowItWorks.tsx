@@ -2,29 +2,33 @@ import { ArrowRight, FileText, Handshake, Truck, User } from "../icons";
 
 const STEPS = [
   {
-    title: "REGÍSTRATE",
-    description: "Crea tu cuenta gratis y verifica tu perfil de empresa o transporte.",
+    title: "REGISTRATE",
+    description: "Creá tu cuenta gratis como empresa o como transportista.",
     icon: User,
     circle: "bg-step-2",
     iconColor: "text-brand",
   },
   {
-    title: "PUBLICA O BUSCA",
-    description: "Sube tu carga disponible o encuentra viajes que coincidan con tu ruta.",
+    // QW5: el transportista publica el viaje; la empresa no publica carga
+    title: "PUBLICÁ O BUSCÁ",
+    description:
+      "El transportista publica su viaje con el espacio libre; la empresa busca uno que le sirva.",
     icon: FileText,
     circle: "bg-step-2",
     iconColor: "text-brand",
   },
   {
-    title: "CONECTA Y ACUERDA",
-    description: "Negocia tarifas, acepta ofertas y confirma los detalles del viaje.",
+    // QW5: el precio es fijo por m³: no hay ofertas ni negociación
+    title: "RESERVÁ Y PAGÁ LA SEÑA",
+    description:
+      "Reservás los m³ que necesitás a precio fijo y pagás la seña con Mercado Pago. El saldo, cuando sale el viaje.",
     icon: Handshake,
     circle: "bg-step-3",
     iconColor: "text-success",
   },
   {
-    title: "VIAJA Y COMPLETA",
-    description: "Realiza el transporte con seguimiento y califica la experiencia.",
+    title: "SEGUÍ EL VIAJE",
+    description: "Seguí el viaje en el mapa y, al llegar, calificá al transportista.",
     icon: Truck,
     circle: "bg-step-1",
     iconColor: "text-accent-strong",

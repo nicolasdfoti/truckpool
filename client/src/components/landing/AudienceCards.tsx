@@ -8,7 +8,6 @@ import {
   Clock,
   DollarSign,
   LayoutDashboard,
-  Search,
   ShieldCheck,
   TrendingUp,
   Truck,
@@ -48,13 +47,16 @@ const COMPANY_FEATURES: Feature[] = [
   },
   {
     icon: Clock,
-    title: "PUBLICA EN MINUTOS",
-    description: "Proceso de publicación simple, rápido y sin fricciones.",
+    // QW5: la empresa no publica: reserva lugar en un viaje publicado
+    title: "RESERVÁ EN MINUTOS",
+    description: "Elegís el viaje, decís qué mandás y cuántos m³, y pagás la seña.",
   },
   {
     icon: DollarSign,
-    title: "OFERTAS COMPETITIVAS",
-    description: "Ahorra en costos al conectar con transportes de retorno.",
+    // QW5: no hay ofertas: el precio es fijo por m³
+    title: "PRECIO FIJO POR M³",
+    description:
+      "Pagás solo el espacio que usás, con el precio a la vista antes de reservar.",
   },
   {
     icon: LayoutDashboard,
@@ -66,8 +68,9 @@ const COMPANY_FEATURES: Feature[] = [
 const CARRIER_FEATURES: Feature[] = [
   {
     icon: Calendar,
-    title: "LLENA TU CAPACIDAD",
-    description: "Encuentra cargas de retorno y maximiza el uso de tus vehículos.",
+    // QW5: el transportista no busca cargas: publica su viaje y las empresas reservan
+    title: "LLENÁ TU CAPACIDAD",
+    description: "Publicá tu viaje y las empresas reservan el espacio que te sobra.",
   },
   {
     icon: TrendingUp,
@@ -75,9 +78,9 @@ const CARRIER_FEATURES: Feature[] = [
     description: "Optimiza tus rutas actuales para generar mayores ganancias.",
   },
   {
-    icon: Search,
-    title: "BÚSQUEDA AVANZADA",
-    description: "Filtra oportunidades por tipo de camión, ruta y fecha.",
+    icon: DollarSign,
+    title: "COBRÁS POR MERCADO PAGO",
+    description: "La seña y el saldo entran a tu cuenta de Mercado Pago.",
   },
   {
     icon: CheckCircle,
