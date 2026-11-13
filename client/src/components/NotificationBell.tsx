@@ -79,7 +79,7 @@ export function NotificationBell() {
         <Bell size={22} />
         {unread > 0 && (
           <span
-            className={`absolute -right-0.5 -top-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-accent px-1 text-[11px] font-semibold text-white transition-transform duration-150 ${
+            className={`absolute -right-0.5 -top-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-danger px-1 text-[11px] font-semibold text-white transition-transform duration-150 ${
               pulse ? "animate-ping" : ""
             }`}
           >

@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, NavLink as RouterNavLink, useNavigate } from "react-router-dom";
 import { Button } from "./Button";
 import { Logo } from "./Logo";
 import { Menu, X } from "./icons";
@@ -9,24 +9,36 @@ import { useAuth } from "../hooks/useAuth";
 import { useLoginHref } from "../hooks/useLoginHref";
 import { SkeletonBar } from "./Loading";
 
+// el logo ya lleva al inicio: la nav arranca por lo que se busca
 const NAV_LINKS = [
-  { label: "Inicio", to: "/" },
-  { label: "Viajes disponibles", to: "/viajes" },
+  { label: "Viajes", to: "/viajes" },
   { label: "Fleteros", to: "/fleteros" },
-  { label: "Rastrear envío", to: "/rastrear" },
+  { label: "Rastrear un envío", to: "/rastrear" },
   { label: "Nosotros", to: "/nosotros" },
 ];
 
+// la página actual va subrayada en navy, pegada al borde del header
 function NavLink({ label, to }: { label: string; to: string }) {
   return (
-    <Link
+    <RouterNavLink
       to={to}
-      className="relative font-semibold text-brand px-2 py-1 transition-colors hover:text-brand-hover after:absolute after:bottom-0 after:left-0 after:h-0.5 after:w-full after:origin-left after:scale-x-0 after:bg-brand after:transition-transform after:duration-200 hover:after:scale-x-100"
+      end={to === "/viajes"}
+      className={({ isActive }) =>
+        `flex h-16 items-center border-b-2 px-1 text-[15px] font-medium transition-colors ${
+          isActive
+            ? "border-brand text-brand"
+            : "border-transparent text-ink hover:text-brand"
+        }`
+      }
     >
       {label}
-    </Link>
+    </RouterNavLink>
   );
 }
+
+const HEADER_CLASS = "sticky top-0 z-50 border-b border-line bg-white transition-shadow";
+const ROW_CLASS = "flex h-16 items-center justify-between gap-6";
+const WRAP_CLASS = "mx-auto max-w-6xl px-4 sm:px-6";
 
 export function Header() {
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -51,17 +63,16 @@ export function Header() {
   // Renderizado de esqueleto mientras carga la sesión
   if (isLoading) {
     return (
-      <header
-        className={`sticky top-0 z-50 bg-white shadow-sm transition-shadow duration-200 ${
-          scrolled ? "shadow-md" : "shadow-sm"
-        }`}
-      >
-        <div className="mx-auto max-w-screen-2xl px-6 lg:px-10">
-          <div className="flex h-20 items-center justify-between gap-6">
+      <header className={`${HEADER_CLASS} ${scrolled ? "shadow-sm" : ""}`}>
+        <div className={WRAP_CLASS}>
+          <div className={ROW_CLASS}>
             <div className="flex-shrink-0">
               <Logo />
             </div>
-            <nav className="hidden lg:flex items-center gap-8" aria-label="Navegación principal">
+            <nav
+              className="hidden flex-1 items-center gap-7 lg:flex"
+              aria-label="Navegación principal"
+            >
               {NAV_LINKS.map((link) => (
                 <NavLink key={link.label} label={link.label} to={link.to} />
               ))}
@@ -93,13 +104,9 @@ export function Header() {
   }
 
   return (
-    <header
-      className={`sticky top-0 z-50 bg-white shadow-sm transition-shadow duration-200 ${
-        scrolled ? "shadow-md" : "shadow-sm"
-      }`}
-    >
-      <div className="mx-auto max-w-screen-2xl px-6 lg:px-10">
-        <div className="flex h-20 items-center justify-between gap-6">
+    <header className={`${HEADER_CLASS} ${scrolled ? "shadow-sm" : ""}`}>
+      <div className={WRAP_CLASS}>
+        <div className={ROW_CLASS}>
           {/* Logo a la izquierda. El Logo ya es un <Link to="/">: envolverlo
               en otro Link generaba <a> dentro de <a>. */}
           <div className="flex-shrink-0">
@@ -108,7 +115,7 @@ export function Header() {
 
           {/* Nav principal centrada (desktop) */}
           <nav
-            className="hidden lg:flex items-center gap-8"
+            className="hidden flex-1 items-center gap-7 lg:flex"
             aria-label="Navegación principal"
           >
             {NAV_LINKS.map((link) => (
@@ -125,7 +132,7 @@ export function Header() {
 
                 {/* Botón publicar viaje - CTA principal para CARRIER */}
                 {user.role === "CARRIER" && (
-                  <Button asChild variant="primary" size="sm">
+                  <Button asChild variant="dark" size="sm">
                     <Link to="/viajes/nuevo">Publicar viaje</Link>
                   </Button>
                 )}
@@ -138,11 +145,13 @@ export function Header() {
               </>
             ) : (
               <>
-                <Button asChild variant="outline" size="sm">
-                  <Link to={loginLink()}>Iniciar Sesión</Link>
+                <Button asChild variant="ghost" size="sm" className="text-ink!">
+                  <Link to={loginLink()}>Ingresar</Link>
                 </Button>
-                <Button asChild variant="primary" size="sm">
-                  <Link to={loginLink({ tab: "register", role: "company" })}>Registrarse</Link>
+                <Button asChild variant="dark" size="sm">
+                  <Link to={loginLink({ tab: "register", role: "company" })}>
+                    Crear cuenta
+                  </Link>
                 </Button>
               </>
             )}
@@ -156,7 +165,7 @@ export function Header() {
                 ahí «publicar viaje» queda en el menú móvil */}
             {user?.role === "CARRIER" && (
               <span className="hidden sm:inline-flex">
-                <Button asChild variant="primary" size="sm">
+                <Button asChild variant="dark" size="sm">
                   <Link to="/viajes/nuevo">Publicar viaje</Link>
                 </Button>
               </span>
@@ -187,7 +196,7 @@ export function Header() {
       {mobileOpen && (
         <div
           id="menu-movil"
-          className="lg:hidden border-t border-line bg-white px-4 pb-6 pt-2 shadow-lg"
+          className="border-t border-line bg-white px-4 pb-6 pt-2 shadow-sm lg:hidden"
         >
           <nav className="space-y-1" aria-label="Navegación móvil">
             {NAV_LINKS.map((link) => (
@@ -195,7 +204,7 @@ export function Header() {
                 key={link.label}
                 to={link.to}
                 onClick={() => setMobileOpen(false)}
-                className="block rounded-md px-3 py-3 text-base font-medium text-brand hover:bg-canvas transition-colors"
+                className="block rounded-lg px-3 py-3 text-base font-medium text-ink transition-colors hover:bg-canvas"
               >
                 {link.label}
               </Link>
@@ -207,18 +216,24 @@ export function Header() {
               <>
                 <div className="px-3 py-2 border-b border-line">
                   <p className="text-sm font-medium text-ink truncate">{user.name}</p>
-                  <p className="text-[12px] text-ink-muted capitalize">{user.role}</p>
+                  <p className="text-[13px] text-ink-soft">
+                    {user.role === "CARRIER"
+                      ? "fletero"
+                      : user.role === "COMPANY"
+                        ? "empresa"
+                        : "admin"}
+                  </p>
                 </div>
 
                 {user.role === "CARRIER" && (
                   <Button
                     asChild
-                    variant="primary"
+                    variant="dark"
                     size="md"
                     className="w-full"
                     onClick={() => setMobileOpen(false)}
                   >
-                    <Link to="/viajes/nuevo">publicar viaje</Link>
+                    <Link to="/viajes/nuevo">Publicar viaje</Link>
                   </Button>
                 )}
 
@@ -264,9 +279,9 @@ export function Header() {
                 )}
                 <div className="pt-2 border-t border-line">
                   <Button
-                    variant="outline"
+                    variant="outline-danger"
                     size="md"
-                    className="w-full text-danger"
+                    className="w-full"
                     onClick={handleLogout}
                   >
                     Cerrar sesión
@@ -282,16 +297,18 @@ export function Header() {
                   className="w-full"
                   onClick={() => setMobileOpen(false)}
                 >
-                  <Link to={loginLink()}>Iniciar Sesión</Link>
+                  <Link to={loginLink()}>Ingresar</Link>
                 </Button>
                 <Button
                   asChild
-                  variant="primary"
+                  variant="dark"
                   size="md"
                   className="w-full"
                   onClick={() => setMobileOpen(false)}
                 >
-                  <Link to={loginLink({ tab: "register", role: "company" })}>Registrarse</Link>
+                  <Link to={loginLink({ tab: "register", role: "company" })}>
+                    Crear cuenta
+                  </Link>
                 </Button>
               </>
             )}
