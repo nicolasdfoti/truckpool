@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useParams, Link } from "react-router-dom";
 import { CargoFillDiagram } from "../components/CargoFillDiagram";
 import { Button } from "../components/Button";
@@ -177,6 +177,21 @@ export default function TripDetail() {
     const timer = setInterval(() => setNow(Date.now()), 60_000);
     return () => clearInterval(timer);
   }, []);
+  // RD7: la carga recién reservada. Cuando llega con el viaje, se la lleva a la
+  // vista (el formulario queda abajo de todo y «pagar seña» arriba) una sola
+  // vez: los refetch del viaje no vuelven a mover la página.
+  const [justAddedId, setJustAddedId] = useState<string | null>(null);
+  const scrolledToRef = useRef<string | null>(null);
+  const justAddedArrived =
+    justAddedId !== null && (trip?.cargoItems.some((c) => c.id === justAddedId) ?? false);
+  useEffect(() => {
+    if (!justAddedArrived || scrolledToRef.current === justAddedId) return;
+    const row = document.getElementById(`carga-${justAddedId}`);
+    if (!row) return;
+    scrolledToRef.current = justAddedId;
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    row.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "center" });
+  }, [justAddedArrived, justAddedId]);
 
   function handleSubmitReview(e: FormEvent) {
     e.preventDefault();
@@ -294,7 +309,8 @@ export default function TripDetail() {
         pickupAddress: pickupAddress.trim(),
       },
       {
-        onSuccess: () => {
+        onSuccess: (created) => {
+          setJustAddedId(created.id);
           setDescription("");
           setVolume("");
           setPickupAddress("");
@@ -630,7 +646,12 @@ export default function TripDetail() {
                   // botones a lo ancho); en desktop vuelve a ser una línea
                   <li
                     key={item.id}
-                    className="flex flex-col gap-3 rounded-[10px] border border-line bg-white p-4 sm:flex-row sm:items-center sm:justify-between sm:gap-4"
+                    id={`carga-${item.id}`}
+                    className={`flex flex-col gap-3 rounded-[10px] border bg-white p-4 sm:flex-row sm:items-center sm:justify-between sm:gap-4 ${
+                      item.id === justAddedId
+                        ? "border-success ring-2 ring-success-bg"
+                        : "border-line"
+                    }`}
                   >
                     <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
                       <div className="flex flex-wrap items-center gap-2 sm:contents">
@@ -655,6 +676,17 @@ export default function TripDetail() {
                         )}
                       </div>
                       <div className="min-w-0">
+                        {/* RD7: el aviso de la reserva, en la fila donde se paga */}
+                        {item.id === justAddedId && (
+                          <p
+                            role="status"
+                            className="mb-1 text-[13px] font-medium text-success-deep"
+                          >
+                            {showDepositPayButton
+                              ? "listo, reservaste tu lugar. pagá la seña para confirmarlo."
+                              : "listo, reservaste tu lugar."}
+                          </p>
+                        )}
                         <p className="text-sm font-medium">{item.description}</p>
                         <p className="text-[13px] text-ink-muted">
                           {item.volume.toFixed(1)} m³ · {currency(item.priceShare)} del
