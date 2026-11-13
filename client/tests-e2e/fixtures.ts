@@ -69,6 +69,8 @@ export const E2E = {
   },
   /** L7: OPEN a 10 días, con una carga PENDING sin seña de e2e-otra@ */
   cancelTripId: "e2e-trip-cancel",
+  /** Admin#1: fletero con la verificación PENDING y sin DNI/CUIT */
+  noTaxIdCarrier: { email: "e2e-sin-cuit@truckpool.app", name: "E2E Fletes Sin CUIT" },
 } as const;
 
 /** el token de un usuario, por API: sin pasar por el formulario de login */

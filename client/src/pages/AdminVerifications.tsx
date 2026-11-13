@@ -92,87 +92,104 @@ export default function AdminVerifications() {
 
         {isAdmin && verifications.data && verifications.data.length > 0 && (
           <ul className="mt-8 grid gap-4">
-            {verifications.data.map((item) => (
-              <li
-                key={item.id}
-                className="rounded-[10px] border border-line bg-white p-6"
-              >
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-medium">{item.name}</p>
-                    <p className="text-[13px] text-ink-muted">{item.email}</p>
-                    <p className="mt-2 text-sm">
-                      dni/cuit:{" "}
-                      <span className="font-medium">{item.taxId ?? "no informado"}</span>
-                    </p>
-                    <p className="mt-1 text-xs text-ink-muted">
-                      enviada el {new Date(item.requestedAt).toLocaleDateString("es-AR")}
-                    </p>
-                  </div>
+            {verifications.data.map((item) => {
+              // Admin#1: sin DNI/CUIT no se aprueba (el server da 409); se rechaza
+              // con nota para que lo cargue
+              const missingTaxId = !item.taxId?.trim();
+              const reasonId = `sin-cuit-${item.id}`;
+              return (
+                <li
+                  key={item.id}
+                  className="rounded-[10px] border border-line bg-white p-6"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-medium">{item.name}</p>
+                      <p className="text-[13px] text-ink-muted">{item.email}</p>
+                      <p className="mt-2 text-sm">
+                        dni/cuit:{" "}
+                        <span className="font-medium">
+                          {item.taxId ?? "no informado"}
+                        </span>
+                      </p>
+                      <p className="mt-1 text-xs text-ink-muted">
+                        enviada el{" "}
+                        {new Date(item.requestedAt).toLocaleDateString("es-AR")}
+                      </p>
+                    </div>
 
-                  <div className="flex gap-2">
-                    <Button
-                      variant="primary"
-                      size="sm"
-                      disabled={review.isPending}
-                      onClick={() =>
-                        review.mutate(
-                          { userId: item.id, approve: true },
-                          {
-                            onError: (err: unknown) =>
-                              setError(
-                                err instanceof Error
-                                  ? err.message
-                                  : "no se pudo aprobar la verificación."
-                              ),
+                    <div className="flex flex-col items-end gap-1">
+                      <div className="flex gap-2">
+                        <Button
+                          variant="primary"
+                          size="sm"
+                          disabled={review.isPending || missingTaxId}
+                          aria-describedby={missingTaxId ? reasonId : undefined}
+                          onClick={() =>
+                            review.mutate(
+                              { userId: item.id, approve: true },
+                              {
+                                onError: (err: unknown) =>
+                                  setError(
+                                    err instanceof Error
+                                      ? err.message
+                                      : "no se pudo aprobar la verificación."
+                                  ),
+                              }
+                            )
                           }
-                        )
-                      }
-                    >
-                      aprobar
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        setError(null);
-                        setRejectedId(rejectedId === item.id ? null : item.id);
-                        setNote("");
-                      }}
-                    >
-                      rechazar
-                    </Button>
+                        >
+                          aprobar
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            setError(null);
+                            setRejectedId(rejectedId === item.id ? null : item.id);
+                            setNote("");
+                          }}
+                        >
+                          rechazar
+                        </Button>
+                      </div>
+                      {missingTaxId && (
+                        <p id={reasonId} className="text-xs text-ink-soft">
+                          sin CUIT no se puede aprobar
+                        </p>
+                      )}
+                    </div>
                   </div>
-                </div>
 
-                {rejectedId === item.id && (
-                  <div className="mt-4 border-t border-line pt-4">
-                    <label
-                      className="text-[13px] text-ink-soft"
-                      htmlFor={`note-${item.id}`}
-                    >
-                      motivo del rechazo
-                    </label>
-                    <input
-                      id={`note-${item.id}`}
-                      value={note}
-                      onChange={(e) => setNote(e.target.value)}
-                      placeholder="ej: el CUIT no coincide con el titular"
-                      className={inputClass}
-                    />
-                    <Button
-                      variant="primary"
-                      size="sm"
-                      className="mt-3"
-                      disabled={review.isPending}
-                      onClick={() => handleReject(item.id)}
-                    >
-                      {review.isPending ? "guardando…" : "confirmar rechazo"}
-                    </Button>
-                  </div>
-                )}
-              </li>
-            ))}
+                  {rejectedId === item.id && (
+                    <div className="mt-4 border-t border-line pt-4">
+                      <label
+                        className="text-[13px] text-ink-soft"
+                        htmlFor={`note-${item.id}`}
+                      >
+                        motivo del rechazo
+                      </label>
+                      <input
+                        id={`note-${item.id}`}
+                        value={note}
+                        onChange={(e) => setNote(e.target.value)}
+                        placeholder="ej: el CUIT no coincide con el titular"
+                        className={inputClass}
+                      />
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        className="mt-3"
+                        disabled={review.isPending}
+                        onClick={() => handleReject(item.id)}
+                      >
+                        {review.isPending ? "guardando…" : "confirmar rechazo"}
+                      </Button>
+                    </div>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         )}
 
