@@ -35,3 +35,22 @@ export function formatInstant(iso: string): string {
   const weekday = get("weekday").replace(".", "");
   return `${weekday} ${get("day")}/${get("month")} ${get("hour")}:${get("minute")}`;
 }
+
+/** el día calendario en Argentina, "2026-11-13" (comparable como texto) */
+function argentinaDay(d: Date): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: AR_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(d);
+}
+
+/**
+ * QW18: la fecha ya llegó (hoy o antes, en Argentina). Es la misma regla que el
+ * server (`isTripDateAvailable`): un viaje para hoy ya no recibe cargas, así que
+ * una solicitud con esa fecha no se puede aceptar.
+ */
+export function isDateReached(iso: string, now: Date = new Date()): boolean {
+  return argentinaDay(new Date(iso)) <= argentinaDay(now);
+}

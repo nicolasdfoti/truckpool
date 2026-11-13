@@ -143,7 +143,7 @@ Se arregla en `feat/revision-diseno`, un commit por hallazgo, con e2e cuando apl
 - [x] QW3 — login sin mínimo en «acceder» (solo que no esté vacía; el mínimo de 8 queda para crear cuenta) y con `autocomplete` (`email`, `current-password`/`new-password`, `organization`). e2e en `login-return.spec.ts`.
 - [x] QW7 — error de las verificaciones de admin, con «reintentar»; el dashboard también deja de mostrar el «error interno» crudo (parte de RD12). e2e `admin-errors.spec.ts`.
 - [x] QW10 — anuncios del arrastre en español, con la dirección y la posición en vez del id; las instrucciones del teclado también. e2e `stops-a11y.spec.ts`.
-- [ ] QW18 — solicitudes vencidas sin acciones.
+- [x] QW18 — solicitudes vencidas: chip «vencida» y sin «aceptar» (el server la rechaza desde L5), con la misma regla de fecha en Argentina. «rechazar» queda porque es la forma de sacarla de la lista (así lo dejó L5 en el server). La empresa también la ve «vencida». e2e `trip-requests-expired.spec.ts`.
 
 La regla del gate queda en `04-launch.md` §3: cero P1, cero P2 nuevos y los P2 de 03 que
 dependen de L9 o L10 aceptados (§3). Los P3 (RD11–RD20) van a L8 o L10.

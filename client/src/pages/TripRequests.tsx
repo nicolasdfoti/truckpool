@@ -8,7 +8,7 @@ import {
   useRespondTripRequest,
   useCreateTripRequest,
 } from "../hooks/useTripRequests";
-import { formatTripDate } from "../lib/tripWhen";
+import { formatTripDate, isDateReached } from "../lib/tripWhen";
 import type { TripRequest } from "../types/trip";
 
 const STATUS_LABELS: Record<string, string> = {
@@ -22,6 +22,9 @@ const STATUS_STYLES: Record<string, string> = {
   ACCEPTED: "bg-success-bg text-success-deep",
   DECLINED: "bg-canvas-line text-ink-soft",
 };
+
+/** QW18: pendiente con la fecha ya llegada */
+const EXPIRED_STYLE = "bg-canvas-line text-ink-soft";
 
 /** Formulario para responder (aceptar/rechazar) */
 function RespondForm({
@@ -441,6 +444,9 @@ function ReceivedRequestItem({
   onAccept: () => void;
   onDecline: () => void;
 }): React.ReactElement {
+  // QW18: con la fecha ya llegada el server no deja aceptarla (L5); rechazarla
+  // sí, y es la forma de sacarla de la lista
+  const expired = request.status === "PENDING" && isDateReached(request.desiredDate);
   return (
     <li className="rounded-[10px] border border-line bg-white p-5">
       <div className="flex items-center justify-between gap-4 flex-wrap">
@@ -466,6 +472,11 @@ function ReceivedRequestItem({
               <span className="text-ink font-medium">{request.company.name}</span>
             </span>
           </p>
+          {expired && (
+            <p className="mt-2 text-[13px] text-ink-muted">
+              la fecha ya llegó: no se puede aceptar. rechazala para sacarla de la lista.
+            </p>
+          )}
           {request.note && (
             <p className="mt-2 text-[13px] text-ink-soft">
               <em>nota:</em> {request.note}
@@ -474,15 +485,17 @@ function ReceivedRequestItem({
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <span
-            className={`inline-flex items-center rounded-full px-3 py-1 text-sm font-medium ${STATUS_STYLES[request.status]}`}
+            className={`inline-flex items-center rounded-full px-3 py-1 text-sm font-medium ${expired ? EXPIRED_STYLE : STATUS_STYLES[request.status]}`}
           >
-            {STATUS_LABELS[request.status]}
+            {expired ? "vencida" : STATUS_LABELS[request.status]}
           </span>
           {request.status === "PENDING" && (
             <>
-              <Button variant="primary" size="sm" onClick={onAccept}>
-                aceptar
-              </Button>
+              {!expired && (
+                <Button variant="primary" size="sm" onClick={onAccept}>
+                  aceptar
+                </Button>
+              )}
               <Button variant="ghost" size="sm" onClick={onDecline}>
                 rechazar
               </Button>
@@ -496,6 +509,8 @@ function ReceivedRequestItem({
 
 /** Item de solicitud enviada (COMPANY) */
 function SentRequestItem({ request }: { request: TripRequest }): React.ReactElement {
+  // QW18: el transportista ya no puede aceptarla
+  const expired = request.status === "PENDING" && isDateReached(request.desiredDate);
   return (
     <li className="rounded-[10px] border border-line bg-white p-5">
       <div className="flex items-center justify-between gap-4 flex-wrap">
@@ -521,6 +536,11 @@ function SentRequestItem({ request }: { request: TripRequest }): React.ReactElem
               <span className="text-ink font-medium">{request.carrier.name}</span>
             </span>
           </p>
+          {expired && (
+            <p className="mt-2 text-[13px] text-ink-muted">
+              la fecha ya llegó sin respuesta del transportista: ya no se puede aceptar.
+            </p>
+          )}
           {request.note && (
             <p className="mt-2 text-[13px] text-ink-soft">
               <em>nota:</em> {request.note}
@@ -529,9 +549,9 @@ function SentRequestItem({ request }: { request: TripRequest }): React.ReactElem
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <span
-            className={`inline-flex items-center rounded-full px-3 py-1 text-sm font-medium ${STATUS_STYLES[request.status]}`}
+            className={`inline-flex items-center rounded-full px-3 py-1 text-sm font-medium ${expired ? EXPIRED_STYLE : STATUS_STYLES[request.status]}`}
           >
-            {STATUS_LABELS[request.status]}
+            {expired ? "vencida" : STATUS_LABELS[request.status]}
           </span>
           {request.resultingTripId && (
             <Button asChild variant="outline" size="sm">
