@@ -1,15 +1,18 @@
 import { Link } from "react-router-dom";
 import type { ReactNode } from "react";
-import { Button } from "./Button";
+import { CapacityBar } from "./CapacityBar";
 import { StatusBadge } from "./StatusBadge";
 import { TripFeatureBadge } from "./TripFeatureBadge";
-import { ArrowRight, Clock, MapPin } from "./icons";
-import { formatTripWhen } from "../lib/tripWhen";
+import { formatM3, formatPesos, formatTripDay, pricePerM3 } from "../lib/format";
 import type { Trip } from "../types/trip";
 
 type TripCardProps = {
   trip: Trip;
   showCarrier?: boolean;
+  /**
+   * undefined: toda la card lleva al viaje (link estirado sobre el título).
+   * null: sin link, porque ya la envuelve uno (perfil). Un nodo: se muestra al pie.
+   */
   footer?: ReactNode;
   /**
    * "li" cuando la card es hija directa de una <ul> (listado de viajes).
@@ -19,46 +22,65 @@ type TripCardProps = {
   as?: "li" | "div";
 };
 
+/**
+ * Un viaje en un listado (rediseño A): la ruta, cuándo sale, la caja en chico y
+ * lo que le importa a la empresa, los m³ libres y el precio por m³.
+ */
 export function TripCard({
   trip,
   showCarrier = true,
   footer,
   as: Wrapper = "li",
 }: TripCardProps) {
+  const free = Math.max(0, trip.capacityTotal - trip.capacityUsed);
+  const linked = footer === undefined;
+  const route = (
+    <>
+      {trip.origin} <span aria-hidden="true">→</span>
+      <span className="sr-only">a</span> {trip.destination}
+    </>
+  );
+
   return (
-    <Wrapper className="flex flex-col rounded-[10px] border border-line bg-white p-6 shadow-sm">
-      <div className="flex items-center justify-between gap-3">
-        <span className="flex items-center gap-1.5 text-[13px] text-ink-muted">
-          {formatTripWhen(trip.date, trip.departureTime)}
-          {trip.departureTime && (
-            <span className="inline-flex items-center gap-1 rounded-full bg-canvas px-2 py-0.5 text-ink-soft">
-              <Clock size={12} aria-hidden />
-              sale {trip.departureTime}
-            </span>
+    <Wrapper
+      className={`relative flex flex-col rounded-xl border border-line bg-white p-5 transition-colors sm:p-6 ${
+        linked ? "hover:border-brand" : ""
+      }`}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <h3 className="font-display text-[19px] leading-tight font-semibold text-ink">
+          {linked ? (
+            <Link
+              to={`/viajes/${trip.id}`}
+              className="after:absolute after:inset-0 after:rounded-xl focus-visible:outline-none focus-visible:after:outline-2 focus-visible:after:outline-offset-2 focus-visible:after:outline-accent-strong"
+            >
+              {route}
+            </Link>
+          ) : (
+            route
           )}
-        </span>
+        </h3>
         <StatusBadge status={trip.status} />
       </div>
+      <p className="mt-1 mb-5 text-sm text-ink-soft">
+        {formatTripDay(trip.date)}
+        {trip.departureTime && `, sale ${trip.departureTime}`}. {trip.truckType} de{" "}
+        {formatM3(trip.capacityTotal)} m³
+      </p>
 
-      <div className="mt-4 flex items-center gap-2">
-        <MapPin className="h-5 w-5 text-brand" aria-hidden />
-        <span className="font-display text-lg font-medium">{trip.origin}</span>
-        <ArrowRight className="h-5 w-5 text-ink-muted" aria-hidden />
-        <span className="font-display text-lg font-medium">{trip.destination}</span>
-      </div>
-
-      <div className="mt-4 flex flex-wrap gap-x-4 gap-y-1 text-[13px] text-ink-soft">
-        <span>{trip.truckType}</span>
-        <span>
-          {trip.capacityUsed.toFixed(1)} / {trip.capacityTotal.toFixed(1)} m³ ocupados
+      <CapacityBar
+        capacityTotal={trip.capacityTotal}
+        capacityUsed={trip.capacityUsed}
+        className="mt-auto mb-3"
+      />
+      <p className="flex flex-wrap items-baseline justify-between gap-x-3">
+        <span className="font-display text-[22px] font-semibold text-brand">
+          {free > 0 ? `${formatM3(free)} m³ libres` : "sin lugar"}
         </span>
-        <span className="font-medium text-brand">
-          {trip.price.toLocaleString("es-AR", {
-            style: "currency",
-            currency: "ARS",
-          })}
+        <span className="font-semibold text-ink">
+          {formatPesos(pricePerM3(trip))} por m³
         </span>
-      </div>
+      </p>
 
       {trip.features.length > 0 && (
         <div className="mt-3 flex flex-wrap gap-1.5">
@@ -69,29 +91,17 @@ export function TripCard({
       )}
 
       {showCarrier && (
-        <Link
-          to={`/fleteros/${trip.carrierId}`}
-          className="mt-2 text-[13px] text-ink-muted hover:text-brand"
-        >
-          por {trip.carrierName}
-        </Link>
+        <p className="mt-4 border-t border-line pt-3 text-sm text-ink-soft">
+          <Link
+            to={`/fleteros/${trip.carrierId}`}
+            className="relative z-[1] hover:text-brand hover:underline"
+          >
+            {trip.carrierName}
+          </Link>
+        </p>
       )}
 
-      {/* undefined = botón default; null = sin footer. con ?? no alcanzaba
-          porque null es nullish y caía siempre en el default (dejaba el link
-          "ver y sumar carga" adentro de la card, inválido si la card ya es un
-          link). */}
-      {footer !== null && (
-        <div className="mt-5">
-          {footer === undefined ? (
-            <Button asChild variant="dark" size="sm" className="w-full">
-              <Link to={`/viajes/${trip.id}`}>ver y sumar carga</Link>
-            </Button>
-          ) : (
-            footer
-          )}
-        </div>
-      )}
+      {footer != null && <div className="mt-5">{footer}</div>}
     </Wrapper>
   );
 }
