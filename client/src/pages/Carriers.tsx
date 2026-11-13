@@ -1,5 +1,6 @@
 import { Link, useNavigate } from "react-router-dom";
 import { Button } from "../components/Button";
+import { Chip } from "../components/Chip";
 import { RatingStars } from "../components/RatingInput";
 import { Truck } from "../components/icons";
 import { useCarriers } from "../hooks/useUserProfile";
@@ -14,15 +15,19 @@ export default function Carriers() {
   const createTripRequest = useCreateTripRequest();
 
   function handleRequestClick(carrierId: string, carrierName: string) {
-    navigate(`/solicitudes?action=request&carrierId=${carrierId}&carrierName=${encodeURIComponent(carrierName)}`);
+    navigate(
+      `/solicitudes?action=request&carrierId=${carrierId}&carrierName=${encodeURIComponent(carrierName)}`
+    );
   }
 
   return (
     <div className="bg-canvas font-sans text-ink">
-      <main className="mx-auto max-w-5xl px-4 py-12 sm:px-6 lg:px-8">
-        <h1 className="font-display text-3xl font-semibold">Transportistas</h1>
-        <p className="mt-1 text-sm text-ink-soft">
-          conocé a los fleteros que publican en TruckPool y llegá directo.
+      <main className="mx-auto max-w-6xl px-4 py-10 sm:px-6 sm:py-12">
+        <h1 className="font-display text-[clamp(28px,3.4vw,36px)] leading-tight font-semibold">
+          Fleteros
+        </h1>
+        <p className="mt-2 text-[17px] text-ink-soft">
+          Conocé a los fleteros que publican en TruckPool y pediles un viaje directo.
         </p>
 
         {isLoading && <SkeletonList count={6} className="mt-8" />}
@@ -41,7 +46,7 @@ export default function Carriers() {
             </p>
             <Button asChild variant="primary" size="sm" className="mt-4">
               <Link to="/ingresar?tab=register&role=carrier">
-                registrate como transportista
+                Registrate como fletero
               </Link>
             </Button>
           </div>
@@ -52,46 +57,44 @@ export default function Carriers() {
             {carriers.map((carrier) => (
               <li
                 key={carrier.id}
-                className="flex flex-col rounded-[10px] border border-line bg-white p-6 shadow-sm"
+                className="flex flex-col rounded-xl border border-line bg-white p-5 sm:p-6"
               >
                 <div className="flex items-center gap-3">
-                  <span className="flex h-10 w-10 items-center justify-center rounded-full bg-canvas-line text-brand">
+                  <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-brand-tint text-brand">
                     <Truck className="h-5 w-5" aria-hidden />
                   </span>
-                  <div className="flex-1">
-                    <p className="font-display text-base font-medium">{carrier.name}</p>
-                    <p className="text-[13px] text-ink-muted">
-                      {carrier.openTrips === 1
-                        ? "1 viaje abierto"
-                        : `${carrier.openTrips} viajes abiertos`}
-                    </p>
-                    <p className="mt-0.5 flex items-center gap-1.5 text-[13px] text-ink-muted">
-                      {carrier.ratingAvg !== null ? (
-                        <>
-                          <RatingStars value={carrier.ratingAvg} size={14} />
-                          <span>
-                            {carrier.ratingAvg.toFixed(1)} ({carrier.ratingCount})
-                          </span>
-                        </>
-                      ) : (
-                        <span>sin calificaciones</span>
-                      )}
-                    </p>
-                  </div>
-                  {carrier.isAvailableNow && (
-                    <span className="inline-flex items-center rounded-full bg-success-bg text-success-deep px-2 py-1 text-[11px] font-medium">
-                      responde rápido ahora
-                    </span>
-                  )}
+                  <p className="min-w-0 flex-1 font-display text-lg leading-tight font-semibold">
+                    {carrier.name}
+                  </p>
+                </div>
+                <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-ink-soft">
+                  <span>
+                    {carrier.openTrips === 1
+                      ? "1 viaje abierto"
+                      : `${carrier.openTrips} viajes abiertos`}
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    {carrier.ratingAvg !== null ? (
+                      <>
+                        <RatingStars value={carrier.ratingAvg} size={14} />
+                        <span>
+                          {carrier.ratingAvg.toFixed(1)} ({carrier.ratingCount})
+                        </span>
+                      </>
+                    ) : (
+                      <span>sin calificaciones</span>
+                    )}
+                  </span>
+                  {carrier.isAvailableNow && <Chip tone="ok">responde rápido ahora</Chip>}
                 </div>
 
-                <p className="mt-4 line-clamp-2 text-[13px] text-ink-soft">
+                <p className="mt-4 line-clamp-2 text-sm text-ink-soft">
                   {carrier.bio ?? "todavía no cargó su bio."}
                 </p>
 
-                <div className="mt-5 flex gap-2">
-                  <Button asChild variant="dark" size="sm" className="flex-1">
-                    <Link to={`/fleteros/${carrier.id}`}>ver perfil</Link>
+                <div className="mt-auto flex gap-2 pt-5">
+                  <Button asChild variant="outline" size="sm" className="flex-1">
+                    <Link to={`/fleteros/${carrier.id}`}>Ver perfil</Link>
                   </Button>
                   {user?.role === "COMPANY" && (
                     <Button
@@ -101,7 +104,7 @@ export default function Carriers() {
                       disabled={createTripRequest.isPending}
                       onClick={() => handleRequestClick(carrier.id, carrier.name)}
                     >
-                      {createTripRequest.isPending ? "enviando…" : "solicitar viaje"}
+                      {createTripRequest.isPending ? "enviando…" : "Solicitar viaje"}
                     </Button>
                   )}
                 </div>

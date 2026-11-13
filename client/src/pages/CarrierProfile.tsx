@@ -1,5 +1,6 @@
 import { useParams, Link, useNavigate } from "react-router-dom";
 import { Button } from "../components/Button";
+import { Chip } from "../components/Chip";
 import { TripCard } from "../components/TripCard";
 import { RatingStars } from "../components/RatingInput";
 import { Truck } from "../components/icons";
@@ -63,7 +64,12 @@ export default function CarrierProfile() {
                 : "no pudimos cargar este transportista. probá de nuevo en un rato."}
             </p>
             {!notFound && (
-              <Button variant="outline" size="sm" className="mt-3" onClick={() => refetch()}>
+              <Button
+                variant="outline"
+                size="sm"
+                className="mt-3"
+                onClick={() => refetch()}
+              >
                 reintentar
               </Button>
             )}
@@ -73,17 +79,13 @@ export default function CarrierProfile() {
         {profile && (
           <>
             <div className="mt-6 flex items-start gap-4">
-              <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-canvas-line text-brand">
+              <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-brand-tint text-brand">
                 <Truck className="h-7 w-7" aria-hidden />
               </span>
               <div className="flex-1">
                 <div className="flex flex-wrap items-center gap-3">
                   <h1 className="font-display text-3xl font-semibold">{profile.name}</h1>
-                  {profile.isAvailableNow && (
-                    <span className="inline-flex items-center rounded-full bg-success-bg text-success-deep px-2 py-1 text-[11px] font-medium">
-                      responde rápido ahora
-                    </span>
-                  )}
+                  {profile.isAvailableNow && <Chip tone="ok">responde rápido ahora</Chip>}
                 </div>
                 {profile.ratingAvg !== null ? (
                   <p className="mt-1 flex items-center gap-2 text-[13px] text-ink-muted">
@@ -103,7 +105,7 @@ export default function CarrierProfile() {
               </div>
             </div>
 
-            <div className="mt-6 rounded-[10px] border border-line bg-white p-6">
+            <div className="mt-6 rounded-xl border border-line bg-white p-6">
               <p className="text-sm text-ink-soft">
                 {profile.bio ?? "todavía no cargó su bio."}
               </p>
@@ -121,23 +123,27 @@ export default function CarrierProfile() {
                   size="md"
                   className="w-full"
                   disabled={createTripRequest.isPending}
-                  onClick={() => navigate(`/solicitudes?action=request&carrierId=${profile.id}&carrierName=${encodeURIComponent(profile.name)}`)}
+                  onClick={() =>
+                    navigate(
+                      `/solicitudes?action=request&carrierId=${profile.id}&carrierName=${encodeURIComponent(profile.name)}`
+                    )
+                  }
                 >
-                  {createTripRequest.isPending ? "enviando…" : "solicitar viaje"}
+                  {createTripRequest.isPending ? "enviando…" : "Solicitar viaje"}
                 </Button>
               </div>
             )}
 
             {profile.reviews.length > 0 && (
               <section className="mt-10">
-                <h2 className="font-display text-[17px] font-medium">
-                  qué dicen las empresas
+                <h2 className="font-display text-xl font-semibold">
+                  Qué dicen las empresas
                 </h2>
                 <ul className="mt-3 space-y-2">
                   {profile.reviews.map((review) => (
                     <li
                       key={review.id}
-                      className="rounded-[10px] border border-line bg-white p-4"
+                      className="rounded-xl border border-line bg-white p-4"
                     >
                       <div className="flex flex-wrap items-center gap-2">
                         <RatingStars value={review.rating} size={14} />
@@ -159,7 +165,7 @@ export default function CarrierProfile() {
             )}
 
             <section className="mt-10">
-              <h2 className="font-display text-[17px] font-medium">viajes abiertos</h2>
+              <h2 className="font-display text-xl font-semibold">Viajes abiertos</h2>
               {profile.trips.length === 0 && (
                 <p className="mt-2 text-sm text-ink-muted">
                   por ahora no tiene viajes abiertos.
