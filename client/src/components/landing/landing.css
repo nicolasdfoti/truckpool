@@ -1,0 +1,139 @@
+/* Landing (rediseño A, docs/review/rediseno/heroes/hero-1.html). Sólo lo que
+   necesita pseudo-elementos o grillas que cambian por ancho; el resto va en
+   clases de Tailwind en cada componente. */
+
+/* franja de garantías: 4 columnas con divisores, 2 en tablet, 1 en mobile */
+.lp-guarantees {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+}
+.lp-guarantees > li {
+  display: grid;
+  grid-template-columns: 40px 1fr;
+  gap: 0.75rem;
+  align-items: start;
+  padding: 1.5rem 1.5rem 1.5rem 0;
+}
+.lp-guarantees > li + li {
+  padding-left: 1.5rem;
+  border-left: 1px solid var(--color-line);
+}
+@media (max-width: 960px) {
+  .lp-guarantees {
+    grid-template-columns: 1fr 1fr;
+  }
+  .lp-guarantees > li,
+  .lp-guarantees > li + li {
+    padding: 1rem 0.75rem 1rem 0;
+    border-left: 0;
+  }
+  .lp-guarantees > li:nth-child(2n) {
+    padding-left: 0.75rem;
+    border-left: 1px solid var(--color-line);
+  }
+  .lp-guarantees > li:nth-child(n + 3) {
+    border-top: 1px solid var(--color-line);
+  }
+}
+@media (max-width: 560px) {
+  .lp-guarantees {
+    grid-template-columns: 1fr;
+  }
+  .lp-guarantees > li,
+  .lp-guarantees > li:nth-child(2n) {
+    padding: 1rem 0;
+    border-left: 0;
+  }
+  .lp-guarantees > li + li {
+    border-top: 1px solid var(--color-line);
+  }
+}
+
+/* cómo funciona: tres pasos numerados unidos por una línea */
+.lp-steps {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 2.5rem;
+  counter-reset: paso;
+}
+.lp-steps > li {
+  position: relative;
+  counter-increment: paso;
+  padding-top: 56px;
+}
+.lp-steps > li::before {
+  content: counter(paso);
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border: 2px solid var(--color-brand);
+  border-radius: 50%;
+  background: var(--color-canvas);
+  color: var(--color-brand);
+  font: 600 17px var(--font-display);
+}
+.lp-steps > li:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  top: 20px;
+  left: 48px;
+  right: -2rem;
+  height: 2px;
+  background: var(--color-line);
+}
+@media (max-width: 860px) {
+  .lp-steps {
+    grid-template-columns: 1fr;
+    gap: 1.5rem;
+  }
+  .lp-steps > li {
+    padding: 0 0 0 56px;
+  }
+  .lp-steps > li:not(:last-child)::after {
+    top: 44px;
+    left: 19px;
+    right: auto;
+    bottom: calc(-1.5rem + 4px);
+    width: 2px;
+    height: auto;
+  }
+}
+
+/* preguntas frecuentes: acordeón con details/summary */
+.lp-faq details {
+  border-bottom: 1px solid var(--color-line);
+}
+.lp-faq details:first-child {
+  border-top: 1px solid var(--color-line);
+}
+.lp-faq summary {
+  display: flex;
+  min-height: 60px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 0;
+  cursor: pointer;
+  list-style: none;
+  font: 500 17px var(--font-display);
+}
+.lp-faq summary::-webkit-details-marker {
+  display: none;
+}
+.lp-faq summary::after {
+  content: "";
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-right: 2px solid var(--color-brand);
+  border-bottom: 2px solid var(--color-brand);
+  transform: rotate(45deg) translateY(-3px);
+}
+.lp-faq details[open] summary::after {
+  transform: rotate(225deg) translateY(-3px);
+}

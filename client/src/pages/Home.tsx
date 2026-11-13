@@ -1,25 +1,32 @@
+import { useEffect } from "react";
+import { useLocation } from "react-router-dom";
 import { Hero } from "../components/landing/Hero";
-import { AudienceCards } from "../components/landing/AudienceCards";
+import { UpcomingTrips } from "../components/landing/UpcomingTrips";
 import { HowItWorks } from "../components/landing/HowItWorks";
-import { Benefits } from "../components/landing/Benefits";
-import { TestimonialCarousel } from "../components/landing/TestimonialCarousel";
-import { ClosingCta } from "../components/landing/ClosingCta";
+import { MoneySection } from "../components/landing/MoneySection";
+import { CarrierBand } from "../components/landing/CarrierBand";
+import { Faq } from "../components/landing/Faq";
+import "../components/landing/landing.css";
 
 export default function Home() {
+  const { hash } = useLocation();
+
+  // el pie lleva a /#preguntas: el router no baja solo hasta el ancla
+  useEffect(() => {
+    if (!hash) return;
+    document.getElementById(hash.slice(1))?.scrollIntoView();
+  }, [hash]);
+
   return (
     // el Layout no dibuja <main> porque las páginas lo hacen por su cuenta;
-    // esta es la landing, asi que le corresponde a ella.
-    <main className="bg-canvas font-sans selection:bg-canvas-line">
+    // esta es la landing, así que le corresponde a ella.
+    <main className="bg-canvas pb-16 font-sans sm:pb-24">
       <Hero />
-      <AudienceCards />
+      <UpcomingTrips />
       <HowItWorks />
-      <Benefits />
-      {/* Social proof: va despues de explicar el producto y sus ventajas, que es
-          cuando el visitante ya sabe que es TruckPool y la opinion le sirve. */}
-      <TestimonialCarousel />
-      {/* Cierre con accion: el Hero abre con CTAs y la pagina terminaba sin
-          ninguna salida. */}
-      <ClosingCta />
+      <MoneySection />
+      <CarrierBand />
+      <Faq />
     </main>
   );
 }
