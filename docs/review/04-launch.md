@@ -116,7 +116,7 @@ Archivos: `pages/TripDetail.tsx`, `components/CargoFillDiagram.tsx`, `components
 Tests: e2e nuevo `tests-e2e/trip-detail-roles.spec.ts` (anónimo / otra empresa / dueña / fletero).
 **Terminado el 2026-11-12** (último commit `0bc90a9`): `trip-detail-roles.spec.ts` 27/27, con los datos de `server/prisma/seed-e2e.ts` (`npm run db:seed:e2e`, lo corre el global setup). El copy quedó en minúsculas, como el resto de la UI. Admin y otros fleteros ven la vista anónima. De paso: `platformFeePercent` en el detalle (commit `L2:` aparte, `fa27f37`) y el neto del fletero usa ese valor (`e61b0f6`).
 - [x] Terceros: barra de ocupación sin nombres + "Ya hay 2 cargas en este viaje (7 m³). Quedan 23 m³ libres."; ajenas como "Otra carga · 3 m³ · retiro en Rosario" — U7, 03§1.5 — `TripDetail.tsx:515-600` — `b922681`. Quedó «ya hay 2 cargas en este viaje (7 m³). quedan 23 m³ libres.» (sin cargas: «todavía no hay cargas en este viaje. quedan Y m³ libres.»), igual para todos los roles; las ajenas, «otra carga · 3 m³» sin la ciudad, que llega con `pickupCity` de L6 (desde `4f72dba`: «otra carga · 3 m³ · retiro en Rosario»).
-- [x] Paradas: ocultas a no participantes, `retry: false` en 401/403/404, invalidar `stops` al reservar — U19 — `TripStops.tsx:111,175` — `0cbe375`. Las ajenas, «otra parada · N m³»; solo el fletero reordena. Al reservar y al retirar se invalidan también el recorrido y su geometría. Que aparezcan sin recargar no tiene e2e (reservar exige MP): queda como chequeo manual en la revisión de diseño.
+- [x] Paradas: ocultas a no participantes, `retry: false` en 401/403/404, invalidar `stops` al reservar — U19 — `TripStops.tsx:111,175` — `0cbe375`. Las ajenas, «otra parada · N m³»; solo el fletero reordena. Al reservar y al retirar se invalidan también el recorrido y su geometría. Que aparezcan sin recargar no tiene e2e (reservar exige MP): queda como chequeo manual en la revisión de diseño. **Chequeo hecho (2026-11-13)** en la revisión de diseño: OK al reservar y al retirar, en desktop y mobile (`05-revision-diseno.md` §1).
 - [x] `/rastrear`: `retry: false` en 404, botón vuelve a "buscar", error sin el formato del código — U9, 03/Rastrear#1-3. El copy todavía muestra el formato viejo: placeholder `TP-XXXX-C#` y «Verificá que lo hayas copiado bien (formato: TP-XXXX-C#)». Desde L2 el código es `TP-XXXX-XXXX-XXXX-XXXX`; los viejos siguen andando hasta que el viaje termina o se cancela — `TrackPackage.tsx:111,140` — `8cd96b0`. Busca al enviar (no con cada tecla); el botón vuelve a «rastrear». Copy: placeholder «pegá el código que te pasaron»; 404 → «no encontramos ese código. revisá que esté completo o pedíselo de nuevo a quien te lo pasó.»; 5xx o red → «no pudimos buscar el código. probá de nuevo en un rato.» (un 5xx sí se reintenta).
 - [x] El fletero dueño no ve "sumar carga a este viaje" — 03/Confirmar#4, QW17 — `0bc90a9`.
 - [x] Reseñas sin nombre de la empresa (de L2): `useTripReviewStatus` usa `trip.viewerReviewed` en vez de comparar `review.fromUserId`; `TripDetail.tsx` y `CarrierProfile.tsx` muestran una etiqueta fija en vez de `fromName`. No usar "empresa verificada": las empresas no pasan por verificación (solo los fleteros). Propuesta: "empresa que mandó carga en este viaje" (detalle) y "empresa que viajó con este fletero" (perfil) — `hooks/useTripReviewStatus.ts:27`, `TripDetail.tsx:792`, `CarrierProfile.tsx:129` — `7644697`, con las dos etiquetas propuestas.
@@ -228,10 +228,12 @@ Tests: e2e `tests-e2e/payment-return.spec.ts` y `tests-e2e/cargo-lifecycle.spec.
 
 ### L8 — Quick wins · 1ª SEMANA · S
 Los de 03§5 no absorbidos. Validación: `npm run lint && npm run build` + e2e. Conviene meterlo antes del lanzamiento si sobra medio día.
+**Adelantados a la revisión de diseño (decisión 2026-11-13):** QW3, QW5, QW7, QW8, QW10, QW13 y QW18 se hacen antes del gate en `feat/revision-diseno` y se tildan acá al cerrarlos (lista en 05§4). Lo demás de L8 sigue para la 1ª semana.
 - [ ] QW2 copy del diagrama · QW3 login (`autocomplete`, sin mínimo en "acceder") · QW5 landing sin "MVP… Próximamente: Pagos" y CTA corregidos.
 - [ ] QW7 error en admin · QW8 404 vs error + título de pestaña · QW10 anuncios de DnD en español · QW11 copy de `MP_NOT_CONFIGURED`.
 - [ ] QW13 fila de carga en mobile · QW15 contraste · QW16 `:focus-visible` global · QW17 campanita oculta a anónimos · QW18 solicitudes vencidas (el server ya las rechaza por L5).
 - [ ] `NotificationType` del client (`client/src/types/notification.ts`) sin `TRIP_REQUEST` ni `TRIP_REQUEST_RESPONSE`, que el enum del server sí tiene (`server/schema.prisma`). Hoy ningún `switch` ni mapa del client depende del tipo, así que no se ve; agregarlos antes de que alguno lo haga. Detectado al cerrar L4 (2026-11-10), anterior a L4.
+- [ ] P3 de la revisión de diseño que son quick wins (`05-revision-diseno.md` §2): RD11 footer (links a `#` y contraste), RD12 dashboard de admin («monto facturado», labels, nota de desarrollo, error crudo), RD14 avisos (descripción en minúscula, formato de la plata), RD16 «sumar carga» en viajes que no admiten, RD17 errores de pago sin próximo paso, RD18 sugerencia de precio antes de escribir y «48hs», RD20 estados menores (`/solicitudes` sin sesión, 403 de la empresa, marcador sin nombre, «Iniciar Sesión»).
 - [ ] Manifiesto PDF: las columnas «volumen» y «empresa» quedan pegadas («8 m³Comercial Norte», y en el encabezado «VOLUMENEMPRESA»). La columna de volumen va alineada a la derecha y la de empresa arranca justo donde termina, sin separación; falta un margen entre columnas — `lib/manifestPdf.ts` (`columns` de la tabla de cargas). Hallado al revisar el remito por rol de L2. Validación: renderizar el remito del fletero y el de una empresa y mirarlos.
 
 ### L9 — Cuentas y verificación · 1ª SEMANA · M
@@ -259,6 +261,8 @@ Tests: `tests/users.service.test.ts`, `tests/app.test.ts`.
 - [ ] Leyenda dentro del mapa de Publicar (qué pin es salida, origen y destino) — 03/Publicar#4, pendiente de L6.
 - [ ] Mapa de origen y destino para quien no participa del viaje (anónimo, otra empresa, ex participante): desde L3 ven solo el texto «sale de X y llega a Y…», porque el detalle no trae `originLat/Lng` ni `destLat/Lng` y `/route` les da 401/403. Requiere sumar esas coordenadas a `toTripDetailResponse` (son de la ciudad, no del depósito) — U7, decisión 2026-11-11.
 
+- [ ] P3 de la revisión de diseño que son de diseño (`05-revision-diseno.md` §2): RD13 «mis cargas» separando activas e historial, RD15 estado de la carga en la fila, chips y etiquetas del diagrama, RD19 hora duplicada, formato de lugares y un solo CTA naranja en el listado.
+
 ### L11 — Deuda técnica · DESPUÉS · M
 - [ ] Partir `trips.service.ts` (cargas, mensajes, ubicación, paradas, tracking, reembolsos); unificar `round2` y el retry P2034; `balanceOf` a `lib/` — 01§3.
 - [ ] Saldo del cliente desde el server; `Login` y `lib/cancellation.ts` vía hooks — 01§3.
@@ -281,15 +285,22 @@ L10 → L11.
   como anónimo, empresa, fletero y admin;
 - flujos de plata de punta a punta: reservar, pagar seña, retorno del pago (`/pagos/retorno`),
   retirar la carga, salir (IN_TRANSIT) y cancelar el viaje;
-- chequeo manual (sin e2e: reservar exige `flete@` con MP conectado y Nominatim): al reservar
+- [x] chequeo manual (sin e2e: reservar exige `flete@` con MP conectado y Nominatim): al reservar
   una carga en `/viajes/:id`, la sección «paradas de retiro» aparece con la parada nueva sin
-  recargar la página, y al retirarla se actualiza (L3, `useAddCargoItem`/`useCancelCargoItem`);
+  recargar la página, y al retirarla se actualiza (L3, `useAddCargoItem`/`useCancelCargoItem`) —
+  **hecho (2026-11-13)**: OK en desktop y mobile (`05-revision-diseno.md` §1);
 - los chequeos de `03-diseno.md` en cada pantalla: estados vacío, de carga y de error, copy,
   contraste, foco, targets táctiles y consistencia visual (03§3);
-- los hallazgos se clasifican con la escala de 03 (P1/P2/P3). Antes del deploy se arreglan solo
-  los P1 y P2; los P3 van a L8 (si son quick wins) o a L10.
+- los hallazgos se clasifican con la escala de 03 (P1/P2/P3). Antes del deploy se arreglan los
+  P1 y los P2 nuevos; los P3 van a L8 (si son quick wins) o a L10. Los P2 de 03 que dependen de
+  L9 o L10 quedan aceptados para el gate y listados en `05-revision-diseno.md` §3 (decisión
+  2026-11-13).
+- **Hecha la revisión (2026-11-13)**: informe en `05-revision-diseno.md`, capturas en
+  `screens-revision/`. Lo que se arregla antes del gate (RD1, RD3–RD10 y QW3, QW5, QW7, QW8,
+  QW10, QW13, QW18 adelantados de L8) está en la lista de 05§4.
 L11 al final porque mueve archivos que tocan L1–L4. **Gate**: todos los BLOQUEANTE tildados;
-revisión de diseño sin P1 ni P2 abiertos; server `npm test`/`typecheck`/`lint`; client
+revisión de diseño con cero P1, cero P2 nuevos y los P2 de 03 que
+dependen de L9 o L10 aceptados y listados en 05§3; server `npm test`/`typecheck`/`lint`; client
 `lint`/`build`; e2e verdes; homologación MP; pago
 real con montos chicos (seña, saldo, retiro a 30 h → 50 %, salida con una PENDING).
 En esa prueba, revisar también en el historial de notificaciones del sandbox si los
