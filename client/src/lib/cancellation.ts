@@ -62,6 +62,21 @@ type CancelledItem = {
   depositPayment: { status: string } | null;
 };
 
+function currency(n: number) {
+  return n.toLocaleString("es-AR", { style: "currency", currency: "ARS" });
+}
+
+/**
+ * RD5: cuánto se retuvo y cuánto volvió, con montos y en impersonal (la nota la
+ * leen la empresa y el fletero). Antes decía «se quedaron 21 de la seña», sin
+ * signo, sin formato y sin decir cuánto se devolvió.
+ */
+function retentionNote(prefix: string, depositAmount: number, fee: number): string {
+  const refund = Math.max(0, Math.round((depositAmount - fee) * 100) / 100);
+  if (refund === 0) return `${prefix}: se retuvo toda la seña (${currency(fee)}).`;
+  return `${prefix}: se retuvieron ${currency(fee)} de la seña y se devolvieron ${currency(refund)}.`;
+}
+
 /**
  * Qué pasó con una carga cancelada y con su seña. Con fee 0 no se puede decir
  * "te devolvimos todo": también pasa cuando la seña nunca se cobró (o la
@@ -88,14 +103,14 @@ export function cancellationNote(item: CancelledItem): string {
       return "cancelada: el fletero devolvió la seña entera desde Mercado Pago.";
     case "COMPANY_WITHDREW":
       if (fee === null) return "retirada sin seña cobrada";
-      if (fee > 0) return `retirada con costo: se quedaron ${fee} de la seña.`;
+      if (fee > 0) return retentionNote("retirada", item.depositAmount, fee);
       return seCobro
-        ? "retirada y te devolvimos toda la seña."
+        ? "retirada: se devolvió toda la seña."
         : "retirada sin seña cobrada";
     default:
       // de antes del motivo: no se sabe quién la canceló
       if (fee !== null && fee > 0)
-        return `cancelada con costo: se quedaron ${fee} de la seña.`;
+        return retentionNote("cancelada", item.depositAmount, fee);
       return seCobro
         ? "cancelada y se devolvió toda la seña."
         : "cancelada sin seña cobrada";

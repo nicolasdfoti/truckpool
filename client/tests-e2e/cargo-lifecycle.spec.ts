@@ -422,6 +422,43 @@ test.describe("etiqueta de las cargas canceladas según el motivo (L7)", () => {
   });
 });
 
+test.describe("lo que se retuvo de la seña (RD5)", () => {
+  test("con montos: cuánto se retuvo y cuánto se devolvió", async ({ page }) => {
+    // una retirada con seña cobrada y retención, simulada sobre la respuesta
+    // del viaje: retirar de verdad con seña haría que el server llame a MP
+    await page.route(`**/api/trips/${E2E.lifecycleTripId}`, async (route) => {
+      const response = await route.fetch();
+      const trip = (await response.json()) as {
+        cargoItems: Record<string, unknown>[];
+      };
+      for (const item of trip.cargoItems) {
+        if (item.description === "E2E ciclo cancelada sin motivo") {
+          item.cancellationReason = "COMPANY_WITHDREW";
+          item.depositAmount = 42;
+          item.cancellationFeeAmount = 21;
+          item.depositPayment = { id: "e2e", type: "DEPOSIT", status: "REFUNDED" };
+        }
+        if (item.description === "E2E ciclo devuelta por el fletero") {
+          item.cancellationReason = null;
+          item.depositAmount = 30;
+          item.cancellationFeeAmount = 30;
+          item.depositPayment = { id: "e2e", type: "DEPOSIT", status: "APPROVED" };
+        }
+      }
+      await route.fulfill({ response, json: trip });
+    });
+    await loginAs(page, "carrier");
+    await page.goto(LIFECYCLE_TRIP);
+
+    await expect(cargoRow(page, "E2E ciclo cancelada sin motivo")).toContainText(
+      "retirada: se retuvieron $ 21,00 de la seña y se devolvieron $ 21,00."
+    );
+    await expect(cargoRow(page, "E2E ciclo devuelta por el fletero")).toContainText(
+      "cancelada: se retuvo toda la seña ($ 30,00)."
+    );
+  });
+});
+
 test.describe("cancelar el viaje (D6)", () => {
   const CANCEL_TRIP = `/viajes/${E2E.cancelTripId}`;
 
