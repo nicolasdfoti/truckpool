@@ -30,6 +30,8 @@ import type { CargoItem, CargoItemStatus } from "../types/trip";
 import { TRIP_STATUS_LABELS } from "../types/trip";
 import { cancellationNote } from "../lib/cancellation";
 import { WithdrawCargoDialog } from "../components/WithdrawCargoDialog";
+import { DepartTripDialog } from "../components/DepartTripDialog";
+import { departureSummary } from "../lib/departure";
 import { formatInstant, formatTripDate } from "../lib/tripWhen";
 
 const CARGO_STATUS_LABELS: Record<CargoItemStatus, string> = {
@@ -158,6 +160,8 @@ export default function TripDetail() {
   const [reviewError, setReviewError] = useState<string | null>(null);
   // la carga que la empresa está por retirar (diálogo con el desglose, U21)
   const [withdrawItemId, setWithdrawItemId] = useState<string | null>(null);
+  // «¿salís ahora?» (D3)
+  const [departOpen, setDepartOpen] = useState(false);
   // 03§1.3: precio, seña y saldo antes de reservar, del server
   const cargoQuote = useCargoQuote(id ?? "", quotableVolume(volume));
   // la hora para el aviso de la reserva por vencer; se refresca cada minuto
@@ -242,6 +246,7 @@ export default function TripDetail() {
   // D1 = a: confirmar es el compromiso de llevar la carga, solo del fletero
   // (el server le responde 403 a la empresa)
   const canConfirm = isCarrierOwner;
+  const departure = departureSummary(trip.cargoItems);
   // el backend solo deja retirar carga con el viaje abierto o lleno.
   const canCancelTrip = trip.status === "OPEN" || trip.status === "FULL";
 
@@ -313,8 +318,9 @@ export default function TripDetail() {
     );
   }
 
+  // el error de salir (y, en L7, el de cancelar) se ve dentro de su diálogo
   const actionError =
-    updateStatus.error instanceof Error
+    updateStatus.error instanceof Error && updateStatus.variables === "COMPLETED"
       ? updateStatus.error.message
       : confirmCargoItem.error instanceof Error
         ? confirmCargoItem.error.message
@@ -494,18 +500,11 @@ export default function TripDetail() {
               size="md"
               disabled={updateStatus.isPending}
               onClick={() => {
-                // al salir, las cargas sin confirmar se cancelan (no viajan) y la
-                // seña cobrada vuelve entera: no tiene vuelta atrás
-                const sinConfirmar = trip.cargoItems.filter(
-                  (item) => item.status === "PENDING"
-                ).length;
-                if (
-                  nextAction.status === "IN_TRANSIT" &&
-                  sinConfirmar > 0 &&
-                  !window.confirm(
-                    `${sinConfirmar === 1 ? "hay 1 carga sin confirmar" : `hay ${sinConfirmar} cargas sin confirmar`}: al marcar el viaje en tránsito se cancelan y a cada empresa le devolvemos la seña que haya pagado. ¿seguir?`
-                  )
-                ) {
+                // salir no tiene vuelta atrás (D3): pasa por «¿salís ahora?»
+                if (nextAction.status === "IN_TRANSIT") {
+                  updateStatus.reset();
+                  confirmCargoItem.reset();
+                  setDepartOpen(true);
                   return;
                 }
                 updateStatus.mutate(nextAction.status);
@@ -542,6 +541,16 @@ export default function TripDetail() {
         {seesCargoList && (
           <section className="mt-8">
             <h2 className="font-display text-[17px] font-medium">cargas del viaje</h2>
+            {/* 03§1.4: el checklist de salida, para el fletero mientras no salió */}
+            {isCarrierOwner && canCancelTrip && trip.cargoItems.length > 0 && (
+              <p className="mt-2 rounded-md border border-surface-line bg-surface px-3 py-2 text-[13px] text-ink-soft">
+                <span className="font-medium text-ink">antes de salir:</span> confirmá las
+                cargas con seña pagada ({departure.confirmed.length} de{" "}
+                {departure.withDeposit}). las cargas sin confirmar se cancelan cuando
+                marcás el viaje en tránsito, y a cada empresa le devolvemos la seña que
+                haya pagado.
+              </p>
+            )}
             {trip.cargoItems.length === 0 && (
               <p className="mt-2 text-sm text-ink-muted">
                 todavía no hay carga asignada a este viaje.
@@ -1004,6 +1013,27 @@ export default function TripDetail() {
             )}
           </form>
         )}
+
+        <DepartTripDialog
+          open={departOpen}
+          items={trip.cargoItems}
+          onCancel={() => setDepartOpen(false)}
+          onDepart={() =>
+            updateStatus.mutate("IN_TRANSIT", { onSuccess: () => setDepartOpen(false) })
+          }
+          departing={updateStatus.isPending}
+          onConfirmCargo={(cargoItemId) => confirmCargoItem.mutate(cargoItemId)}
+          confirmingId={
+            confirmCargoItem.isPending ? (confirmCargoItem.variables ?? null) : null
+          }
+          error={
+            updateStatus.error instanceof Error
+              ? updateStatus.error.message
+              : confirmCargoItem.error instanceof Error
+                ? confirmCargoItem.error.message
+                : null
+          }
+        />
 
         {/* el error del retiro se ve dentro del diálogo, no abajo de todo */}
         <WithdrawCargoDialog

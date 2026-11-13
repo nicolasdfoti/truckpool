@@ -134,14 +134,16 @@ test.describe("confirmar carga solo el fletero (D1)", () => {
     await expect(row.getByRole("button", { name: "confirmar carga" })).toHaveCount(0);
   });
 
-  test("el fletero confirma la carga con seña", async ({ page }) => {
+  test("el fletero ve «confirmar carga» en la carga con seña", async ({ page }) => {
     await loginAs(page, "carrier");
     await page.goto(LIFECYCLE_TRIP);
 
-    const row = cargoRow(page, paidPending.description);
-    await row.getByRole("button", { name: "confirmar carga" }).click();
-    await expect(row).toContainText("confirmada");
-    await expect(row.getByRole("button", { name: "confirmar carga" })).toHaveCount(0);
+    // la confirma desde «¿salís ahora?», más abajo
+    await expect(
+      cargoRow(page, paidPending.description).getByRole("button", {
+        name: "confirmar carga",
+      })
+    ).toBeVisible();
   });
 });
 
@@ -315,5 +317,64 @@ test.describe("antes de reservar y la reserva sin seña (03§1.2, 03§1.3)", () 
     await expect(cargoRow(page, paidPending.description)).toContainText(
       `el saldo de $ ${amountText(240)} se paga cuando el viaje sale.`
     );
+  });
+});
+
+test.describe("salir: «¿salís ahora?» y el checklist (D3)", () => {
+  test("el checklist y el diálogo ofrecen confirmar la carga con seña antes de salir", async ({
+    page,
+  }) => {
+    await loginAs(page, "carrier");
+    await page.goto(LIFECYCLE_TRIP);
+
+    // la sin seña ya se retiró arriba: quedan la confirmada y la que tiene seña
+    const checklist = page.locator("p").filter({ hasText: "antes de salir:" });
+    await expect(checklist).toContainText(
+      "antes de salir: confirmá las cargas con seña pagada (1 de 2). las cargas sin confirmar se cancelan cuando marcás el viaje en tránsito, y a cada empresa le devolvemos la seña que haya pagado."
+    );
+
+    await page.getByRole("button", { name: "marcar en tránsito" }).click();
+    const dialog = page.getByRole("dialog", { name: "¿salís ahora?" });
+    await expect(dialog.getByRole("button", { name: "volver" })).toBeFocused();
+    await expect(dialog).toContainText(
+      `vas a llevar 1 carga confirmada (${confirmed.volume} m³).`
+    );
+    await expect(dialog).toContainText(
+      "hay 1 carga sin confirmar: si salís, se cancela y a cada empresa le devolvemos la seña que haya pagado."
+    );
+    await expect(dialog.getByRole("button", { name: "salir con 1 carga" })).toBeVisible();
+
+    // la confirma ahí mismo y el resumen se actualiza
+    await dialog
+      .getByRole("listitem")
+      .filter({ hasText: paidPending.description })
+      .getByRole("button", { name: "confirmar" })
+      .click();
+    await expect(dialog).toContainText(
+      `vas a llevar 2 cargas confirmadas (${confirmed.volume + paidPending.volume} m³).`
+    );
+    await expect(dialog).not.toContainText("sin confirmar");
+    await expect(dialog).toContainText(
+      "las empresas confirmadas van a recibir el aviso para pagar el saldo."
+    );
+
+    // volver no sale
+    await dialog.getByRole("button", { name: "volver" }).click();
+    await expect(dialog).toBeHidden();
+    await expect(checklist).toContainText("(2 de 2)");
+    await expect(page.getByText("abierto", { exact: true })).toBeVisible();
+  });
+
+  test("salir con las cargas confirmadas", async ({ page }) => {
+    await loginAs(page, "carrier");
+    await page.goto(LIFECYCLE_TRIP);
+
+    await page.getByRole("button", { name: "marcar en tránsito" }).click();
+    const dialog = page.getByRole("dialog", { name: "¿salís ahora?" });
+    await dialog.getByRole("button", { name: "salir con 2 cargas" }).click();
+    await expect(dialog).toBeHidden();
+    await expect(page.getByText("en viaje", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "marcar completado" })).toBeVisible();
+    await expect(page.getByText("antes de salir:")).toHaveCount(0);
   });
 });
