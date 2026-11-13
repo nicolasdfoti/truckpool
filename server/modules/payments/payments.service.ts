@@ -675,6 +675,7 @@ async function releaseCargoAfterExternalRefund(
               cancelledAt: new Date(),
               // la seña volvió entera: no se retuvo nada
               cancellationFeeAmount: new Prisma.Decimal(0),
+              cancellationReason: "REFUNDED_BY_CARRIER",
             },
           });
           if (released.count === 0) return { kind: "nada" };

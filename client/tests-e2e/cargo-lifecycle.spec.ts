@@ -327,7 +327,8 @@ test.describe("salir: «¿salís ahora?» y el checklist (D3)", () => {
     await loginAs(page, "carrier");
     await page.goto(LIFECYCLE_TRIP);
 
-    // la sin seña ya se retiró arriba: quedan la confirmada y la que tiene seña
+    // la sin seña de empresa@ ya se retiró arriba: quedan la confirmada, la que
+    // tiene seña y la de e2e-otra@, sin seña ni confirmar
     const checklist = page.locator("p").filter({ hasText: "antes de salir:" });
     await expect(checklist).toContainText(
       "antes de salir: confirmá las cargas con seña pagada (1 de 2). las cargas sin confirmar se cancelan cuando marcás el viaje en tránsito, y a cada empresa le devolvemos la seña que haya pagado."
@@ -340,7 +341,7 @@ test.describe("salir: «¿salís ahora?» y el checklist (D3)", () => {
       `vas a llevar 1 carga confirmada (${confirmed.volume} m³).`
     );
     await expect(dialog).toContainText(
-      "hay 1 carga sin confirmar: si salís, se cancela y a cada empresa le devolvemos la seña que haya pagado."
+      "hay 2 cargas sin confirmar: si salís, se cancelan y a cada empresa le devolvemos la seña que haya pagado."
     );
     await expect(dialog.getByRole("button", { name: "salir con 1 carga" })).toBeVisible();
 
@@ -353,7 +354,11 @@ test.describe("salir: «¿salís ahora?» y el checklist (D3)", () => {
     await expect(dialog).toContainText(
       `vas a llevar 2 cargas confirmadas (${confirmed.volume + paidPending.volume} m³).`
     );
-    await expect(dialog).not.toContainText("sin confirmar");
+    // queda la que no tiene seña: esa no se puede confirmar
+    await expect(dialog).toContainText(
+      "hay 1 carga sin confirmar: si salís, se cancela y a cada empresa le devolvemos la seña que haya pagado."
+    );
+    await expect(dialog.getByRole("button", { name: "confirmar" })).toHaveCount(0);
     await expect(dialog).toContainText(
       "las empresas confirmadas van a recibir el aviso para pagar el saldo."
     );
@@ -376,6 +381,44 @@ test.describe("salir: «¿salís ahora?» y el checklist (D3)", () => {
     await expect(page.getByText("en viaje", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "marcar completado" })).toBeVisible();
     await expect(page.getByText("antes de salir:")).toHaveCount(0);
+    // la que no estaba confirmada no viaja, y lo dice (L7)
+    const noViaja = cargoRow(page, "E2E ciclo sin confirmar");
+    await expect(noViaja).toContainText("cancelada");
+    await expect(noViaja).toContainText(
+      "cancelada porque el viaje salió sin confirmarla. no se había cobrado la seña."
+    );
+    await expect(noViaja).not.toContainText("retirada");
+  });
+});
+
+test.describe("etiqueta de las cargas canceladas según el motivo (L7)", () => {
+  test("cada motivo con su etiqueta, y «retirada» solo si la retiró la empresa", async ({
+    page,
+  }) => {
+    await loginAs(page, "carrier");
+    await page.goto(LIFECYCLE_TRIP);
+
+    const casos: [string, string, string][] = [
+      [unpaid.description, "retirada", "retirada sin seña cobrada"],
+      [
+        "E2E ciclo sin confirmar",
+        "cancelada",
+        "cancelada porque el viaje salió sin confirmarla. no se había cobrado la seña.",
+      ],
+      ["E2E ciclo vencida", "vencida", "venció la reserva: no se pagó la seña a tiempo."],
+      [
+        "E2E ciclo devuelta por el fletero",
+        "cancelada",
+        "cancelada: el fletero devolvió la seña entera desde Mercado Pago.",
+      ],
+      // de antes del motivo: no se inventa la causa
+      ["E2E ciclo cancelada sin motivo", "cancelada", "cancelada sin seña cobrada"],
+    ];
+    for (const [description, etiqueta, nota] of casos) {
+      const row = cargoRow(page, description);
+      await expect(row.getByText(etiqueta, { exact: true })).toBeVisible();
+      await expect(row).toContainText(nota);
+    }
   });
 });
 
@@ -453,8 +496,12 @@ test.describe("cancelar el viaje (D6)", () => {
     await expect(page.getByText("cancelado", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "marcar en tránsito" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "cancelar viaje" })).toHaveCount(0);
-    await expect(cargoRow(page, "E2E carga del viaje a cancelar")).toContainText(
-      "retirada sin seña cobrada"
+    // la carga no la retiró la empresa: se canceló con el viaje (L7)
+    const row = cargoRow(page, "E2E carga del viaje a cancelar");
+    await expect(row.getByText("cancelada", { exact: true })).toBeVisible();
+    await expect(row).toContainText(
+      "cancelada porque se canceló el viaje. no se había cobrado la seña."
     );
+    await expect(row).not.toContainText("retirada");
   });
 });

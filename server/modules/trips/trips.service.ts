@@ -1,6 +1,6 @@
 import { prisma } from "../../lib/prisma.js";
 import { Prisma } from "@prisma/client";
-import type { PaymentStatus, Role, Trip } from "@prisma/client";
+import type { CargoCancellationReason, PaymentStatus, Role, Trip } from "@prisma/client";
 import {
   activeVolume,
   CARRIER_CAN_CHARGE,
@@ -336,7 +336,7 @@ async function releaseTripReservations(
         );
         if (expired.length === 0) return 0;
 
-        await cancelCargoForTrip(tx, expired, now);
+        await cancelCargoForTrip(tx, expired, now, "RESERVATION_EXPIRED");
 
         // el lugar vuelve al viaje, con las cargas que se leyeron en esta TX
         const expiredIds = new Set(expired.map((item) => item.id));
@@ -647,7 +647,9 @@ type CargoForTripCancellation = {
 async function cancelCargoForTrip(
   tx: Prisma.TransactionClient,
   items: CargoForTripCancellation[],
-  now: Date
+  now: Date,
+  // L7: por qué (la etiqueta de la carga); no se puede derivar después
+  reason: CargoCancellationReason
 ): Promise<CancelledByTrip[]> {
   const cancelled: CancelledByTrip[] = [];
   for (const item of items) {
@@ -681,6 +683,7 @@ async function cancelCargoForTrip(
         status: "CANCELLED",
         cancelledAt: now,
         cancellationFeeAmount: new Prisma.Decimal(0),
+        cancellationReason: reason,
       },
     });
 
@@ -906,7 +909,12 @@ async function applyTripStatus(
                   (item) => item.status === "PENDING" || item.status === "CONFIRMED"
                 )
               : [];
-        const cancelled = await cancelCargoForTrip(tx, toCancel, now);
+        const cancelled = await cancelCargoForTrip(
+          tx,
+          toCancel,
+          now,
+          status === "CANCELLED" ? "TRIP_CANCELLED" : "TRIP_DEPARTED"
+        );
 
         const updated = await tx.trip.update({
           where: { id: tripId },
@@ -1286,6 +1294,7 @@ export async function cancelCargoItem(
               status: "CANCELLED",
               cancelledAt: new Date(),
               cancellationFeeAmount: new Prisma.Decimal(feeAmount),
+              cancellationReason: "COMPANY_WITHDREW",
             },
             include: { payments: true, company: { select: { name: true } } },
           });

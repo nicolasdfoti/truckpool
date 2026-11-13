@@ -190,6 +190,19 @@ describe("toCargoItemResponse: reserva y saldo (L7)", () => {
     expect(toCargoItemResponse(sinPagos).reservationExpiresAt).toBeNull();
   });
 
+  it("expone el motivo de la cancelación, y null en las de antes de L7", () => {
+    const cancelada = (reason: string | null) =>
+      ({
+        ...(carga(seña()) as unknown as Record<string, unknown>),
+        status: "CANCELLED",
+        cancellationReason: reason,
+      }) as unknown as Parameters<typeof toCargoItemResponse>[0];
+    expect(toCargoItemResponse(cancelada("TRIP_DEPARTED")).cancellationReason).toBe(
+      "TRIP_DEPARTED"
+    );
+    expect(toCargoItemResponse(cancelada(null)).cancellationReason).toBeNull();
+  });
+
   it("el saldo es el total menos la seña, a centavos", () => {
     const item = {
       ...(carga(seña()) as unknown as Record<string, unknown>),
@@ -214,6 +227,7 @@ describe("mappers por whitelist (U7)", () => {
       "balanceAmount",
       "balancePayment",
       "cancellationFeeAmount",
+      "cancellationReason",
       "cancelledAt",
       "companyId",
       "companyName",

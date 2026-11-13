@@ -1602,6 +1602,8 @@ describe("seña devuelta por fuera de la app (desde el panel de MP)", () => {
         status: "CANCELLED",
         cancelledAt: expect.any(Date),
         cancellationFeeAmount: new Prisma.Decimal(0),
+        // L7: la etiqueta dice que el fletero devolvió la seña
+        cancellationReason: "REFUNDED_BY_CARRIER",
       },
     });
 

@@ -183,6 +183,8 @@ export function toCargoItemResponse(item: CargoItemWithPayments) {
     reservationExpiresAt: reservationExpiresAt(item),
     cancellationFeeAmount:
       item.cancellationFeeAmount === null ? null : Number(item.cancellationFeeAmount),
+    // L7: la etiqueta de la carga cancelada; null en las de antes del motivo
+    cancellationReason: item.cancellationReason ?? null,
     companyName: company?.name ?? "",
     // la seña y el saldo van por separado porque se pagan en momentos
     // distintos: sin depósito no se confirma, y el saldo se cobra con el viaje

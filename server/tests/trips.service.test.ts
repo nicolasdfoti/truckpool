@@ -486,6 +486,17 @@ describe("cancelCargoItem", () => {
     vi.mocked(refundPayment).mockResolvedValue(0);
   });
 
+  it("deja asentado que la retiró la empresa (L7: COMPANY_WITHDREW)", async () => {
+    await tripsService.cancelCargoItem("t1", "i1", "c1");
+
+    expect(tx.cargoItem.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "i1" },
+        data: expect.objectContaining({ cancellationReason: "COMPANY_WITHDREW" }),
+      })
+    );
+  });
+
   it("retira una carga PENDING de la empresa y la marca CANCELLED sin borrarla", async () => {
     const result = await tripsService.cancelCargoItem("t1", "i1", "c1");
 
@@ -2383,6 +2394,8 @@ describe("addCargoItem", () => {
           // nunca se cobró nada: el costo es 0 (y no null, que en el mapper
           // significa "la carga sigue viva")
           cancellationFeeAmount: new Prisma.Decimal(0),
+          // L7: la etiqueta dice que venció, no que la retiraron
+          cancellationReason: "RESERVATION_EXPIRED",
         },
       });
       expect(tx.refundRequest.create).not.toHaveBeenCalled();
@@ -3193,6 +3206,15 @@ describe("addCargoItem", () => {
           };
         });
 
+      it("las que no viajan quedan con el motivo TRIP_DEPARTED (L7)", async () => {
+        await tripsService.updateTripStatus("t1", "u1", "IN_TRANSIT");
+
+        const motivos = tx.cargoItem.update.mock.calls.map(
+          (call) => (call[0] as { data: Record<string, unknown> }).data.cancellationReason
+        );
+        expect(motivos).toEqual(["TRIP_DEPARTED", "TRIP_DEPARTED"]);
+      });
+
       it("1 CONFIRMED + 1 PENDING con seña + 1 sin seña: saldo solo para la confirmada, 100 % a la segunda, ninguna queda PENDING", async () => {
         await tripsService.updateTripStatus("t1", "u1", "IN_TRANSIT");
 
@@ -3454,6 +3476,18 @@ describe("addCargoItem", () => {
             fee: Number(arg.data.cancellationFeeAmount),
           };
         });
+
+      it("las cargas canceladas quedan con el motivo TRIP_CANCELLED (L7)", async () => {
+        tx.trip.findUnique.mockResolvedValue(viaje("OPEN"));
+
+        await tripsService.updateTripStatus("t1", "u1", "CANCELLED");
+
+        const motivos = tx.cargoItem.update.mock.calls.map(
+          (call) => (call[0] as { data: Record<string, unknown> }).data.cancellationReason
+        );
+        expect(motivos.length).toBeGreaterThan(0);
+        expect(new Set(motivos)).toEqual(new Set(["TRIP_CANCELLED"]));
+      });
 
       it.each([["OPEN"], ["FULL"]])(
         "desde %s cancela las cargas activas y devuelve entera cada seña cobrada",
@@ -3750,6 +3784,17 @@ describe("addCargoItem", () => {
         });
         expect(data.body).toContain("24 h");
         expect(data.body).toContain("3 cargas");
+      });
+
+      it("las cargas quedan con el motivo TRIP_CANCELLED, como en la manual (L7)", async () => {
+        viajes(viaje({ id: "t1" }));
+
+        await tripsService.autoCancelUndepartedTrips(AHORA);
+
+        const motivos = tx.cargoItem.update.mock.calls.map(
+          (call) => (call[0] as { data: Record<string, unknown> }).data.cancellationReason
+        );
+        expect(motivos).toEqual(["TRIP_CANCELLED", "TRIP_CANCELLED", "TRIP_CANCELLED"]);
       });
 
       it("también cancela un viaje sin cargas", async () => {

@@ -2583,6 +2583,7 @@ describe("GET /api/trips/:id por rol (U7)", () => {
     "balanceAmount",
     "balancePayment",
     "cancellationFeeAmount",
+    "cancellationReason",
     "cancelledAt",
     "companyId",
     "companyName",

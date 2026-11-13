@@ -150,6 +150,7 @@ async function main() {
       status: "CANCELLED",
       cancelledAt: new Date(),
       cancellationFeeAmount: new Prisma.Decimal("0.00"),
+      cancellationReason: "COMPANY_WITHDREW",
       pickupAddress: "E2E Calle Ex 333, Bell Ville",
       pickupCity: "Bell Ville",
       pickupLat: COORDS.bellVille.lat,
@@ -250,6 +251,7 @@ async function main() {
       status: "CANCELLED",
       cancelledAt: new Date(Date.now() - 2 * DAY_MS),
       cancellationFeeAmount: new Prisma.Decimal("0.00"),
+      cancellationReason: "COMPANY_WITHDREW",
       pickupAddress: "E2E Calle Tránsito Ex 666, Bell Ville",
       pickupCity: "Bell Ville",
       pickupLat: COORDS.bellVille.lat,
@@ -331,6 +333,46 @@ async function main() {
       trackingCode: generateTrackingCode(),
     },
   });
+  // sin seña ni confirmar: al salir se cancela (D3) con el motivo TRIP_DEPARTED
+  await prisma.cargoItem.create({
+    data: {
+      tripId: E2E_LIFECYCLE_TRIP_ID,
+      companyId: other.id,
+      description: "E2E ciclo sin confirmar",
+      volume: 2,
+      priceShare: new Prisma.Decimal("200.00"),
+      depositAmount: new Prisma.Decimal("40.00"),
+      status: "PENDING",
+      pickupAddress: "E2E Calle Ciclo 703, Córdoba",
+      pickupCity: "Córdoba",
+      trackingCode: generateTrackingCode(),
+    },
+  });
+  // canceladas por caminos que el e2e no puede disparar (el scheduler está
+  // apagado y la devolución desde MP es un webhook), y una de antes del motivo
+  for (const [description, cancellationReason] of [
+    ["E2E ciclo vencida", "RESERVATION_EXPIRED"],
+    ["E2E ciclo devuelta por el fletero", "REFUNDED_BY_CARRIER"],
+    ["E2E ciclo cancelada sin motivo", null],
+  ] as const) {
+    await prisma.cargoItem.create({
+      data: {
+        tripId: E2E_LIFECYCLE_TRIP_ID,
+        companyId: other.id,
+        description,
+        volume: 1,
+        priceShare: new Prisma.Decimal("100.00"),
+        depositAmount: new Prisma.Decimal("20.00"),
+        status: "CANCELLED",
+        cancelledAt: new Date(),
+        cancellationFeeAmount: new Prisma.Decimal("0.00"),
+        cancellationReason,
+        pickupAddress: "E2E Calle Ciclo 704, Córdoba",
+        pickupCity: "Córdoba",
+        trackingCode: generateTrackingCode(),
+      },
+    });
+  }
   for (const [item, amount, mpPaymentId] of [
     [paidPending, "60.00", "e2e-mp-ciclo-1"],
     [confirmed, "100.00", "e2e-mp-ciclo-2"],

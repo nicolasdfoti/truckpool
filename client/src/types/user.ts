@@ -1,5 +1,5 @@
 import type { Trip } from "./trip";
-import type { CargoItemPayment, CargoItemStatus } from "./trip";
+import type { CargoCancellationReason, CargoItemPayment, CargoItemStatus } from "./trip";
 
 export type UserRole = "COMPANY" | "CARRIER" | "ADMIN";
 
@@ -71,6 +71,7 @@ export type MyCargoItem = {
   createdAt: string;
   cancelledAt: string | null;
   cancellationFeeAmount: number | null;
+  cancellationReason: CargoCancellationReason | null;
   depositPayment: CargoItemPayment | null;
   balancePayment: CargoItemPayment | null;
   trip: {

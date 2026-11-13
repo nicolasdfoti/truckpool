@@ -28,7 +28,7 @@ import { usePlaceField } from "../hooks/usePlaceField";
 import { ApiError } from "../api/client";
 import type { CargoItem, CargoItemStatus } from "../types/trip";
 import { TRIP_STATUS_LABELS } from "../types/trip";
-import { cancellationNote } from "../lib/cancellation";
+import { cancellationNote, cancelledLabel } from "../lib/cancellation";
 import { WithdrawCargoDialog } from "../components/WithdrawCargoDialog";
 import { DepartTripDialog } from "../components/DepartTripDialog";
 import { CancelTripDialog } from "../components/CancelTripDialog";
@@ -38,7 +38,8 @@ import { formatInstant, formatTripDate } from "../lib/tripWhen";
 const CARGO_STATUS_LABELS: Record<CargoItemStatus, string> = {
   PENDING: "pendiente",
   CONFIRMED: "confirmada",
-  CANCELLED: "retirada",
+  // la de CANCELLED depende del motivo: ver cancelledLabel
+  CANCELLED: "cancelada",
 };
 
 const CARGO_STATUS_STYLES: Record<CargoItemStatus, string> = {
@@ -641,7 +642,9 @@ export default function TripDetail() {
                         <span
                           className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${CARGO_STATUS_STYLES[item.status]}`}
                         >
-                          {CARGO_STATUS_LABELS[item.status]}
+                          {item.status === "CANCELLED"
+                            ? cancelledLabel(item.cancellationReason)
+                            : CARGO_STATUS_LABELS[item.status]}
                         </span>
                       )}
                       <div>

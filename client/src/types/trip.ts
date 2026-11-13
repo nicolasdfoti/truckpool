@@ -1,6 +1,16 @@
 /** CANCELLED: el fletero lo canceló antes de salir; las cargas activas se cancelan */
 export type TripStatus = "OPEN" | "FULL" | "IN_TRANSIT" | "COMPLETED" | "CANCELLED";
 export type CargoItemStatus = "PENDING" | "CONFIRMED" | "CANCELLED";
+/**
+ * Por qué una carga quedó CANCELLED (L7). null en las canceladas antes de que
+ * el server guardara el motivo: se muestran como «cancelada», sin inventarlo.
+ */
+export type CargoCancellationReason =
+  | "COMPANY_WITHDREW"
+  | "TRIP_CANCELLED"
+  | "TRIP_DEPARTED"
+  | "RESERVATION_EXPIRED"
+  | "REFUNDED_BY_CARRIER";
 /** CHARGED_BACK: contracargo en Mercado Pago; no se vuelve a pagar, lo resuelve un admin. */
 export type PaymentStatus =
   "PENDING" | "APPROVED" | "REJECTED" | "REFUNDED" | "CHARGED_BACK";
@@ -138,6 +148,8 @@ export type CargoItem = {
   cancelledAt: string | null;
   /** lo que la plataforma se quedó de la seña al retirar la carga */
   cancellationFeeAmount: number | null;
+  /** por qué se canceló (null si sigue viva o es de antes del motivo) */
+  cancellationReason: CargoCancellationReason | null;
   depositPayment: CargoItemPayment | null;
   balancePayment: CargoItemPayment | null;
   companyName: string;
