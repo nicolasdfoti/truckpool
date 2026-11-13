@@ -130,7 +130,7 @@ aviso de saldo al salir y el chat del ex participante (D9).
 
 ## 4. Decisiones (2026-11-13) y lo que se arregla antes del gate
 Se arregla en `feat/revision-diseno`, un commit por hallazgo, con e2e cuando aplica:
-- [ ] RD1 — header del fletero y diálogos en mobile.
+- [x] RD1 — header del fletero y diálogos en mobile. A menos de 640 px, «publicar viaje» queda solo en el menú móvil. `ConfirmDialog`, `Modal` y el modal de solicitudes tienen un tope de alto con scroll. e2e `mobile-layout.spec.ts`.
 - [ ] RD2 / QW5 — copy de la landing.
 - [ ] RD3 / QW13 — fila de la carga en mobile.
 - [ ] RD4 — invalidar paradas y recorrido al salir, cancelar el viaje y confirmar una carga.

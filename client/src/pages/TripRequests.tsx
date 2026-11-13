@@ -638,7 +638,9 @@ export default function TripRequests(): React.ReactElement {
 
         {openModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
-            <div className="w-full max-w-xl rounded-[10px] bg-white p-6 shadow-xl">
+            {/* RD1: más alto que la pantalla en mobile; el panel scrollea para
+                llegar al título y a los botones */}
+            <div className="max-h-[calc(100dvh-2rem)] w-full max-w-xl overflow-y-auto rounded-[10px] bg-white p-6 shadow-xl">
               {openModal.type === "create" ? (
                 <>
                   <h2 className="font-display text-xl font-semibold mb-4">

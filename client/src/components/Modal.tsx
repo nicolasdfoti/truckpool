@@ -32,7 +32,7 @@ export function Modal({
         aria-labelledby="modal-title"
       >
         <div
-          className="w-full max-w-md rounded-[10px] bg-white p-6 shadow-xl"
+          className="max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto rounded-[10px] bg-white p-6 shadow-xl"
           onClick={(e) => e.stopPropagation()}
         >
           <div className="flex items-start justify-between gap-4">

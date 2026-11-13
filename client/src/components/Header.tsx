@@ -148,10 +148,15 @@ export function Header() {
           {/* Mobile hamburger */}
           <div className="lg:hidden flex items-center gap-2">
             <NotificationBell />
+            {/* RD1: a menos de sm no entra junto a la campanita, el avatar y la
+                hamburguesa (la página se ensanchaba y el menú quedaba afuera);
+                ahí «publicar viaje» queda en el menú móvil */}
             {user?.role === "CARRIER" && (
-              <Button asChild variant="primary" size="sm">
-                <Link to="/viajes/nuevo">Publicar viaje</Link>
-              </Button>
+              <span className="hidden sm:inline-flex">
+                <Button asChild variant="primary" size="sm">
+                  <Link to="/viajes/nuevo">Publicar viaje</Link>
+                </Button>
+              </span>
             )}
             {/* bajo lg el menú se reduce al avatar (el nombre y el chevron
                 se ocultan solos con lg:block dentro de UserMenu) */}

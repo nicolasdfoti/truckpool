@@ -103,7 +103,8 @@ export function ConfirmDialog({
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={bodyId}
-        className="relative w-full max-w-md rounded-[10px] bg-white p-6 shadow-xl"
+        // RD1: en pantallas bajas el panel scrollea y los botones siguen al alcance
+        className="relative max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto rounded-[10px] bg-white p-6 shadow-xl"
       >
         <h2 id={titleId} className="font-display text-lg font-medium text-ink">
           {title}
