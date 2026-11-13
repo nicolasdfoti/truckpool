@@ -173,7 +173,10 @@ export function toCargoItemResponse(item: CargoItemWithPayments) {
     cancelledAt: item.cancelledAt,
     priceShare: Number(item.priceShare),
     depositAmount: Number(item.depositAmount),
-    // lo que falta pagar al salir: el cliente no resta montos (L7)
+    // lo que falta pagar al salir: el cliente no resta montos (L7). SOLO PARA
+    // MOSTRAR: lo que se cobra sale de `balanceOf` (Decimal) en
+    // payments.service.ts, tanto en la preference como en el pago BALANCE que
+    // nace al salir. Ningún flujo de plata lee este número.
     balanceAmount:
       Math.round((Number(item.priceShare) - Number(item.depositAmount)) * 100) / 100,
     // «reservado hasta …»: null si no vence (ver lib/reservations.ts)
