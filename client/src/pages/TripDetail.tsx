@@ -27,8 +27,8 @@ import { usePlaceField } from "../hooks/usePlaceField";
 import { ApiError } from "../api/client";
 import type { CargoItem, CargoItemStatus } from "../types/trip";
 import { TRIP_STATUS_LABELS } from "../types/trip";
-import { cancellationNote, fetchCancellationQuote } from "../lib/cancellation";
-import type { CancellationQuote } from "../lib/cancellation";
+import { cancellationNote } from "../lib/cancellation";
+import { WithdrawCargoDialog } from "../components/WithdrawCargoDialog";
 import { formatInstant, formatTripDate } from "../lib/tripWhen";
 
 const CARGO_STATUS_LABELS: Record<CargoItemStatus, string> = {
@@ -69,42 +69,6 @@ function currency(n: number) {
 /** el saldo también va a dos decimales, como lo calcula el backend */
 function round2(n: number) {
   return Math.round(n * 100) / 100;
-}
-
-/**
- * Texto de confirmación del retiro. El monto sale del endpoint de quote del
- * servidor, nunca de una cuenta local: si no se pudo consultar, se confirma sin
- * prometer número en vez de estimarlo con una constante propia.
- */
-function cancellationMessage(quote: CancellationQuote | null) {
-  if (!quote) {
-    return "?retirar esta carga? se libera el lugar. no pudimos calcular el monto a devolver, te lo confirmamos al retirar.";
-  }
-  if (quote.refundAmount > 0) {
-    return `?retirar esta carga? se libera el lugar y te devolvemos ${currency(
-      quote.refundAmount
-    )} de la seña.`;
-  }
-  if (quote.feeAmount > 0) {
-    return `?retirar esta carga? se libera el lugar, pero con menos de 24hs para la salida la seña de ${currency(
-      quote.feeAmount
-    )} no se devuelve.`;
-  }
-  return "?retirar esta carga? se libera el lugar y no se puede volver a sumar.";
-}
-
-/** Pide la quote y abre el confirm. Devuelve false si el usuario cancela. */
-async function confirmCancellation(item: CargoItem, trip: { id: string }) {
-  const quote = await fetchCancellationQuote(trip.id, item.id);
-  // desde la salida no se retira: si el viaje no sale, se cancela solo y la
-  // seña vuelve entera
-  if (quote && !quote.cancellable) {
-    window.alert(
-      "el viaje ya salió: la carga no se puede retirar. si el viaje no sale, se cancela y te devolvemos lo que pagaste de seña."
-    );
-    return false;
-  }
-  return window.confirm(cancellationMessage(quote));
 }
 
 /** campo de dirección de pickup con el mismo picker de mapa que PublishTrip */
@@ -186,6 +150,8 @@ export default function TripDetail() {
   const [rating, setRating] = useState(0);
   const [comment, setComment] = useState("");
   const [reviewError, setReviewError] = useState<string | null>(null);
+  // la carga que la empresa está por retirar (diálogo con el desglose, U21)
+  const [withdrawItemId, setWithdrawItemId] = useState<string | null>(null);
 
   function handleSubmitReview(e: FormEvent) {
     e.preventDefault();
@@ -340,9 +306,7 @@ export default function TripDetail() {
         ? confirmCargoItem.error.message
         : createPaymentPreference.error instanceof Error
           ? createPaymentPreference.error.message
-          : cancelCargoItem.error instanceof Error
-            ? cancelCargoItem.error.message
-            : null;
+          : null;
 
   return (
     <div className="bg-canvas font-sans text-ink">
@@ -693,16 +657,15 @@ export default function TripDetail() {
                       <div className="flex items-center gap-2">
                         {showCancelButton && (
                           <Button
-                            variant="ghost"
+                            variant="outline-danger"
                             size="sm"
                             disabled={cancelCargoItem.isPending}
-                            onClick={async () => {
-                              if (await confirmCancellation(item, trip)) {
-                                cancelCargoItem.mutate(item.id);
-                              }
+                            onClick={() => {
+                              cancelCargoItem.reset();
+                              setWithdrawItemId(item.id);
                             }}
                           >
-                            {cancelCargoItem.isPending ? "retirando…" : "retirar carga"}
+                            retirar carga
                           </Button>
                         )}
                         {showPayButton && (
@@ -950,6 +913,22 @@ export default function TripDetail() {
             )}
           </form>
         )}
+
+        {/* el error del retiro se ve dentro del diálogo, no abajo de todo */}
+        <WithdrawCargoDialog
+          tripId={trip.id}
+          item={trip.cargoItems.find((c) => c.id === withdrawItemId) ?? null}
+          onCancel={() => setWithdrawItemId(null)}
+          onConfirm={(cargoItemId) =>
+            cancelCargoItem.mutate(cargoItemId, {
+              onSuccess: () => setWithdrawItemId(null),
+            })
+          }
+          pending={cancelCargoItem.isPending}
+          error={
+            cancelCargoItem.error instanceof Error ? cancelCargoItem.error.message : null
+          }
+        />
 
         {stopDistanceError && (
           <Modal

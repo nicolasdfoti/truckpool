@@ -57,6 +57,18 @@ export const E2E = {
     former: { description: "E2E carga en tránsito del ex participante" },
   },
   reviewComment: "E2E reseña: puntual y prolijo",
+  /** L7: OPEN a 10 días, con tres cargas (ver seed-e2e.ts) */
+  lifecycleTripId: "e2e-trip-lifecycle",
+  lifecycleCargo: {
+    /** empresa@, PENDING sin seña */
+    unpaid: { description: "E2E ciclo sin seña", volume: 4, depositAmount: 80 },
+    /** e2e-segunda@, PENDING con la seña aprobada */
+    paidPending: { description: "E2E ciclo con seña", volume: 3, depositAmount: 60 },
+    /** empresa@, CONFIRMED con la seña aprobada */
+    confirmed: { description: "E2E ciclo confirmada", volume: 5, depositAmount: 100 },
+  },
+  /** L7: OPEN a 10 días, con una carga PENDING sin seña de e2e-otra@ */
+  cancelTripId: "e2e-trip-cancel",
 } as const;
 
 /** el token de un usuario, por API: sin pasar por el formulario de login */

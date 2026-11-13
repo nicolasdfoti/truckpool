@@ -5,7 +5,15 @@ import {
   type ComponentPropsWithoutRef,
 } from "react";
 
-type Variant = "primary" | "dark" | "outline" | "outline-light" | "ghost" | "danger";
+type Variant =
+  | "primary"
+  | "dark"
+  | "outline"
+  | "outline-light"
+  | "outline-danger"
+  | "ghost"
+  | "danger"
+  | "danger-solid";
 type Size = "sm" | "md" | "icon";
 
 type ButtonProps = ComponentPropsWithoutRef<"button"> & {
@@ -24,8 +32,14 @@ const VARIANTS: Record<Variant, string> = {
     "border border-line-strong text-ink hover:border-brand disabled:text-ink-muted",
   "outline-light":
     "border border-white/40 text-white hover:border-white disabled:border-white/25 disabled:text-white/75",
+  // acciones que sacan algo (retirar carga): se leen como botón, no como label
+  "outline-danger":
+    "border border-danger text-danger hover:bg-danger/5 disabled:border-line-strong disabled:text-ink-muted",
   ghost: "text-ink-soft hover:text-ink disabled:text-ink-muted",
   danger: "text-danger hover:text-danger/80 disabled:text-ink-muted",
+  // la acción irreversible dentro de un diálogo de confirmación
+  "danger-solid":
+    "bg-danger text-white hover:bg-danger/90 disabled:bg-canvas-line disabled:text-ink-soft",
 };
 
 const SIZES: Record<Size, string> = {
