@@ -6,7 +6,9 @@ export function useUpdateTripStatus(tripId: string) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (status: "IN_TRANSIT" | "COMPLETED") =>
+    // CANCELLED: el fletero cancela antes de salir (D6); las cargas activas se
+    // cancelan con la seña devuelta entera
+    mutationFn: (status: "IN_TRANSIT" | "COMPLETED" | "CANCELLED") =>
       api.patch<Trip>(`/trips/${tripId}/status`, { status }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["trip", tripId] });

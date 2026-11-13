@@ -31,6 +31,7 @@ import { TRIP_STATUS_LABELS } from "../types/trip";
 import { cancellationNote } from "../lib/cancellation";
 import { WithdrawCargoDialog } from "../components/WithdrawCargoDialog";
 import { DepartTripDialog } from "../components/DepartTripDialog";
+import { CancelTripDialog } from "../components/CancelTripDialog";
 import { departureSummary } from "../lib/departure";
 import { formatInstant, formatTripDate } from "../lib/tripWhen";
 
@@ -162,6 +163,8 @@ export default function TripDetail() {
   const [withdrawItemId, setWithdrawItemId] = useState<string | null>(null);
   // «¿salís ahora?» (D3)
   const [departOpen, setDepartOpen] = useState(false);
+  // «¿cancelar el viaje?» (D6)
+  const [cancelTripOpen, setCancelTripOpen] = useState(false);
   // 03§1.3: precio, seña y saldo antes de reservar, del server
   const cargoQuote = useCargoQuote(id ?? "", quotableVolume(volume));
   // la hora para el aviso de la reserva por vencer; se refresca cada minuto
@@ -318,7 +321,7 @@ export default function TripDetail() {
     );
   }
 
-  // el error de salir (y, en L7, el de cancelar) se ve dentro de su diálogo
+  // el error de salir y el de cancelar el viaje se ven dentro de su diálogo
   const actionError =
     updateStatus.error instanceof Error && updateStatus.variables === "COMPLETED"
       ? updateStatus.error.message
@@ -495,23 +498,41 @@ export default function TripDetail() {
                   : "marcalo como completado cuando termines."}
               </p>
             </div>
-            <Button
-              variant="dark"
-              size="md"
-              disabled={updateStatus.isPending}
-              onClick={() => {
-                // salir no tiene vuelta atrás (D3): pasa por «¿salís ahora?»
-                if (nextAction.status === "IN_TRANSIT") {
-                  updateStatus.reset();
-                  confirmCargoItem.reset();
-                  setDepartOpen(true);
-                  return;
-                }
-                updateStatus.mutate(nextAction.status);
-              }}
-            >
-              {updateStatus.isPending ? "marcando…" : nextAction.label}
-            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              {/* D6 = a: cancelar solo antes de salir */}
+              {canCancelTrip && (
+                <Button
+                  variant="outline-danger"
+                  size="md"
+                  disabled={updateStatus.isPending}
+                  onClick={() => {
+                    updateStatus.reset();
+                    setCancelTripOpen(true);
+                  }}
+                >
+                  cancelar viaje
+                </Button>
+              )}
+              <Button
+                variant="dark"
+                size="md"
+                disabled={updateStatus.isPending}
+                onClick={() => {
+                  // salir no tiene vuelta atrás (D3): pasa por «¿salís ahora?»
+                  if (nextAction.status === "IN_TRANSIT") {
+                    updateStatus.reset();
+                    confirmCargoItem.reset();
+                    setDepartOpen(true);
+                    return;
+                  }
+                  updateStatus.mutate(nextAction.status);
+                }}
+              >
+                {updateStatus.isPending && updateStatus.variables === nextAction.status
+                  ? "marcando…"
+                  : nextAction.label}
+              </Button>
+            </div>
           </div>
         )}
 
@@ -1014,6 +1035,23 @@ export default function TripDetail() {
           </form>
         )}
 
+        <CancelTripDialog
+          open={cancelTripOpen}
+          items={trip.cargoItems}
+          onCancel={() => setCancelTripOpen(false)}
+          onConfirm={() =>
+            updateStatus.mutate("CANCELLED", {
+              onSuccess: () => setCancelTripOpen(false),
+            })
+          }
+          pending={updateStatus.isPending}
+          error={
+            updateStatus.error instanceof Error && updateStatus.variables === "CANCELLED"
+              ? updateStatus.error.message
+              : null
+          }
+        />
+
         <DepartTripDialog
           open={departOpen}
           items={trip.cargoItems}
@@ -1027,7 +1065,7 @@ export default function TripDetail() {
             confirmCargoItem.isPending ? (confirmCargoItem.variables ?? null) : null
           }
           error={
-            updateStatus.error instanceof Error
+            updateStatus.error instanceof Error && updateStatus.variables === "IN_TRANSIT"
               ? updateStatus.error.message
               : confirmCargoItem.error instanceof Error
                 ? confirmCargoItem.error.message

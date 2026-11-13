@@ -378,3 +378,83 @@ test.describe("salir: «¿salís ahora?» y el checklist (D3)", () => {
     await expect(page.getByText("antes de salir:")).toHaveCount(0);
   });
 });
+
+test.describe("cancelar el viaje (D6)", () => {
+  const CANCEL_TRIP = `/viajes/${E2E.cancelTripId}`;
+
+  test("con el viaje en camino ya no se cancela", async ({ page }) => {
+    await loginAs(page, "carrier");
+    await page.goto(LIFECYCLE_TRIP);
+    await expect(page.getByRole("button", { name: "marcar completado" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "cancelar viaje" })).toHaveCount(0);
+  });
+
+  test("el diálogo cuenta a cuántas empresas se les devuelve la seña", async ({
+    page,
+  }) => {
+    // dos empresas con la seña pagada: se simula en la respuesta del viaje para
+    // no cancelar de verdad algo que el server tendría que devolver a MP
+    await page.route(`**/api/trips/${E2E.rolesTripId}`, async (route) => {
+      const response = await route.fetch();
+      const trip = (await response.json()) as {
+        cargoItems: { status: string; depositPayment: unknown }[];
+      };
+      for (const item of trip.cargoItems) {
+        if (item.status === "PENDING") {
+          item.depositPayment = {
+            id: "e2e",
+            type: "DEPOSIT",
+            status: "APPROVED",
+            amount: 1,
+            refundedAmount: null,
+            platformFeeAmount: null,
+            carrierAmount: null,
+            netPlatformFeeAmount: null,
+            netCarrierAmount: null,
+          };
+        }
+      }
+      await route.fulfill({ response, json: trip });
+    });
+    await loginAs(page, "carrier");
+    await page.goto(`/viajes/${E2E.rolesTripId}`);
+
+    await page.getByRole("button", { name: "cancelar viaje" }).click();
+    const dialog = page.getByRole("dialog", { name: "¿cancelar el viaje?" });
+    await expect(dialog).toContainText("se cancelan las 2 cargas activas del viaje.");
+    await expect(dialog).toContainText("se devuelve el 100 % de la seña a 2 empresas.");
+    await dialog.getByRole("button", { name: "volver" }).click();
+    await expect(dialog).toBeHidden();
+  });
+
+  test("cancelar de verdad: la carga se cancela y el viaje queda cancelado", async ({
+    page,
+  }) => {
+    await loginAs(page, "carrier");
+    await page.goto(CANCEL_TRIP);
+
+    const open = page.getByRole("button", { name: "cancelar viaje" });
+    await open.click();
+    const dialog = page.getByRole("dialog", { name: "¿cancelar el viaje?" });
+    await expect(dialog.getByRole("button", { name: "volver" })).toBeFocused();
+    await expect(dialog).toContainText("se cancela la carga activa del viaje.");
+    await expect(dialog).toContainText(
+      "ninguna empresa pagó la seña todavía: no hay nada que devolver."
+    );
+
+    // Escape no cancela nada
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+    await expect(page.getByText("abierto", { exact: true })).toBeVisible();
+
+    await open.click();
+    await dialog.getByRole("button", { name: "cancelar viaje" }).click();
+    await expect(dialog).toBeHidden();
+    await expect(page.getByText("cancelado", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "marcar en tránsito" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "cancelar viaje" })).toHaveCount(0);
+    await expect(cargoRow(page, "E2E carga del viaje a cancelar")).toContainText(
+      "retirada sin seña cobrada"
+    );
+  });
+});
