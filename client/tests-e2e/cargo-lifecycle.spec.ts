@@ -485,6 +485,10 @@ test.describe("cancelar el viaje (D6)", () => {
       "ninguna empresa pagó la seña todavía: no hay nada que devolver."
     );
 
+    // la parada de la carga activa, antes de cancelar
+    const stops = page.getByRole("region", { name: "paradas del viaje" });
+    await expect(stops).toContainText("E2E carga del viaje a cancelar");
+
     // Escape no cancela nada
     await page.keyboard.press("Escape");
     await expect(dialog).toBeHidden();
@@ -503,5 +507,11 @@ test.describe("cancelar el viaje (D6)", () => {
       "cancelada porque se canceló el viaje. no se había cobrado la seña."
     );
     await expect(row).not.toContainText("retirada");
+    // RD4: las paradas se actualizan sin recargar (antes quedaba la cancelada
+    // como «pendiente» y arrastrable)
+    await expect(
+      page.getByText("este viaje no tiene paradas de retiro cargadas.")
+    ).toBeVisible();
+    await expect(page.getByText(/arrastrá los ítems/)).toHaveCount(0);
   });
 });

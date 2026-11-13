@@ -133,7 +133,7 @@ Se arregla en `feat/revision-diseno`, un commit por hallazgo, con e2e cuando apl
 - [x] RD1 — header del fletero y diálogos en mobile. A menos de 640 px, «publicar viaje» queda solo en el menú móvil. `ConfirmDialog`, `Modal` y el modal de solicitudes tienen un tope de alto con scroll. e2e `mobile-layout.spec.ts`.
 - [ ] RD2 / QW5 — copy de la landing.
 - [ ] RD3 / QW13 — fila de la carga en mobile.
-- [ ] RD4 — invalidar paradas y recorrido al salir, cancelar el viaje y confirmar una carga.
+- [x] RD4 — invalidar paradas y recorrido al salir, cancelar el viaje y confirmar una carga. `hooks/invalidateTripCargo.ts`, usado por las cuatro mutaciones (también refresca la cotización de retiro y «mis cargas»). e2e: «cancelar de verdad» en `cargo-lifecycle.spec.ts`.
 - [ ] RD5 — copy de la retención de la seña.
 - [ ] RD6 — copy del retiro cerrado.
 - [ ] RD7 (mínima) — aviso de que reservaste y scroll a la fila.
