@@ -181,6 +181,21 @@ model TripLocation {
   @@index([tripId, recordedAt])
 }
 
+// por qué una carga quedó CANCELLED (L7). Lo escribe el camino que la cancela:
+// el motivo no se puede derivar después (todos dejan status, cancelledAt y fee).
+enum CargoCancellationReason {
+  // la empresa la retiró (cancelCargoItem)
+  COMPANY_WITHDREW
+  // el fletero canceló el viaje, a mano o por no salir a tiempo (D6)
+  TRIP_CANCELLED
+  // el viaje salió sin que estuviera confirmada (D3)
+  TRIP_DEPARTED
+  // la reserva sin seña venció a las 24 h (releaseExpiredReservations)
+  RESERVATION_EXPIRED
+  // el fletero devolvió la seña entera desde su cuenta de MP (webhook)
+  REFUNDED_BY_CARRIER
+}
+
 enum CargoItemStatus {
   PENDING
   CONFIRMED
@@ -207,6 +222,9 @@ model CargoItem {
   // <24h = toda la seña). queda en null mientras la carga está viva.
   cancelledAt           DateTime?
   cancellationFeeAmount Decimal?  @db.Decimal(12, 2)
+  // por qué se canceló (L7): cada camino que cancela escribe el suyo. null
+  // mientras la carga está viva y en las canceladas antes de que existiera
+  cancellationReason    CargoCancellationReason?
 
   // --- pickups por carga (nueva feature) ---
   // dirección de retiro (texto libre, lo que la empresa escribe)

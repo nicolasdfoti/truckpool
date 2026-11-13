@@ -1,6 +1,6 @@
 import { prisma } from "../../lib/prisma.js";
 import { Prisma } from "@prisma/client";
-import type { PaymentStatus, Role, Trip } from "@prisma/client";
+import type { CargoCancellationReason, PaymentStatus, Role, Trip } from "@prisma/client";
 import {
   activeVolume,
   CARRIER_CAN_CHARGE,
@@ -37,9 +37,12 @@ import {
   cargoAddedEmail,
   cargoCancelledEmail,
   cargoConfirmedEmail,
+  tripAutoCancelledEmail,
+  tripCargoCancelledEmail,
   tripStatusEmail,
 } from "../../lib/email.js";
 import { notifyUsers } from "../../lib/notifications.js";
+import { RESERVATION_TTL_MS, depositHoldsReservation } from "../../lib/reservations.js";
 import {
   endOfArgentinaDay,
   isTripDateAvailable,
@@ -99,13 +102,6 @@ async function retryOnConflict<T>(run: () => Promise<T>): Promise<T> {
   }
   throw lastError;
 }
-
-/**
- * Una reserva de espacio vale 24hs: si en ese plazo la empresa no abonó la
- * seña, el lugar vuelve a estar disponible para otro. La libera el scheduler
- * (ver releaseExpiredReservations y lib/jobs.ts).
- */
-const RESERVATION_TTL_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Una seña que sostiene la reserva: cobrada (APPROVED) o por acreditarse (pago
@@ -270,9 +266,7 @@ function isExpiredReservation(
   cutoff: Date
 ): boolean {
   if (item.status !== "PENDING" || item.createdAt >= cutoff) return false;
-  const deposit = item.payments.find((p) => p.type === "DEPOSIT");
-  if (deposit?.status === "APPROVED") return false;
-  if (deposit?.status === "PENDING" && deposit.mpPaymentId !== null) return false;
+  if (depositHoldsReservation(item.payments)) return false;
   return true;
 }
 
@@ -344,7 +338,7 @@ async function releaseTripReservations(
         );
         if (expired.length === 0) return 0;
 
-        await cancelCargoForTrip(tx, expired, now);
+        await cancelCargoForTrip(tx, expired, now, "RESERVATION_EXPIRED");
 
         // el lugar vuelve al viaje, con las cargas que se leyeron en esta TX
         const expiredIds = new Set(expired.map((item) => item.id));
@@ -621,6 +615,7 @@ type CancelledByTrip = {
   cargoItemId: string;
   companyId: string;
   description: string;
+  volume: number;
   /** la seña cobrada que vuelve entera por el outbox; 0 si no había seña cobrada */
   refundAmount: number;
 };
@@ -629,6 +624,7 @@ type CargoForTripCancellation = {
   id: string;
   companyId: string;
   description: string;
+  volume: number;
   depositAmount: Prisma.Decimal;
   payments: {
     id: string;
@@ -655,7 +651,9 @@ type CargoForTripCancellation = {
 async function cancelCargoForTrip(
   tx: Prisma.TransactionClient,
   items: CargoForTripCancellation[],
-  now: Date
+  now: Date,
+  // L7: por qué (la etiqueta de la carga); no se puede derivar después
+  reason: CargoCancellationReason
 ): Promise<CancelledByTrip[]> {
   const cancelled: CancelledByTrip[] = [];
   for (const item of items) {
@@ -689,6 +687,7 @@ async function cancelCargoForTrip(
         status: "CANCELLED",
         cancelledAt: now,
         cancellationFeeAmount: new Prisma.Decimal(0),
+        cancellationReason: reason,
       },
     });
 
@@ -696,6 +695,7 @@ async function cancelCargoForTrip(
       cargoItemId: item.id,
       companyId: item.companyId,
       description: item.description,
+      volume: item.volume,
       refundAmount: paid ? Number(item.depositAmount) : 0,
     });
   }
@@ -914,7 +914,12 @@ async function applyTripStatus(
                   (item) => item.status === "PENDING" || item.status === "CONFIRMED"
                 )
               : [];
-        const cancelled = await cancelCargoForTrip(tx, toCancel, now);
+        const cancelled = await cancelCargoForTrip(
+          tx,
+          toCancel,
+          now,
+          status === "CANCELLED" ? "TRIP_CANCELLED" : "TRIP_DEPARTED"
+        );
 
         const updated = await tx.trip.update({
           where: { id: tripId },
@@ -1045,12 +1050,32 @@ async function applyTripStatus(
             : `tu carga se canceló: ${ruta}`,
         body: `${motivo} ${plata}`,
         tripId,
+        // L7: informa una devolución de plata, con su propia plantilla
+        email: (user) =>
+          tripCargoCancelledEmail({
+            company: user,
+            trip: {
+              id: tripId,
+              origin: result.trip.origin,
+              destination: result.trip.destination,
+              carrierName: result.trip.carrierName,
+            },
+            description: item.description,
+            volume: item.volume,
+            reason:
+              status !== "CANCELLED"
+                ? "TRIP_DEPARTED"
+                : actor.by === "NO_DEPARTURE"
+                  ? "NO_DEPARTURE"
+                  : "CARRIER_CANCELLED",
+            refundAmount: item.refundAmount,
+          }),
       })
     );
   }
 
-  // D6 automática: el fletero se entera de que el viaje se canceló sin él.
-  // Solo in-app: el email queda para L7.
+  // D6 automática: el fletero se entera de que el viaje se canceló sin él,
+  // in-app y por email (L7): lo canceló el sistema, puede no haberse enterado
   if (actor.by === "NO_DEPARTURE") {
     const n = result.cancelled.length;
     const cargas =
@@ -1063,7 +1088,16 @@ async function applyTripStatus(
         title: `se canceló tu viaje: ${ruta}`,
         body: `no pasó a «en tránsito» dentro de las 24 h posteriores a la salida, así que lo cancelamos. ${cargas}`,
         tripId,
-        email: false,
+        email: (user) =>
+          tripAutoCancelledEmail({
+            carrier: user,
+            trip: {
+              id: tripId,
+              origin: result.trip.origin,
+              destination: result.trip.destination,
+            },
+            cancelledCount: n,
+          }),
       })
     );
   }
@@ -1115,10 +1149,14 @@ export async function confirmCargoItem(
     where: { id: tripId },
     select: { carrierId: true },
   });
-  const isCarrier = trip?.carrierId === userId;
-  const isCompany = item.companyId === userId;
-  if (!isCarrier && !isCompany) {
-    throw new AppError("no tenés permisos para confirmar esta carga", 403, "FORBIDDEN");
+  // D1 = a: confirmar es el compromiso de llevar la carga, así que es solo del
+  // fletero del viaje. La empresa dueña tampoco puede (antes sí).
+  if (trip?.carrierId !== userId) {
+    throw new AppError(
+      "solo el fletero del viaje puede confirmar la carga",
+      403,
+      "FORBIDDEN"
+    );
   }
 
   // lo que confirma la carga es la seña, no cualquier pago: el saldo todavía ni
@@ -1143,8 +1181,8 @@ export async function confirmCargoItem(
       where: { id: cargoItemId },
       include: { payments: true },
     });
-    // la confirmó otro (el transportista y la empresa a la vez): ya está, y el
-    // aviso lo manda el que ganó
+    // la confirmó otro pedido del fletero (doble clic, dos pestañas): ya está,
+    // y el aviso lo manda el que ganó
     if (current?.status === "CONFIRMED") return toCargoItemResponse(current);
     throw new CargoItemCancelledError();
   }
@@ -1290,6 +1328,7 @@ export async function cancelCargoItem(
               status: "CANCELLED",
               cancelledAt: new Date(),
               cancellationFeeAmount: new Prisma.Decimal(feeAmount),
+              cancellationReason: "COMPANY_WITHDREW",
             },
             include: { payments: true, company: { select: { name: true } } },
           });

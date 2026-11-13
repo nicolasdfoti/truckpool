@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useParams, Link } from "react-router-dom";
 import { CargoFillDiagram } from "../components/CargoFillDiagram";
 import { Button } from "../components/Button";
@@ -14,6 +14,7 @@ import { useUpdateTripStatus } from "../hooks/useUpdateTripStatus";
 import { useCancelCargoItem } from "../hooks/useCancelCargoItem";
 import { useConfirmCargoItem } from "../hooks/useConfirmCargoItem";
 import { useCreatePaymentPreference } from "../hooks/useCreatePaymentPreference";
+import { useCargoQuote } from "../hooks/useCargoQuote";
 import { useCreateReview } from "../hooks/useCreateReview";
 import { useTripReviewStatus } from "../hooks/useTripReviewStatus";
 import { useTripLocation } from "../hooks/useTripLocation";
@@ -27,14 +28,18 @@ import { usePlaceField } from "../hooks/usePlaceField";
 import { ApiError } from "../api/client";
 import type { CargoItem, CargoItemStatus } from "../types/trip";
 import { TRIP_STATUS_LABELS } from "../types/trip";
-import { cancellationNote, fetchCancellationQuote } from "../lib/cancellation";
-import type { CancellationQuote } from "../lib/cancellation";
-import { formatTripDate } from "../lib/tripWhen";
+import { cancellationNote, cancelledLabel } from "../lib/cancellation";
+import { WithdrawCargoDialog } from "../components/WithdrawCargoDialog";
+import { DepartTripDialog } from "../components/DepartTripDialog";
+import { CancelTripDialog } from "../components/CancelTripDialog";
+import { departureSummary } from "../lib/departure";
+import { formatInstant, formatTripDate } from "../lib/tripWhen";
 
 const CARGO_STATUS_LABELS: Record<CargoItemStatus, string> = {
   PENDING: "pendiente",
   CONFIRMED: "confirmada",
-  CANCELLED: "retirada",
+  // la de CANCELLED depende del motivo: ver cancelledLabel
+  CANCELLED: "cancelada",
 };
 
 const CARGO_STATUS_STYLES: Record<CargoItemStatus, string> = {
@@ -66,46 +71,15 @@ function currency(n: number) {
   return n.toLocaleString("es-AR", { style: "currency", currency: "ARS" });
 }
 
-/** el saldo también va a dos decimales, como lo calcula el backend */
-function round2(n: number) {
-  return Math.round(n * 100) / 100;
+/** el volumen escrito, si es un número válido para cotizar; si no, null */
+function quotableVolume(raw: string): number | null {
+  if (!raw.trim()) return null;
+  const parsed = parseDecimalInput(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
-/**
- * Texto de confirmación del retiro. El monto sale del endpoint de quote del
- * servidor, nunca de una cuenta local: si no se pudo consultar, se confirma sin
- * prometer número en vez de estimarlo con una constante propia.
- */
-function cancellationMessage(quote: CancellationQuote | null) {
-  if (!quote) {
-    return "?retirar esta carga? se libera el lugar. no pudimos calcular el monto a devolver, te lo confirmamos al retirar.";
-  }
-  if (quote.refundAmount > 0) {
-    return `?retirar esta carga? se libera el lugar y te devolvemos ${currency(
-      quote.refundAmount
-    )} de la seña.`;
-  }
-  if (quote.feeAmount > 0) {
-    return `?retirar esta carga? se libera el lugar, pero con menos de 24hs para la salida la seña de ${currency(
-      quote.feeAmount
-    )} no se devuelve.`;
-  }
-  return "?retirar esta carga? se libera el lugar y no se puede volver a sumar.";
-}
-
-/** Pide la quote y abre el confirm. Devuelve false si el usuario cancela. */
-async function confirmCancellation(item: CargoItem, trip: { id: string }) {
-  const quote = await fetchCancellationQuote(trip.id, item.id);
-  // desde la salida no se retira: si el viaje no sale, se cancela solo y la
-  // seña vuelve entera
-  if (quote && !quote.cancellable) {
-    window.alert(
-      "el viaje ya salió: la carga no se puede retirar. si el viaje no sale, se cancela y te devolvemos lo que pagaste de seña."
-    );
-    return false;
-  }
-  return window.confirm(cancellationMessage(quote));
-}
+/** faltando menos de esto, «reservado hasta» se pone en rojo (03§1.2) */
+const RESERVATION_URGENT_MS = 3 * 60 * 60 * 1000;
 
 /** campo de dirección de pickup con el mismo picker de mapa que PublishTrip */
 function PickupAddressField({
@@ -186,6 +160,20 @@ export default function TripDetail() {
   const [rating, setRating] = useState(0);
   const [comment, setComment] = useState("");
   const [reviewError, setReviewError] = useState<string | null>(null);
+  // la carga que la empresa está por retirar (diálogo con el desglose, U21)
+  const [withdrawItemId, setWithdrawItemId] = useState<string | null>(null);
+  // «¿salís ahora?» (D3)
+  const [departOpen, setDepartOpen] = useState(false);
+  // «¿cancelar el viaje?» (D6)
+  const [cancelTripOpen, setCancelTripOpen] = useState(false);
+  // 03§1.3: precio, seña y saldo antes de reservar, del server
+  const cargoQuote = useCargoQuote(id ?? "", quotableVolume(volume));
+  // la hora para el aviso de la reserva por vencer; se refresca cada minuto
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(timer);
+  }, []);
 
   function handleSubmitReview(e: FormEvent) {
     e.preventDefault();
@@ -259,9 +247,10 @@ export default function TripDetail() {
   // mientras está abierto o lleno las cargas pueden cambiar.
   const canDownloadManifest =
     isActiveViewer && (trip.status === "IN_TRANSIT" || trip.status === "COMPLETED");
-  const canConfirm = (companyId: string) =>
-    (user?.role === "CARRIER" && user.id === trip.carrierId) ||
-    (user?.role === "COMPANY" && user.id === companyId);
+  // D1 = a: confirmar es el compromiso de llevar la carga, solo del fletero
+  // (el server le responde 403 a la empresa)
+  const canConfirm = isCarrierOwner;
+  const departure = departureSummary(trip.cargoItems);
   // el backend solo deja retirar carga con el viaje abierto o lleno.
   const canCancelTrip = trip.status === "OPEN" || trip.status === "FULL";
 
@@ -333,16 +322,21 @@ export default function TripDetail() {
     );
   }
 
+  // el error de salir y el de cancelar el viaje se ven dentro de su diálogo
   const actionError =
-    updateStatus.error instanceof Error
+    updateStatus.error instanceof Error && updateStatus.variables === "COMPLETED"
       ? updateStatus.error.message
       : confirmCargoItem.error instanceof Error
         ? confirmCargoItem.error.message
-        : createPaymentPreference.error instanceof Error
-          ? createPaymentPreference.error.message
-          : cancelCargoItem.error instanceof Error
-            ? cancelCargoItem.error.message
-            : null;
+        : null;
+
+  // 03/Pagar seña#2: el error del pago va en la fila de la carga que se quiso
+  // pagar, no abajo de todo
+  const paymentErrorFor = (cargoItemId: string) =>
+    createPaymentPreference.error instanceof Error &&
+    createPaymentPreference.variables?.cargoItemId === cargoItemId
+      ? createPaymentPreference.error
+      : null;
 
   return (
     <div className="bg-canvas font-sans text-ink">
@@ -505,30 +499,41 @@ export default function TripDetail() {
                   : "marcalo como completado cuando termines."}
               </p>
             </div>
-            <Button
-              variant="dark"
-              size="md"
-              disabled={updateStatus.isPending}
-              onClick={() => {
-                // al salir, las cargas sin confirmar se cancelan (no viajan) y la
-                // seña cobrada vuelve entera: no tiene vuelta atrás
-                const sinConfirmar = trip.cargoItems.filter(
-                  (item) => item.status === "PENDING"
-                ).length;
-                if (
-                  nextAction.status === "IN_TRANSIT" &&
-                  sinConfirmar > 0 &&
-                  !window.confirm(
-                    `${sinConfirmar === 1 ? "hay 1 carga sin confirmar" : `hay ${sinConfirmar} cargas sin confirmar`}: al marcar el viaje en tránsito se cancelan y a cada empresa le devolvemos la seña que haya pagado. ¿seguir?`
-                  )
-                ) {
-                  return;
-                }
-                updateStatus.mutate(nextAction.status);
-              }}
-            >
-              {updateStatus.isPending ? "marcando…" : nextAction.label}
-            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              {/* D6 = a: cancelar solo antes de salir */}
+              {canCancelTrip && (
+                <Button
+                  variant="outline-danger"
+                  size="md"
+                  disabled={updateStatus.isPending}
+                  onClick={() => {
+                    updateStatus.reset();
+                    setCancelTripOpen(true);
+                  }}
+                >
+                  cancelar viaje
+                </Button>
+              )}
+              <Button
+                variant="dark"
+                size="md"
+                disabled={updateStatus.isPending}
+                onClick={() => {
+                  // salir no tiene vuelta atrás (D3): pasa por «¿salís ahora?»
+                  if (nextAction.status === "IN_TRANSIT") {
+                    updateStatus.reset();
+                    confirmCargoItem.reset();
+                    setDepartOpen(true);
+                    return;
+                  }
+                  updateStatus.mutate(nextAction.status);
+                }}
+              >
+                {updateStatus.isPending && updateStatus.variables === nextAction.status
+                  ? "marcando…"
+                  : nextAction.label}
+              </Button>
+            </div>
           </div>
         )}
 
@@ -558,6 +563,16 @@ export default function TripDetail() {
         {seesCargoList && (
           <section className="mt-8">
             <h2 className="font-display text-[17px] font-medium">cargas del viaje</h2>
+            {/* 03§1.4: el checklist de salida, para el fletero mientras no salió */}
+            {isCarrierOwner && canCancelTrip && trip.cargoItems.length > 0 && (
+              <p className="mt-2 rounded-md border border-surface-line bg-surface px-3 py-2 text-[13px] text-ink-soft">
+                <span className="font-medium text-ink">antes de salir:</span> confirmá las
+                cargas con seña pagada ({departure.confirmed.length} de{" "}
+                {departure.withDeposit}). las cargas sin confirmar se cancelan cuando
+                marcás el viaje en tránsito, y a cada empresa le devolvemos la seña que
+                haya pagado.
+              </p>
+            )}
             {trip.cargoItems.length === 0 && (
               <p className="mt-2 text-sm text-ink-muted">
                 todavía no hay carga asignada a este viaje.
@@ -567,7 +582,8 @@ export default function TripDetail() {
               {trip.cargoItems.map((item) => {
                 const deposit = item.depositPayment;
                 const balance = item.balancePayment;
-                const balanceAmount = round2(item.priceShare - item.depositAmount);
+                // del server (L7): el client no resta montos
+                const balanceAmount = item.balanceAmount;
                 const isCancelled = item.status === "CANCELLED";
                 const isCompany = user?.id === item.companyId;
                 const depositApproved = deposit?.status === "APPROVED";
@@ -593,6 +609,12 @@ export default function TripDetail() {
                   balance?.status !== "APPROVED" &&
                   balance?.status !== "CHARGED_BACK";
                 const showPayButton = showDepositPayButton || showBalancePayButton;
+                const paymentError = paymentErrorFor(item.id);
+                // el fletero desconectó Mercado Pago: reintentar no sirve, así
+                // que el botón queda deshabilitado con el motivo
+                const cannotCharge =
+                  paymentError instanceof ApiError &&
+                  paymentError.code === "MP_ACCOUNT_NOT_CONNECTED";
                 // se retira lo pendiente o confirmado (hasta la salida, con la misma
                 // penalidad) mientras el viaje no arrancó: el botón vive al lado
                 // de las otras acciones.
@@ -620,7 +642,9 @@ export default function TripDetail() {
                         <span
                           className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${CARGO_STATUS_STYLES[item.status]}`}
                         >
-                          {CARGO_STATUS_LABELS[item.status]}
+                          {item.status === "CANCELLED"
+                            ? cancelledLabel(item.cancellationReason)
+                            : CARGO_STATUS_LABELS[item.status]}
                         </span>
                       )}
                       <div>
@@ -653,6 +677,31 @@ export default function TripDetail() {
                             · quedan {currency(balanceAmount)} al salir
                           </p>
                         )}
+                        {/* 03§1.2 / QW12: hasta cuándo vale la reserva sin seña */}
+                        {showDepositPayButton && item.reservationExpiresAt && (
+                          <p
+                            className={`text-[13px] ${
+                              new Date(item.reservationExpiresAt).getTime() - now <
+                              RESERVATION_URGENT_MS
+                                ? "font-medium text-danger"
+                                : "text-ink-muted"
+                            }`}
+                          >
+                            reservado hasta el {formatInstant(item.reservationExpiresAt)}.
+                            si no pagás la seña antes, el lugar se libera.
+                          </p>
+                        )}
+                        {/* 03§1.3: con la seña paga, el saldo no se pierde de vista */}
+                        {isCompany &&
+                          depositApproved &&
+                          !isCancelled &&
+                          (trip.status === "OPEN" || trip.status === "FULL") &&
+                          balanceAmount > 0 && (
+                            <p className="text-[13px] text-ink-muted">
+                              el saldo de {currency(balanceAmount)} se paga cuando el
+                              viaje sale.
+                            </p>
+                          )}
                         {balanceDue &&
                           balance?.status !== "APPROVED" &&
                           balance?.status !== "CHARGED_BACK" && (
@@ -666,6 +715,17 @@ export default function TripDetail() {
                             admin.
                           </p>
                         )}
+                        {/* D1: el fletero sabe por qué todavía no puede confirmar */}
+                        {isCarrierOwner &&
+                          item.status === "PENDING" &&
+                          !depositApproved &&
+                          !chargedBack && (
+                            <p className="text-[13px] text-ink-muted">
+                              {item.reservationExpiresAt
+                                ? `esperando la seña de la empresa (vence ${formatInstant(item.reservationExpiresAt)})`
+                                : "esperando que se acredite la seña de la empresa"}
+                            </p>
+                          )}
                         {showDepositPayButton && deposit?.status === "REJECTED" && (
                           <p className="text-[13px] text-ink-muted">
                             el pago anterior fue rechazado, probá de nuevo.
@@ -676,29 +736,39 @@ export default function TripDetail() {
                             {cancellationNote(item)}
                           </p>
                         )}
+                        {showPayButton && paymentError && (
+                          <p role="alert" className="mt-1 text-[13px] text-danger">
+                            {cannotCharge
+                              ? `este viaje no puede recibir pagos por ahora.${
+                                  item.reservationExpiresAt
+                                    ? ` tu lugar queda reservado hasta el ${formatInstant(item.reservationExpiresAt)}.`
+                                    : ""
+                                }`
+                              : paymentError.message}
+                          </p>
+                        )}
                       </div>
                     </div>
                     {showPayButton || showCancelButton ? (
                       <div className="flex items-center gap-2">
                         {showCancelButton && (
                           <Button
-                            variant="ghost"
+                            variant="outline-danger"
                             size="sm"
                             disabled={cancelCargoItem.isPending}
-                            onClick={async () => {
-                              if (await confirmCancellation(item, trip)) {
-                                cancelCargoItem.mutate(item.id);
-                              }
+                            onClick={() => {
+                              cancelCargoItem.reset();
+                              setWithdrawItemId(item.id);
                             }}
                           >
-                            {cancelCargoItem.isPending ? "retirando…" : "retirar carga"}
+                            retirar carga
                           </Button>
                         )}
                         {showPayButton && (
                           <Button
                             variant="primary"
                             size="sm"
-                            disabled={createPaymentPreference.isPending}
+                            disabled={createPaymentPreference.isPending || cannotCharge}
                             onClick={() =>
                               createPaymentPreference.mutate({
                                 cargoItemId: item.id,
@@ -717,7 +787,7 @@ export default function TripDetail() {
                     ) : (
                       item.status === "PENDING" &&
                       depositApproved &&
-                      canConfirm(item.companyId) && (
+                      canConfirm && (
                         <Button
                           variant="primary"
                           size="sm"
@@ -927,6 +997,34 @@ export default function TripDetail() {
                   />
                 </div>
 
+                {/* 03§1.3: lo que se va a pagar, con los montos del server */}
+                <div className="mt-5 rounded-md border border-line bg-canvas p-3 text-[13px] text-ink-soft">
+                  {cargoQuote.quote ? (
+                    <p aria-live="polite">
+                      {cargoQuote.quote.volume.toLocaleString("es-AR", {
+                        maximumFractionDigits: 2,
+                      })}{" "}
+                      m³: {currency(cargoQuote.quote.priceShare)}. hoy pagás la seña de{" "}
+                      {currency(cargoQuote.quote.depositAmount)}; el saldo de{" "}
+                      {currency(cargoQuote.quote.balanceAmount)} se paga cuando el viaje
+                      sale.
+                    </p>
+                  ) : cargoQuote.isError ? (
+                    <p aria-live="polite">
+                      no pudimos calcular el precio ahora: lo ves al reservar.
+                    </p>
+                  ) : (
+                    <p>escribí el volumen y te mostramos cuánto pagás.</p>
+                  )}
+                  {/* 03§1.2: la política de retiro antes de reservar */}
+                  <p className="mt-2">
+                    reservás el lugar por 24 h. para confirmarlo pagás una seña del{" "}
+                    {trip.depositPercent} %. si retirás la carga: más de 48 h antes de la
+                    salida te devolvemos toda la seña, entre 24 y 48 h la mitad, con menos
+                    de 24 h no hay devolución.
+                  </p>
+                </div>
+
                 <Button
                   type="submit"
                   size="md"
@@ -939,6 +1037,60 @@ export default function TripDetail() {
             )}
           </form>
         )}
+
+        <CancelTripDialog
+          open={cancelTripOpen}
+          items={trip.cargoItems}
+          onCancel={() => setCancelTripOpen(false)}
+          onConfirm={() =>
+            updateStatus.mutate("CANCELLED", {
+              onSuccess: () => setCancelTripOpen(false),
+            })
+          }
+          pending={updateStatus.isPending}
+          error={
+            updateStatus.error instanceof Error && updateStatus.variables === "CANCELLED"
+              ? updateStatus.error.message
+              : null
+          }
+        />
+
+        <DepartTripDialog
+          open={departOpen}
+          items={trip.cargoItems}
+          onCancel={() => setDepartOpen(false)}
+          onDepart={() =>
+            updateStatus.mutate("IN_TRANSIT", { onSuccess: () => setDepartOpen(false) })
+          }
+          departing={updateStatus.isPending}
+          onConfirmCargo={(cargoItemId) => confirmCargoItem.mutate(cargoItemId)}
+          confirmingId={
+            confirmCargoItem.isPending ? (confirmCargoItem.variables ?? null) : null
+          }
+          error={
+            updateStatus.error instanceof Error && updateStatus.variables === "IN_TRANSIT"
+              ? updateStatus.error.message
+              : confirmCargoItem.error instanceof Error
+                ? confirmCargoItem.error.message
+                : null
+          }
+        />
+
+        {/* el error del retiro se ve dentro del diálogo, no abajo de todo */}
+        <WithdrawCargoDialog
+          tripId={trip.id}
+          item={trip.cargoItems.find((c) => c.id === withdrawItemId) ?? null}
+          onCancel={() => setWithdrawItemId(null)}
+          onConfirm={(cargoItemId) =>
+            cancelCargoItem.mutate(cargoItemId, {
+              onSuccess: () => setWithdrawItemId(null),
+            })
+          }
+          pending={cancelCargoItem.isPending}
+          error={
+            cancelCargoItem.error instanceof Error ? cancelCargoItem.error.message : null
+          }
+        />
 
         {stopDistanceError && (
           <Modal

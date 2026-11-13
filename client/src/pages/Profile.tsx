@@ -16,7 +16,7 @@ import {
 } from "../hooks/useUserProfile";
 import type { TripStatus } from "../types/trip";
 import type { MyCargoItem, VerificationStatus } from "../types/user";
-import { cancellationNote } from "../lib/cancellation";
+import { cancellationNote, cancelledLabel } from "../lib/cancellation";
 import { LoadingBlock, SkeletonBar } from "../components/Loading";
 
 const inputClass =
@@ -333,7 +333,8 @@ export default function Profile() {
                     onChange={(e) => {
                       const next = e.target.checked;
                       toggleAvailability.mutate(next, {
-                        onError: () => setFormError("no se pudo cambiar la disponibilidad"),
+                        onError: () =>
+                          setFormError("no se pudo cambiar la disponibilidad"),
                       });
                     }}
                     className="checkbox mt-0.5"
@@ -561,7 +562,7 @@ export default function Profile() {
                               {item.status === "CONFIRMED"
                                 ? "confirmada"
                                 : item.status === "CANCELLED"
-                                  ? "retirada"
+                                  ? cancelledLabel(item.cancellationReason)
                                   : "pendiente"}
                             </span>
                           </div>

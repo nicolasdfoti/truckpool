@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import type { CargoItem, CargoItemStatus, Payment, Trip } from "@prisma/client";
 import { isTripDateAvailable } from "./dates.js";
 import type { CargoPrice } from "./pricing.js";
+import { reservationExpiresAt } from "./reservations.js";
 
 /**
  * Una carga retirada (CANCELLED) queda en el historial pero no cuenta: ni para
@@ -172,8 +173,18 @@ export function toCargoItemResponse(item: CargoItemWithPayments) {
     cancelledAt: item.cancelledAt,
     priceShare: Number(item.priceShare),
     depositAmount: Number(item.depositAmount),
+    // lo que falta pagar al salir: el cliente no resta montos (L7). SOLO PARA
+    // MOSTRAR: lo que se cobra sale de `balanceOf` (Decimal) en
+    // payments.service.ts, tanto en la preference como en el pago BALANCE que
+    // nace al salir. Ningún flujo de plata lee este número.
+    balanceAmount:
+      Math.round((Number(item.priceShare) - Number(item.depositAmount)) * 100) / 100,
+    // «reservado hasta …»: null si no vence (ver lib/reservations.ts)
+    reservationExpiresAt: reservationExpiresAt(item),
     cancellationFeeAmount:
       item.cancellationFeeAmount === null ? null : Number(item.cancellationFeeAmount),
+    // L7: la etiqueta de la carga cancelada; null en las de antes del motivo
+    cancellationReason: item.cancellationReason ?? null,
     companyName: company?.name ?? "",
     // la seña y el saldo van por separado porque se pagan en momentos
     // distintos: sin depósito no se confirma, y el saldo se cobra con el viaje

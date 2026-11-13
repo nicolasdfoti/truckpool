@@ -10,6 +10,7 @@
  * número distinto del que después le devolvían.
  */
 import { api } from "../api/client";
+import type { CargoCancellationReason } from "../types/trip";
 
 export type CancellationQuote = {
   /** CLOSED: el viaje ya salió y la carga no se puede retirar */
@@ -45,21 +46,58 @@ export async function fetchCancellationQuote(
 }
 
 /**
- * Qué se le dice a la empresa al ver una carga retirada. Con fee 0 no se puede
- * decir "te devolvimos todo": también pasa cuando la seña nunca se cobró (o la
- * reserva venció sola), y ahí no se devolvió nada porque no había nada.
+ * La etiqueta corta de una carga cancelada, según por qué (L7): «retirada» solo
+ * si la retiró la empresa. Sin motivo (canceladas de antes), «cancelada».
  */
-export function cancellationNote(item: {
+export function cancelledLabel(reason: CargoCancellationReason | null): string {
+  if (reason === "COMPANY_WITHDREW") return "retirada";
+  if (reason === "RESERVATION_EXPIRED") return "vencida";
+  return "cancelada";
+}
+
+type CancelledItem = {
   depositAmount: number;
   cancellationFeeAmount: number | null;
+  cancellationReason: CargoCancellationReason | null;
   depositPayment: { status: string } | null;
-}): string {
+};
+
+/**
+ * Qué pasó con una carga cancelada y con su seña. Con fee 0 no se puede decir
+ * "te devolvimos todo": también pasa cuando la seña nunca se cobró (o la
+ * reserva venció sola), y ahí no se devolvió nada porque no había nada.
+ */
+export function cancellationNote(item: CancelledItem): string {
   const fee = item.cancellationFeeAmount;
-  if (fee === null) return "retirada sin seña cobrada";
-  if (fee > 0)
-    return `retirada con costo: se quedaron ${item.cancellationFeeAmount} de la seña.`;
   const seCobro =
     item.depositPayment?.status === "APPROVED" ||
     item.depositPayment?.status === "REFUNDED";
-  return seCobro ? "retirada y te devolvimos toda la seña." : "retirada sin seña cobrada";
+  // D3 y D6: sin penalidad, la seña cobrada vuelve entera
+  const senaDelViaje = seCobro
+    ? "la seña se devuelve entera."
+    : "no se había cobrado la seña.";
+
+  switch (item.cancellationReason) {
+    case "TRIP_CANCELLED":
+      return `cancelada porque se canceló el viaje. ${senaDelViaje}`;
+    case "TRIP_DEPARTED":
+      return `cancelada porque el viaje salió sin confirmarla. ${senaDelViaje}`;
+    case "RESERVATION_EXPIRED":
+      return "venció la reserva: no se pagó la seña a tiempo.";
+    case "REFUNDED_BY_CARRIER":
+      return "cancelada: el fletero devolvió la seña entera desde Mercado Pago.";
+    case "COMPANY_WITHDREW":
+      if (fee === null) return "retirada sin seña cobrada";
+      if (fee > 0) return `retirada con costo: se quedaron ${fee} de la seña.`;
+      return seCobro
+        ? "retirada y te devolvimos toda la seña."
+        : "retirada sin seña cobrada";
+    default:
+      // de antes del motivo: no se sabe quién la canceló
+      if (fee !== null && fee > 0)
+        return `cancelada con costo: se quedaron ${fee} de la seña.`;
+      return seCobro
+        ? "cancelada y se devolvió toda la seña."
+        : "cancelada sin seña cobrada";
+  }
 }

@@ -486,6 +486,17 @@ describe("cancelCargoItem", () => {
     vi.mocked(refundPayment).mockResolvedValue(0);
   });
 
+  it("deja asentado que la retiró la empresa (L7: COMPANY_WITHDREW)", async () => {
+    await tripsService.cancelCargoItem("t1", "i1", "c1");
+
+    expect(tx.cargoItem.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "i1" },
+        data: expect.objectContaining({ cancellationReason: "COMPANY_WITHDREW" }),
+      })
+    );
+  });
+
   it("retira una carga PENDING de la empresa y la marca CANCELLED sin borrarla", async () => {
     const result = await tripsService.cancelCargoItem("t1", "i1", "c1");
 
@@ -2383,6 +2394,8 @@ describe("addCargoItem", () => {
           // nunca se cobró nada: el costo es 0 (y no null, que en el mapper
           // significa "la carga sigue viva")
           cancellationFeeAmount: new Prisma.Decimal(0),
+          // L7: la etiqueta dice que venció, no que la retiraron
+          cancellationReason: "RESERVATION_EXPIRED",
         },
       });
       expect(tx.refundRequest.create).not.toHaveBeenCalled();
@@ -3193,6 +3206,31 @@ describe("addCargoItem", () => {
           };
         });
 
+      it("a cada empresa que no viaja, la plantilla con lo que se le devuelve (L7)", async () => {
+        await tripsService.updateTripStatus("t1", "u1", "IN_TRANSIT");
+
+        type Builder = (u: { name: string; email: string }) => { html: string };
+        const htmls = vi
+          .mocked(notifyUsers)
+          .mock.calls.filter(([, data]) => data.type === "CARGO_CANCELLED")
+          .map(([, data]) => (data.email as Builder)({ name: "Empresa", email: "e@e.com" }).html);
+        expect(htmls).toHaveLength(2);
+        for (const html of htmls) {
+          expect(html).toContain("salió sin que tu carga estuviera confirmada");
+        }
+        expect(htmls[0]).toContain("te devolvemos la seña entera: $");
+        expect(htmls[1]).toContain("no se había cobrado la seña");
+      });
+
+      it("las que no viajan quedan con el motivo TRIP_DEPARTED (L7)", async () => {
+        await tripsService.updateTripStatus("t1", "u1", "IN_TRANSIT");
+
+        const motivos = tx.cargoItem.update.mock.calls.map(
+          (call) => (call[0] as { data: Record<string, unknown> }).data.cancellationReason
+        );
+        expect(motivos).toEqual(["TRIP_DEPARTED", "TRIP_DEPARTED"]);
+      });
+
       it("1 CONFIRMED + 1 PENDING con seña + 1 sin seña: saldo solo para la confirmada, 100 % a la segunda, ninguna queda PENDING", async () => {
         await tripsService.updateTripStatus("t1", "u1", "IN_TRANSIT");
 
@@ -3454,6 +3492,18 @@ describe("addCargoItem", () => {
             fee: Number(arg.data.cancellationFeeAmount),
           };
         });
+
+      it("las cargas canceladas quedan con el motivo TRIP_CANCELLED (L7)", async () => {
+        tx.trip.findUnique.mockResolvedValue(viaje("OPEN"));
+
+        await tripsService.updateTripStatus("t1", "u1", "CANCELLED");
+
+        const motivos = tx.cargoItem.update.mock.calls.map(
+          (call) => (call[0] as { data: Record<string, unknown> }).data.cancellationReason
+        );
+        expect(motivos.length).toBeGreaterThan(0);
+        expect(new Set(motivos)).toEqual(new Set(["TRIP_CANCELLED"]));
+      });
 
       it.each([["OPEN"], ["FULL"]])(
         "desde %s cancela las cargas activas y devuelve entera cada seña cobrada",
@@ -3734,7 +3784,26 @@ describe("addCargoItem", () => {
         expect(sinSeña.body).not.toContain("$");
       });
 
-      it("avisa al fletero solo in-app que se le canceló el viaje", async () => {
+      it("el aviso a la empresa lleva la plantilla con el monto devuelto (L7)", async () => {
+        viajes(viaje());
+
+        await tripsService.autoCancelUndepartedTrips(AHORA);
+
+        const [, conSeña] = avisos("CARGO_CANCELLED")[0]!;
+        expect(typeof conSeña.email).toBe("function");
+        const email = (
+          conSeña.email as (u: { name: string; email: string }) => {
+            subject: string;
+            html: string;
+          }
+        )({ name: "Empresa c1", email: "c1@empresa.com" });
+        expect(email.subject).toBe("se canceló el viaje: Córdoba → Rosario");
+        expect(email.html).toContain("maquinaria");
+        expect(email.html).toContain("no salió dentro de las 24 h");
+        expect(email.html).toContain("te devolvemos la seña entera: $100,00");
+      });
+
+      it("avisa al fletero que se le canceló el viaje, in-app y por email (L7)", async () => {
         viajes(viaje());
 
         await tripsService.autoCancelUndepartedTrips(AHORA);
@@ -3746,10 +3815,30 @@ describe("addCargoItem", () => {
         expect(data).toMatchObject({
           title: "se canceló tu viaje: Córdoba → Rosario",
           tripId: "t1",
-          email: false,
         });
         expect(data.body).toContain("24 h");
         expect(data.body).toContain("3 cargas");
+        // antes era solo in-app (email: false); ahora lleva su plantilla
+        expect(typeof data.email).toBe("function");
+        const email = (
+          data.email as (u: { name: string; email: string }) => {
+            subject: string;
+            html: string;
+          }
+        )({ name: "Transportes Flete", email: "flete@x.com" });
+        expect(email.subject).toBe("se canceló tu viaje: Córdoba → Rosario");
+        expect(email.html).toContain("se cancelaron 3 cargas");
+      });
+
+      it("las cargas quedan con el motivo TRIP_CANCELLED, como en la manual (L7)", async () => {
+        viajes(viaje({ id: "t1" }));
+
+        await tripsService.autoCancelUndepartedTrips(AHORA);
+
+        const motivos = tx.cargoItem.update.mock.calls.map(
+          (call) => (call[0] as { data: Record<string, unknown> }).data.cancellationReason
+        );
+        expect(motivos).toEqual(["TRIP_CANCELLED", "TRIP_CANCELLED", "TRIP_CANCELLED"]);
       });
 
       it("también cancela un viaje sin cargas", async () => {
@@ -3988,19 +4077,21 @@ describe("addCargoItem", () => {
       expect(notifyUsers).not.toHaveBeenCalled();
     });
 
-    it("la empresa dueña de la carga puede confirmarla", async () => {
+    // D1 = a: confirmar es el compromiso del fletero de llevar la carga
+    it("la empresa dueña de la carga no puede confirmarla (D1): 403", async () => {
       (
         prisma.cargoItem.findUnique as unknown as ReturnType<typeof vi.fn>
       ).mockResolvedValue(basePaidCargoItem({ companyId: "c1" }));
       (prisma.trip.findUnique as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
         carrierId: "u1",
       });
-      (prisma.cargoItem.update as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(
-        basePaidCargoItem({ status: "CONFIRMED" })
-      );
 
-      const result = await tripsService.confirmCargoItem("t1", "i1", "c1");
-      expect(result.status).toBe("CONFIRMED");
+      await expect(tripsService.confirmCargoItem("t1", "i1", "c1")).rejects.toMatchObject({
+        statusCode: 403,
+        code: "FORBIDDEN",
+      });
+      expect(prisma.cargoItem.update).not.toHaveBeenCalled();
+      expect(notifyUsers).not.toHaveBeenCalled();
     });
 
     it("lanza FORBIDDEN para un tercero", async () => {
@@ -4053,7 +4144,7 @@ describe("addCargoItem", () => {
         carrierId: "u1",
       });
 
-      await expect(tripsService.confirmCargoItem("t1", "i1", "c1")).rejects.toMatchObject({
+      await expect(tripsService.confirmCargoItem("t1", "i1", "u1")).rejects.toMatchObject({
         statusCode: 409,
         code: "PAYMENT_REQUIRED",
       });
@@ -4072,7 +4163,7 @@ describe("addCargoItem", () => {
         carrierId: "u1",
       });
 
-      await expect(tripsService.confirmCargoItem("t1", "i1", "c1")).rejects.toMatchObject({
+      await expect(tripsService.confirmCargoItem("t1", "i1", "u1")).rejects.toMatchObject({
         statusCode: 409,
         code: "PAYMENT_REQUIRED",
       });
