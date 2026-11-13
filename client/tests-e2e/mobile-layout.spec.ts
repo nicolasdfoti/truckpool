@@ -112,7 +112,7 @@ test.describe("RD3 / QW13: la fila de la carga en mobile", () => {
     const deposit = (await row.getByText(/^seña de \$/).boundingBox())!;
     expect(deposit.width).toBeGreaterThan(card.width * 0.6);
 
-    for (const name of ["retirar carga", /^pagar seña/]) {
+    for (const name of ["retirar carga", /^pagar seña/i]) {
       const box = (await row.getByRole("button", { name }).boundingBox())!;
       expect(box.x).toBeGreaterThanOrEqual(card.x);
       expect(box.x + box.width).toBeLessThanOrEqual(card.x + card.width);

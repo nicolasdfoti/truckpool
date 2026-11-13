@@ -274,7 +274,7 @@ test.describe("entrando a mano (APP_URL local: MP no vuelve solo)", () => {
     );
     await loginAs(page, "company");
     await page.goto(`/viajes/${TRIP_ID}`);
-    await page.getByRole("button", { name: /pagar seña/ }).click();
+    await page.getByRole("button", { name: /pagar seña/i }).click();
 
     await expect(page).toHaveURL("/pagos/retorno");
     const saved = await page.evaluate(() =>

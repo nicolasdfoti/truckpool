@@ -195,7 +195,7 @@ test.describe("pagar la seña (03/Pagar seña#2)", () => {
     await page.goto(ROLES_TRIP);
 
     const row = cargoRow(page, E2E.cargo.owner.description);
-    const pay = row.getByRole("button", { name: /pagar seña/ });
+    const pay = row.getByRole("button", { name: /pagar seña/i });
     await pay.click();
 
     await expect(row.getByRole("alert")).toContainText(
@@ -221,7 +221,7 @@ test.describe("pagar la seña (03/Pagar seña#2)", () => {
     await page.goto(ROLES_TRIP);
 
     const row = cargoRow(page, E2E.cargo.owner.description);
-    const pay = row.getByRole("button", { name: /pagar seña/ });
+    const pay = row.getByRole("button", { name: /pagar seña/i });
     await pay.click();
     await expect(row.getByRole("alert")).toHaveText(
       "no pudimos conectar con Mercado Pago"
@@ -255,7 +255,7 @@ test.describe("pagar la seña (03/Pagar seña#2)", () => {
     await page.goto(ROLES_TRIP);
 
     await cargoRow(page, E2E.cargo.owner.description)
-      .getByRole("button", { name: /pagar seña/ })
+      .getByRole("button", { name: /pagar seña/i })
       .click();
     await expect(page).toHaveURL(initPoint);
     await expect(page.getByRole("heading", { name: "checkout e2e" })).toBeVisible();
