@@ -104,7 +104,10 @@ function moneySteps(
     { what: "Reserva", state: "done", when: formatInstant(item.createdAt) },
     {
       what: "Seña",
-      state: depositPaid ? "done" : "now",
+      // sin seña aprobada sólo es "ahora" si la carga no avanzó: una carga
+      // confirmada o en viaje sin pago registrado (datos previos a la regla de
+      // confirmar con seña) no puede tener el paso actual detrás de uno hecho
+      state: depositPaid ? "done" : confirmed || departed ? "later" : "now",
       amount: currency(item.depositAmount),
       when: depositPaid ? "pagada" : undefined,
     },
