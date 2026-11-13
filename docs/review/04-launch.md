@@ -229,7 +229,7 @@ Tests: e2e `tests-e2e/payment-return.spec.ts` y `tests-e2e/cargo-lifecycle.spec.
 ### L8 — Quick wins · 1ª SEMANA · S
 Los de 03§5 no absorbidos. Validación: `npm run lint && npm run build` + e2e. Conviene meterlo antes del lanzamiento si sobra medio día.
 **Adelantados a la revisión de diseño (decisión 2026-11-13):** QW3, QW5, QW7, QW8, QW10, QW13 y QW18 se hacen antes del gate en `feat/revision-diseno` y se tildan acá al cerrarlos (lista en 05§4). Lo demás de L8 sigue para la 1ª semana.
-- [ ] QW2 copy del diagrama · QW3 login (`autocomplete`, sin mínimo en "acceder") · ~~QW5 landing sin "MVP… Próximamente: Pagos" y CTA corregidos~~ (hecho en la revisión de diseño, RD2).
+- [ ] QW2 copy del diagrama · ~~QW3 login (`autocomplete`, sin mínimo en "acceder")~~ (hecho en la revisión de diseño) · ~~QW5 landing sin "MVP… Próximamente: Pagos" y CTA corregidos~~ (hecho en la revisión de diseño, RD2).
 - [ ] QW7 error en admin · ~~QW8 404 vs error + título de pestaña~~ (hecho en la revisión de diseño, RD10) · QW10 anuncios de DnD en español · QW11 copy de `MP_NOT_CONFIGURED`.
 - [ ] ~~QW13 fila de carga en mobile~~ (hecho en la revisión de diseño, RD3) · QW15 contraste · QW16 `:focus-visible` global · QW17 campanita oculta a anónimos · QW18 solicitudes vencidas (el server ya las rechaza por L5).
 - [ ] `NotificationType` del client (`client/src/types/notification.ts`) sin `TRIP_REQUEST` ni `TRIP_REQUEST_RESPONSE`, que el enum del server sí tiene (`server/schema.prisma`). Hoy ningún `switch` ni mapa del client depende del tipo, así que no se ve; agregarlos antes de que alguno lo haga. Detectado al cerrar L4 (2026-11-10), anterior a L4.

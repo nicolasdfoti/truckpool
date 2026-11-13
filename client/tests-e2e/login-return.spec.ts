@@ -40,3 +40,30 @@ test("un «volver» a otro sitio se ignora", async ({ page }) => {
   await submitLogin(page, USERS.company);
   await expect(page).toHaveURL("/viajes");
 });
+
+test.describe("QW3: acceder", () => {
+  test("una contraseña corta no se frena en el client: responde el server", async ({
+    page,
+  }) => {
+    await page.goto("/ingresar");
+    await page.getByLabel("email").fill(USERS.company);
+    await page.getByLabel("contraseña").fill("1234");
+    await page.getByRole("button", { name: "entrar" }).click();
+    await expect(page.getByText("email o contraseña incorrectos")).toBeVisible();
+    await expect(page.getByText(/al menos 8 caracteres/)).toHaveCount(0);
+  });
+
+  test("autocomplete para el gestor de contraseñas", async ({ page }) => {
+    await page.goto("/ingresar");
+    await expect(page.getByLabel("email")).toHaveAttribute("autocomplete", "email");
+    await expect(page.getByLabel("contraseña")).toHaveAttribute(
+      "autocomplete",
+      "current-password"
+    );
+    await page.getByRole("button", { name: "crear cuenta" }).click();
+    await expect(page.getByLabel("contraseña")).toHaveAttribute(
+      "autocomplete",
+      "new-password"
+    );
+  });
+});

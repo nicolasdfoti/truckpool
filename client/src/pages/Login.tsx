@@ -41,8 +41,14 @@ export default function Login() {
       setError("ingresá un email válido.");
       return;
     }
-    if (password.length < 8) {
+    // QW3: el mínimo de 8 es del registro; para acceder alcanza con que no esté
+    // vacía (el server responde «email o contraseña incorrectos»)
+    if (isRegister && password.length < 8) {
       setError("la contraseña debe tener al menos 8 caracteres.");
+      return;
+    }
+    if (!password) {
+      setError("ingresá tu contraseña.");
       return;
     }
     if (isRegister && !name.trim()) {
@@ -111,6 +117,7 @@ export default function Login() {
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="ej: Comercial Norte"
+                autoComplete="organization"
                 className={inputClass}
               />
             </div>
@@ -126,6 +133,7 @@ export default function Login() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="vos@empresa.com"
+              autoComplete="email"
               className={inputClass}
             />
           </div>
@@ -156,7 +164,10 @@ export default function Login() {
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="mínimo 8 caracteres"
+              // QW3: el gestor de contraseñas completa la guardada al acceder y
+              // propone una nueva al crear la cuenta
+              autoComplete={isRegister ? "new-password" : "current-password"}
+              placeholder={isRegister ? "mínimo 8 caracteres" : undefined}
               className={inputClass}
             />
           </div>
