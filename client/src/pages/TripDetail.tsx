@@ -289,7 +289,11 @@ export default function TripDetail() {
   const occupancyItems =
     trip.viewerAccess === "CARRIER_OWNER" || trip.viewerAccess === "PARTICIPANT"
       ? [
-          ...visibleCargo.map((c) => ({ label: c.description, volume: c.volume })),
+          ...visibleCargo.map((c) => ({
+            label: c.description,
+            volume: c.volume,
+            own: true,
+          })),
           ...trip.otherCargo.map((c) => ({ label: "otra carga", volume: c.volume })),
         ]
       : trip.capacityUsed > 0
