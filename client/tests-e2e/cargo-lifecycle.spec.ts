@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { test, expect, loginAs, E2E } from "./fixtures.ts";
+import { test, expect, loginAs, API_URL, E2E } from "./fixtures.ts";
 
 /**
  * L7: el ciclo de la carga en el detalle del viaje, contra la API de verdad y
@@ -230,5 +230,90 @@ test.describe("pagar la seña (03/Pagar seña#2)", () => {
       .click();
     await expect(page).toHaveURL(initPoint);
     await expect(page.getByRole("heading", { name: "checkout e2e" })).toBeVisible();
+  });
+});
+
+test.describe("antes de reservar y la reserva sin seña (03§1.2, 03§1.3)", () => {
+  const ROLES_TRIP = `/viajes/${E2E.rolesTripId}`;
+
+  test("resumen en vivo con la cotización del server y la política de retiro", async ({
+    page,
+  }) => {
+    // lo que el server cobraría por 2,5 m³: el resumen tiene que decir lo mismo
+    const res = await fetch(`${API_URL}/trips/${E2E.rolesTripId}/cargo-quote?volume=2.5`);
+    const quote = (await res.json()) as {
+      priceShare: number;
+      depositAmount: number;
+      balanceAmount: number;
+    };
+
+    await loginAs(page, "otherCompany");
+    await page.goto(ROLES_TRIP);
+
+    await expect(
+      page.getByText("escribí el volumen y te mostramos cuánto pagás.")
+    ).toBeVisible();
+    await expect(page.getByText("reservás el lugar por 24 h.")).toContainText(
+      "para confirmarlo pagás una seña del 20 %. si retirás la carga: más de 48 h antes de la salida te devolvemos toda la seña, entre 24 y 48 h la mitad, con menos de 24 h no hay devolución."
+    );
+
+    const quoteRequests: string[] = [];
+    page.on("request", (req) => {
+      if (req.url().includes("/cargo-quote")) quoteRequests.push(req.url());
+    });
+    await page.getByLabel("volumen (m³)").pressSequentially("2,5", { delay: 50 });
+    await expect(page.getByText(/^2,5 m³:/)).toHaveText(
+      `2,5 m³: $ ${amountText(quote.priceShare)}. hoy pagás la seña de $ ${amountText(
+        quote.depositAmount
+      )}; el saldo de $ ${amountText(quote.balanceAmount)} se paga cuando el viaje sale.`
+    );
+    // con debounce: escribir no pide una cotización por tecla
+    expect(quoteRequests).toHaveLength(1);
+  });
+
+  test("la reserva sin seña dice hasta cuándo vale", async ({ page }) => {
+    await loginAs(page, "company");
+    await page.goto(ROLES_TRIP);
+
+    const line = cargoRow(page, E2E.cargo.owner.description).getByText(
+      /^reservado hasta/
+    );
+    await expect(line).toHaveText(
+      /reservado hasta el \S+ \d{1,2}\/\d{1,2} \d{2}:\d{2}\. si no pagás la seña antes, el lugar se libera\./
+    );
+    // recién reservada (el seed corre antes de cada e2e): todavía no urge
+    await expect(line).not.toHaveClass(/text-danger/);
+  });
+
+  test("faltando menos de 3 h, el vencimiento se pone en rojo", async ({ page }) => {
+    // el vencimiento lo decide el server: acá se acerca en la respuesta
+    await page.route(`**/api/trips/${E2E.rolesTripId}`, async (route) => {
+      const response = await route.fetch();
+      const trip = (await response.json()) as {
+        cargoItems: { description: string; reservationExpiresAt: string | null }[];
+      };
+      for (const item of trip.cargoItems) {
+        if (item.description === E2E.cargo.owner.description) {
+          item.reservationExpiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+        }
+      }
+      await route.fulfill({ response, json: trip });
+    });
+    await loginAs(page, "company");
+    await page.goto(ROLES_TRIP);
+
+    await expect(
+      cargoRow(page, E2E.cargo.owner.description).getByText(/^reservado hasta/)
+    ).toHaveClass(/text-danger/);
+  });
+
+  test("con la seña pagada, el saldo sigue a la vista", async ({ page }) => {
+    await loginAs(page, "secondCompany");
+    await page.goto(LIFECYCLE_TRIP);
+
+    // 300 de la carga menos 60 de seña
+    await expect(cargoRow(page, paidPending.description)).toContainText(
+      `el saldo de $ ${amountText(240)} se paga cuando el viaje sale.`
+    );
   });
 });

@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useParams, Link } from "react-router-dom";
 import { CargoFillDiagram } from "../components/CargoFillDiagram";
 import { Button } from "../components/Button";
@@ -14,6 +14,7 @@ import { useUpdateTripStatus } from "../hooks/useUpdateTripStatus";
 import { useCancelCargoItem } from "../hooks/useCancelCargoItem";
 import { useConfirmCargoItem } from "../hooks/useConfirmCargoItem";
 import { useCreatePaymentPreference } from "../hooks/useCreatePaymentPreference";
+import { useCargoQuote } from "../hooks/useCargoQuote";
 import { useCreateReview } from "../hooks/useCreateReview";
 import { useTripReviewStatus } from "../hooks/useTripReviewStatus";
 import { useTripLocation } from "../hooks/useTripLocation";
@@ -66,10 +67,15 @@ function currency(n: number) {
   return n.toLocaleString("es-AR", { style: "currency", currency: "ARS" });
 }
 
-/** el saldo también va a dos decimales, como lo calcula el backend */
-function round2(n: number) {
-  return Math.round(n * 100) / 100;
+/** el volumen escrito, si es un número válido para cotizar; si no, null */
+function quotableVolume(raw: string): number | null {
+  if (!raw.trim()) return null;
+  const parsed = parseDecimalInput(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
+
+/** faltando menos de esto, «reservado hasta» se pone en rojo (03§1.2) */
+const RESERVATION_URGENT_MS = 3 * 60 * 60 * 1000;
 
 /** campo de dirección de pickup con el mismo picker de mapa que PublishTrip */
 function PickupAddressField({
@@ -152,6 +158,14 @@ export default function TripDetail() {
   const [reviewError, setReviewError] = useState<string | null>(null);
   // la carga que la empresa está por retirar (diálogo con el desglose, U21)
   const [withdrawItemId, setWithdrawItemId] = useState<string | null>(null);
+  // 03§1.3: precio, seña y saldo antes de reservar, del server
+  const cargoQuote = useCargoQuote(id ?? "", quotableVolume(volume));
+  // la hora para el aviso de la reserva por vencer; se refresca cada minuto
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(timer);
+  }, []);
 
   function handleSubmitReview(e: FormEvent) {
     e.preventDefault();
@@ -537,7 +551,8 @@ export default function TripDetail() {
               {trip.cargoItems.map((item) => {
                 const deposit = item.depositPayment;
                 const balance = item.balancePayment;
-                const balanceAmount = round2(item.priceShare - item.depositAmount);
+                // del server (L7): el client no resta montos
+                const balanceAmount = item.balanceAmount;
                 const isCancelled = item.status === "CANCELLED";
                 const isCompany = user?.id === item.companyId;
                 const depositApproved = deposit?.status === "APPROVED";
@@ -629,6 +644,31 @@ export default function TripDetail() {
                             · quedan {currency(balanceAmount)} al salir
                           </p>
                         )}
+                        {/* 03§1.2 / QW12: hasta cuándo vale la reserva sin seña */}
+                        {showDepositPayButton && item.reservationExpiresAt && (
+                          <p
+                            className={`text-[13px] ${
+                              new Date(item.reservationExpiresAt).getTime() - now <
+                              RESERVATION_URGENT_MS
+                                ? "font-medium text-danger"
+                                : "text-ink-muted"
+                            }`}
+                          >
+                            reservado hasta el {formatInstant(item.reservationExpiresAt)}.
+                            si no pagás la seña antes, el lugar se libera.
+                          </p>
+                        )}
+                        {/* 03§1.3: con la seña paga, el saldo no se pierde de vista */}
+                        {isCompany &&
+                          depositApproved &&
+                          !isCancelled &&
+                          (trip.status === "OPEN" || trip.status === "FULL") &&
+                          balanceAmount > 0 && (
+                            <p className="text-[13px] text-ink-muted">
+                              el saldo de {currency(balanceAmount)} se paga cuando el
+                              viaje sale.
+                            </p>
+                          )}
                         {balanceDue &&
                           balance?.status !== "APPROVED" &&
                           balance?.status !== "CHARGED_BACK" && (
@@ -922,6 +962,34 @@ export default function TripDetail() {
                     onChange={setPickupAddress}
                     error={formError ?? undefined}
                   />
+                </div>
+
+                {/* 03§1.3: lo que se va a pagar, con los montos del server */}
+                <div className="mt-5 rounded-md border border-line bg-canvas p-3 text-[13px] text-ink-soft">
+                  {cargoQuote.quote ? (
+                    <p aria-live="polite">
+                      {cargoQuote.quote.volume.toLocaleString("es-AR", {
+                        maximumFractionDigits: 2,
+                      })}{" "}
+                      m³: {currency(cargoQuote.quote.priceShare)}. hoy pagás la seña de{" "}
+                      {currency(cargoQuote.quote.depositAmount)}; el saldo de{" "}
+                      {currency(cargoQuote.quote.balanceAmount)} se paga cuando el viaje
+                      sale.
+                    </p>
+                  ) : cargoQuote.isError ? (
+                    <p aria-live="polite">
+                      no pudimos calcular el precio ahora: lo ves al reservar.
+                    </p>
+                  ) : (
+                    <p>escribí el volumen y te mostramos cuánto pagás.</p>
+                  )}
+                  {/* 03§1.2: la política de retiro antes de reservar */}
+                  <p className="mt-2">
+                    reservás el lugar por 24 h. para confirmarlo pagás una seña del{" "}
+                    {trip.depositPercent} %. si retirás la carga: más de 48 h antes de la
+                    salida te devolvemos toda la seña, entre 24 y 48 h la mitad, con menos
+                    de 24 h no hay devolución.
+                  </p>
                 </div>
 
                 <Button
