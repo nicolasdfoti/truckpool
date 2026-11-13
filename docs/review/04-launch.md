@@ -297,7 +297,9 @@ L10 → L11.
   2026-11-13).
 - **Hecha la revisión (2026-11-13)**: informe en `05-revision-diseno.md`, capturas en
   `screens-revision/`. Lo que se arregla antes del gate (RD1, RD3–RD10 y QW3, QW5, QW7, QW8,
-  QW10, QW13, QW18 adelantados de L8) está en la lista de 05§4.
+  QW10, QW13, QW18 adelantados de L8) está en la lista de 05§4. **Arreglos terminados
+  (2026-11-13)**: los 14 ítems tildados en 05§4, e2e 85/85; quedan por decidir Admin#1 (P1, L9)
+  y el foco (P2, QW16), ver 05§5.
 L11 al final porque mueve archivos que tocan L1–L4. **Gate**: todos los BLOQUEANTE tildados;
 revisión de diseño con cero P1, cero P2 nuevos y los P2 de 03 que
 dependen de L9 o L10 aceptados y listados en 05§3; server `npm test`/`typecheck`/`lint`; client

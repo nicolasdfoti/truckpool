@@ -147,3 +147,20 @@ Se arregla en `feat/revision-diseno`, un commit por hallazgo, con e2e cuando apl
 
 La regla del gate queda en `04-launch.md` §3: cero P1, cero P2 nuevos y los P2 de 03 que
 dependen de L9 o L10 aceptados (§3). Los P3 (RD11–RD20) van a L8 o L10.
+
+## 5. Cierre de la rama (2026-11-13)
+Los 14 ítems de §4 están hechos, cada uno en su commit y con su e2e. Los e2e nuevos son
+`mobile-layout`, `reserve-feedback`, `login-return`, `not-found`, `landing`, `admin-errors`,
+`stops-a11y` y `trip-requests-expired`. También se ampliaron `cargo-lifecycle` (RD4, RD5 y
+RD6).
+
+Verificación final:
+- client: e2e 85/85, `lint` y `build` sin errores;
+- server: 1186 tests, `typecheck` y `lint` sin errores (el server no se tocó).
+
+Para el gate quedan abiertos dos ítems que la regla nueva no cubre:
+- **Admin#1 (P1, L9)**: aprobar una verificación sin CUIT. No se volvió a probar.
+- **Foco (P2, L8 QW16)**: links e inputs sin `:focus-visible` propio.
+
+Hay que decidir si se adelantan o se aceptan explícitamente.
+
