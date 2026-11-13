@@ -69,6 +69,21 @@ async function main() {
       verificationStatus: "VERIFIED",
     },
   });
+  // Admin#1: un pedido de verificación sin DNI/CUIT (datos viejos o cargados a
+  // mano): el admin no lo puede aprobar, solo rechazar. Cada corrida lo deja
+  // PENDING de nuevo por si un test lo rechazó.
+  await prisma.user.upsert({
+    where: { email: "e2e-sin-cuit@truckpool.app" },
+    update: { taxId: null, verificationStatus: "PENDING", verificationNote: null },
+    create: {
+      email: "e2e-sin-cuit@truckpool.app",
+      name: "E2E Fletes Sin CUIT",
+      password,
+      role: "CARRIER",
+      taxId: null,
+      verificationStatus: "PENDING",
+    },
+  });
   const owner = await companyUser("empresa@truckpool.app", "Comercial Norte", password);
   const second = await companyUser("e2e-segunda@truckpool.app", "E2E Segunda", password);
   const former = await companyUser("e2e-ex@truckpool.app", "E2E Ex", password);

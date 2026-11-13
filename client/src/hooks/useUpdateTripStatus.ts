@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
+import { invalidateTripCargo } from "./invalidateTripCargo";
 import type { Trip } from "../types/trip";
 
 export function useUpdateTripStatus(tripId: string) {
@@ -10,9 +11,7 @@ export function useUpdateTripStatus(tripId: string) {
     // cancelan con la seña devuelta entera
     mutationFn: (status: "IN_TRANSIT" | "COMPLETED" | "CANCELLED") =>
       api.patch<Trip>(`/trips/${tripId}/status`, { status }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["trip", tripId] });
-      queryClient.invalidateQueries({ queryKey: ["trips"] });
-    },
+    // paradas, recorrido, cotización y perfil, además del viaje (RD4)
+    onSuccess: () => invalidateTripCargo(queryClient, tripId),
   });
 }

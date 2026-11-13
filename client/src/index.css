@@ -38,6 +38,16 @@
   --color-step-3: #dff0e5;
 }
 
+@layer base {
+  /* QW16: un solo anillo de foco para todo lo que se enfoca con teclado (links,
+     inputs, botones, el track del carrusel). accent-strong da 3.3:1 o más
+     contra todos los fondos de la app, incluido el azul del footer y el hero. */
+  :focus-visible {
+    outline: 2px solid var(--color-accent-strong);
+    outline-offset: 2px;
+  }
+}
+
 @layer components {
   /* El checkbox nativo con accent-color dibuja la caja sin marcar con un borde
      de ~1.35:1 contra el blanco: no se ve. Lo dibujamos nosotros para que el

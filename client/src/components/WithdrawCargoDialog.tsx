@@ -1,7 +1,7 @@
 import { ConfirmDialog } from "./ConfirmDialog";
 import { useCargoCancellationQuote } from "../hooks/useCargoCancellationQuote";
 import type { CancellationQuote } from "../lib/cancellation";
-import type { CargoItem } from "../types/trip";
+import type { CargoItem, TripStatus } from "../types/trip";
 
 function currency(n: number) {
   return n.toLocaleString("es-AR", { style: "currency", currency: "ARS" });
@@ -17,6 +17,8 @@ const WINDOW_TEXT: Record<Exclude<CancellationQuote["window"], "CLOSED">, string
 
 type Props = {
   tripId: string;
+  /** para explicar el cierre: salió el viaje, o pasó la hora y todavía no salió */
+  tripStatus: TripStatus;
   /** la carga a retirar; null = cerrado */
   item: CargoItem | null;
   onCancel: () => void;
@@ -33,6 +35,7 @@ type Props = {
  */
 export function WithdrawCargoDialog({
   tripId,
+  tripStatus,
   item,
   onCancel,
   onConfirm,
@@ -54,10 +57,16 @@ export function WithdrawCargoDialog({
         cancelLabel="entendido"
         onCancel={onCancel}
       >
-        <p>
-          el viaje ya salió: la carga no se puede retirar. si el viaje no sale, se cancela
-          y te devolvemos lo que pagaste de seña.
-        </p>
+        {/* RD6: antes decía «ya salió» y «si no sale» a la vez */}
+        {tripStatus === "OPEN" || tripStatus === "FULL" ? (
+          <p>
+            ya pasó la hora de salida: la carga no se puede retirar. si el fletero no sale
+            dentro de las 24 h, el viaje se cancela solo y te devolvemos toda la seña que
+            hayas pagado.
+          </p>
+        ) : (
+          <p>el viaje ya salió: la carga no se puede retirar.</p>
+        )}
       </ConfirmDialog>
     );
   }

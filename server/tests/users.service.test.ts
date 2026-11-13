@@ -504,7 +504,7 @@ describe("verificación de identidad", () => {
 
   it("reviewVerification aprueba y deja VERIFIED sin nota", async () => {
     vi.mocked(prisma.user.findUnique).mockResolvedValue(
-      baseUser({ verificationStatus: "PENDING" })
+      baseUser({ verificationStatus: "PENDING", taxId: "20345678901" })
     );
     vi.mocked(prisma.user.update).mockResolvedValue(
       baseUser({ verificationStatus: "VERIFIED", verificationNote: null })
@@ -560,6 +560,43 @@ describe("verificación de identidad", () => {
       code: "VERIFICATION_NOTE_REQUIRED",
     });
     expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
+  // Admin#1: aprobar sin CUIT dejaba publicar a alguien sin identidad cargada
+  it.each([null, "", "   "])(
+    "aprobar un pedido sin CUIT (%j) da 409 y no toca la base",
+    async (taxId) => {
+      vi.mocked(prisma.user.findUnique).mockResolvedValue(
+        baseUser({ verificationStatus: "PENDING", taxId })
+      );
+
+      await expect(
+        usersService.reviewVerification("u1", { approve: true })
+      ).rejects.toMatchObject({
+        statusCode: 409,
+        code: "VERIFICATION_TAX_ID_MISSING",
+      });
+      expect(prisma.user.update).not.toHaveBeenCalled();
+    }
+  );
+
+  it("un pedido sin CUIT se puede rechazar", async () => {
+    vi.mocked(prisma.user.findUnique).mockResolvedValue(
+      baseUser({ verificationStatus: "PENDING", taxId: null })
+    );
+    vi.mocked(prisma.user.update).mockResolvedValue(
+      baseUser({ verificationStatus: "REJECTED", verificationNote: "falta el CUIT" })
+    );
+
+    await usersService.reviewVerification("u1", {
+      approve: false,
+      note: "falta el CUIT",
+    });
+
+    expect(prisma.user.update).toHaveBeenCalledWith({
+      where: { id: "u1" },
+      data: { verificationStatus: "REJECTED", verificationNote: "falta el CUIT" },
+    });
   });
 
   it("revisar algo que no está PENDING da 409", async () => {

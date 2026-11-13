@@ -33,14 +33,11 @@ export function Hero() {
 
           <div className="flex flex-col justify-center gap-4 sm:flex-row lg:justify-start">
             <Button asChild variant="dark" size="md" className="shadow-lg">
-              <Link to="/ingresar?tab=register&role=company">
-                EMPRESAS: PUBLICAR CARGA
-              </Link>
+              {/* QW5: la empresa no publica carga, reserva lugar en un viaje */}
+              <Link to="/viajes">Buscar un viaje para mi carga</Link>
             </Button>
             <Button asChild variant="primary" size="md" className="shadow-lg">
-              <Link to="/ingresar?tab=register&role=carrier">
-                TRANSPORTISTAS: ENCONTRAR CARGA
-              </Link>
+              <Link to="/viajes/nuevo">Publicar mi viaje</Link>
             </Button>
           </div>
         </div>

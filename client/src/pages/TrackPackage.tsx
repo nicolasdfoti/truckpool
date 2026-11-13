@@ -131,11 +131,13 @@ export default function TrackPackage() {
   return (
     <div className="bg-canvas font-sans text-ink">
       <main className="mx-auto max-w-xl px-4 py-12">
+        {/* RD9: en mobile la fila del buscador no entraba (473 px) y «limpiar»
+            quedaba afuera: el volver va arriba y la fila se parte */}
+        <Link to="/" className="mb-3 inline-block text-sm text-brand underline">
+          ← volver al inicio
+        </Link>
         <form onSubmit={handleSubmit} className="mb-8">
-          <div className="flex items-center gap-3">
-            <Link to="/" className="text-sm text-brand underline">
-              ← volver al inicio
-            </Link>
+          <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap sm:gap-3">
             <label htmlFor="trackingCode" className="sr-only">
               código de seguimiento
             </label>
@@ -147,7 +149,7 @@ export default function TrackPackage() {
               placeholder="pegá el código que te pasaron"
               inputMode="text"
               autoComplete="off"
-              className="flex-1 rounded-md border border-line-strong px-3 py-2 text-sm outline-none placeholder:text-ink-muted focus:border-brand font-mono"
+              className="w-full min-w-0 rounded-md border border-line-strong px-3 py-2 text-sm placeholder:text-ink-muted focus:border-brand font-mono sm:w-auto sm:flex-1"
               disabled={isFetching}
             />
             <Button type="submit" size="md" disabled={!code.trim() || isFetching}>
@@ -166,7 +168,7 @@ export default function TrackPackage() {
             <div className="rounded-[10px] border border-line bg-white p-6">
               <div className="flex items-center justify-between gap-4 flex-wrap">
                 <div>
-                  <p className="text-[12px] text-ink-muted font-mono">
+                  <p className="text-[12px] text-ink-muted font-mono break-all">
                     {tracking.trackingCode}
                   </p>
                   <h1 className="mt-1 font-display text-xl font-medium">

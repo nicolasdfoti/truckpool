@@ -8,7 +8,7 @@ import {
   useRespondTripRequest,
   useCreateTripRequest,
 } from "../hooks/useTripRequests";
-import { formatTripDate } from "../lib/tripWhen";
+import { formatTripDate, isDateReached } from "../lib/tripWhen";
 import type { TripRequest } from "../types/trip";
 
 const STATUS_LABELS: Record<string, string> = {
@@ -22,6 +22,9 @@ const STATUS_STYLES: Record<string, string> = {
   ACCEPTED: "bg-success-bg text-success-deep",
   DECLINED: "bg-canvas-line text-ink-soft",
 };
+
+/** QW18: pendiente con la fecha ya llegada */
+const EXPIRED_STYLE = "bg-canvas-line text-ink-soft";
 
 /** Formulario para responder (aceptar/rechazar) */
 function RespondForm({
@@ -124,7 +127,7 @@ function RespondForm({
             onChange={(e) =>
               setTripDetails({ ...tripDetails, truckType: e.target.value })
             }
-            className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm outline-none placeholder:text-ink-muted focus:border-brand"
+            className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm placeholder:text-ink-muted focus:border-brand"
           >
             {["Semi", "Chasis", "Tráiler", "Camión"].map((type) => (
               <option key={type} value={type}>
@@ -147,7 +150,7 @@ function RespondForm({
               }
               placeholder="ej: 30"
               inputMode="decimal"
-              className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm outline-none placeholder:text-ink-muted focus:border-brand"
+              className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm placeholder:text-ink-muted focus:border-brand"
             />
           </div>
           <div>
@@ -160,7 +163,7 @@ function RespondForm({
               onChange={(e) => setTripDetails({ ...tripDetails, price: e.target.value })}
               placeholder="ej: 1500"
               inputMode="decimal"
-              className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm outline-none placeholder:text-ink-muted focus:border-brand"
+              className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm placeholder:text-ink-muted focus:border-brand"
             />
           </div>
           <div>
@@ -175,7 +178,7 @@ function RespondForm({
               }
               placeholder="20"
               inputMode="numeric"
-              className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm outline-none placeholder:text-ink-muted focus:border-brand"
+              className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm placeholder:text-ink-muted focus:border-brand"
             />
           </div>
           <div>
@@ -190,7 +193,7 @@ function RespondForm({
                 setTripDetails({ ...tripDetails, departureTime: e.target.value })
               }
               required
-              className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm outline-none placeholder:text-ink-muted focus:border-brand"
+              className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm placeholder:text-ink-muted focus:border-brand"
             />
             <p className="mt-1 text-xs text-ink-muted">
               los plazos para retirar una carga se cuentan desde esta hora.
@@ -354,7 +357,7 @@ function CreateTripRequestForm({
           value={formData.origin}
           onChange={(e) => setFormData({ ...formData, origin: e.target.value })}
           placeholder="ej: Córdoba, Argentina"
-          className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm outline-none placeholder:text-ink-muted focus:border-brand"
+          className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm placeholder:text-ink-muted focus:border-brand"
         />
       </div>
 
@@ -367,7 +370,7 @@ function CreateTripRequestForm({
           value={formData.destination}
           onChange={(e) => setFormData({ ...formData, destination: e.target.value })}
           placeholder="ej: Buenos Aires, Argentina"
-          className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm outline-none placeholder:text-ink-muted focus:border-brand"
+          className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm placeholder:text-ink-muted focus:border-brand"
         />
       </div>
 
@@ -382,7 +385,7 @@ function CreateTripRequestForm({
             value={formData.desiredDate}
             onChange={(e) => setFormData({ ...formData, desiredDate: e.target.value })}
             min={new Date().toISOString().split("T")[0]}
-            className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm outline-none placeholder:text-ink-muted focus:border-brand"
+            className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm placeholder:text-ink-muted focus:border-brand"
           />
         </div>
         <div>
@@ -398,7 +401,7 @@ function CreateTripRequestForm({
             onChange={(e) => setFormData({ ...formData, estimatedVolume: e.target.value })}
             placeholder="ej: 25"
             inputMode="decimal"
-            className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm outline-none placeholder:text-ink-muted focus:border-brand"
+            className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm placeholder:text-ink-muted focus:border-brand"
           />
         </div>
       </div>
@@ -413,7 +416,7 @@ function CreateTripRequestForm({
           onChange={(e) => setFormData({ ...formData, note: e.target.value })}
           placeholder="detalles adicionales: tipo de carga, requerimientos especiales, etc."
           rows={3}
-          className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm outline-none placeholder:text-ink-muted focus:border-brand"
+          className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm placeholder:text-ink-muted focus:border-brand"
         />
       </div>
 
@@ -441,6 +444,9 @@ function ReceivedRequestItem({
   onAccept: () => void;
   onDecline: () => void;
 }): React.ReactElement {
+  // QW18: con la fecha ya llegada el server no deja aceptarla (L5); rechazarla
+  // sí, y es la forma de sacarla de la lista
+  const expired = request.status === "PENDING" && isDateReached(request.desiredDate);
   return (
     <li className="rounded-[10px] border border-line bg-white p-5">
       <div className="flex items-center justify-between gap-4 flex-wrap">
@@ -466,6 +472,11 @@ function ReceivedRequestItem({
               <span className="text-ink font-medium">{request.company.name}</span>
             </span>
           </p>
+          {expired && (
+            <p className="mt-2 text-[13px] text-ink-muted">
+              la fecha ya llegó: no se puede aceptar. rechazala para sacarla de la lista.
+            </p>
+          )}
           {request.note && (
             <p className="mt-2 text-[13px] text-ink-soft">
               <em>nota:</em> {request.note}
@@ -474,15 +485,17 @@ function ReceivedRequestItem({
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <span
-            className={`inline-flex items-center rounded-full px-3 py-1 text-sm font-medium ${STATUS_STYLES[request.status]}`}
+            className={`inline-flex items-center rounded-full px-3 py-1 text-sm font-medium ${expired ? EXPIRED_STYLE : STATUS_STYLES[request.status]}`}
           >
-            {STATUS_LABELS[request.status]}
+            {expired ? "vencida" : STATUS_LABELS[request.status]}
           </span>
           {request.status === "PENDING" && (
             <>
-              <Button variant="primary" size="sm" onClick={onAccept}>
-                aceptar
-              </Button>
+              {!expired && (
+                <Button variant="primary" size="sm" onClick={onAccept}>
+                  aceptar
+                </Button>
+              )}
               <Button variant="ghost" size="sm" onClick={onDecline}>
                 rechazar
               </Button>
@@ -496,6 +509,8 @@ function ReceivedRequestItem({
 
 /** Item de solicitud enviada (COMPANY) */
 function SentRequestItem({ request }: { request: TripRequest }): React.ReactElement {
+  // QW18: el transportista ya no puede aceptarla
+  const expired = request.status === "PENDING" && isDateReached(request.desiredDate);
   return (
     <li className="rounded-[10px] border border-line bg-white p-5">
       <div className="flex items-center justify-between gap-4 flex-wrap">
@@ -521,6 +536,11 @@ function SentRequestItem({ request }: { request: TripRequest }): React.ReactElem
               <span className="text-ink font-medium">{request.carrier.name}</span>
             </span>
           </p>
+          {expired && (
+            <p className="mt-2 text-[13px] text-ink-muted">
+              la fecha ya llegó sin respuesta del transportista: ya no se puede aceptar.
+            </p>
+          )}
           {request.note && (
             <p className="mt-2 text-[13px] text-ink-soft">
               <em>nota:</em> {request.note}
@@ -529,9 +549,9 @@ function SentRequestItem({ request }: { request: TripRequest }): React.ReactElem
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <span
-            className={`inline-flex items-center rounded-full px-3 py-1 text-sm font-medium ${STATUS_STYLES[request.status]}`}
+            className={`inline-flex items-center rounded-full px-3 py-1 text-sm font-medium ${expired ? EXPIRED_STYLE : STATUS_STYLES[request.status]}`}
           >
-            {STATUS_LABELS[request.status]}
+            {expired ? "vencida" : STATUS_LABELS[request.status]}
           </span>
           {request.resultingTripId && (
             <Button asChild variant="outline" size="sm">
@@ -638,7 +658,9 @@ export default function TripRequests(): React.ReactElement {
 
         {openModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
-            <div className="w-full max-w-xl rounded-[10px] bg-white p-6 shadow-xl">
+            {/* RD1: más alto que la pantalla en mobile; el panel scrollea para
+                llegar al título y a los botones */}
+            <div className="max-h-[calc(100dvh-2rem)] w-full max-w-xl overflow-y-auto rounded-[10px] bg-white p-6 shadow-xl">
               {openModal.type === "create" ? (
                 <>
                   <h2 className="font-display text-xl font-semibold mb-4">

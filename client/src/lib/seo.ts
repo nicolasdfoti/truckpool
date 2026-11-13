@@ -28,5 +28,23 @@ export const TITLE_BY_PATH: Record<string, string> = {
   "/admin/verificaciones": "Verificaciones — TruckPool",
 };
 
+/**
+ * QW8: el título de una ruta. Cada segmento tiene que coincidir, y uno con «:»
+ * (ej. /viajes/:id) acepta cualquier valor. Antes se matcheaba por prefijo
+ * contra el patrón literal: «/viajes/abc» nunca empezaba con «/viajes/:id» y
+ * todo detalle quedaba como «Viajes abiertos».
+ */
+export function titleFor(pathname: string): string {
+  const parts = pathname.replace(/\/+$/, "").split("/");
+  const match = Object.keys(TITLE_BY_PATH).find((pattern) => {
+    const pp = pattern.replace(/\/+$/, "").split("/");
+    return (
+      pp.length === parts.length &&
+      pp.every((seg, i) => seg.startsWith(":") || seg === parts[i])
+    );
+  });
+  return match ? TITLE_BY_PATH[match] : SITE_TITLE;
+}
+
 /** Rutas públicas que tiene sentido indexar (las demás necesitan sesión). */
 export const INDEXABLE_PATHS = ["/", "/viajes", "/fleteros", "/ingresar"];

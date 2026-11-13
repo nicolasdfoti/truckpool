@@ -64,6 +64,33 @@ test.describe("retiro con diálogo propio (U21)", () => {
     await expect(row).not.toContainText("retirada");
   });
 
+  test("pasada la hora de salida sin salir: explica qué pasa con la seña (RD6)", async ({
+    page,
+  }) => {
+    // el server responde CLOSED desde la hora de salida aunque el viaje siga
+    // abierto; se simula la cotización para no mover la fecha del viaje
+    await page.route("**/cancellation-quote", (route) =>
+      route.fulfill({
+        json: { window: "CLOSED", cancellable: false, refundAmount: 0, feeAmount: 0 },
+      })
+    );
+    await loginAs(page, "company");
+    await page.goto(LIFECYCLE_TRIP);
+
+    await cargoRow(page, confirmed.description)
+      .getByRole("button", { name: "retirar carga" })
+      .click();
+    const dialog = page.getByRole("dialog", {
+      name: "esta carga ya no se puede retirar",
+    });
+    await expect(dialog).toContainText(
+      "ya pasó la hora de salida: la carga no se puede retirar. si el fletero no sale dentro de las 24 h, el viaje se cancela solo y te devolvemos toda la seña que hayas pagado."
+    );
+    await expect(dialog).not.toContainText("ya salió");
+    await dialog.getByRole("button", { name: "entendido" }).click();
+    await expect(dialog).toBeHidden();
+  });
+
   test("el Tab queda atrapado dentro del diálogo", async ({ page }) => {
     await loginAs(page, "company");
     await page.goto(LIFECYCLE_TRIP);
@@ -422,6 +449,43 @@ test.describe("etiqueta de las cargas canceladas según el motivo (L7)", () => {
   });
 });
 
+test.describe("lo que se retuvo de la seña (RD5)", () => {
+  test("con montos: cuánto se retuvo y cuánto se devolvió", async ({ page }) => {
+    // una retirada con seña cobrada y retención, simulada sobre la respuesta
+    // del viaje: retirar de verdad con seña haría que el server llame a MP
+    await page.route(`**/api/trips/${E2E.lifecycleTripId}`, async (route) => {
+      const response = await route.fetch();
+      const trip = (await response.json()) as {
+        cargoItems: Record<string, unknown>[];
+      };
+      for (const item of trip.cargoItems) {
+        if (item.description === "E2E ciclo cancelada sin motivo") {
+          item.cancellationReason = "COMPANY_WITHDREW";
+          item.depositAmount = 42;
+          item.cancellationFeeAmount = 21;
+          item.depositPayment = { id: "e2e", type: "DEPOSIT", status: "REFUNDED" };
+        }
+        if (item.description === "E2E ciclo devuelta por el fletero") {
+          item.cancellationReason = null;
+          item.depositAmount = 30;
+          item.cancellationFeeAmount = 30;
+          item.depositPayment = { id: "e2e", type: "DEPOSIT", status: "APPROVED" };
+        }
+      }
+      await route.fulfill({ response, json: trip });
+    });
+    await loginAs(page, "carrier");
+    await page.goto(LIFECYCLE_TRIP);
+
+    await expect(cargoRow(page, "E2E ciclo cancelada sin motivo")).toContainText(
+      "retirada: se retuvieron $ 21,00 de la seña y se devolvieron $ 21,00."
+    );
+    await expect(cargoRow(page, "E2E ciclo devuelta por el fletero")).toContainText(
+      "cancelada: se retuvo toda la seña ($ 30,00)."
+    );
+  });
+});
+
 test.describe("cancelar el viaje (D6)", () => {
   const CANCEL_TRIP = `/viajes/${E2E.cancelTripId}`;
 
@@ -485,6 +549,10 @@ test.describe("cancelar el viaje (D6)", () => {
       "ninguna empresa pagó la seña todavía: no hay nada que devolver."
     );
 
+    // la parada de la carga activa, antes de cancelar
+    const stops = page.getByRole("region", { name: "paradas del viaje" });
+    await expect(stops).toContainText("E2E carga del viaje a cancelar");
+
     // Escape no cancela nada
     await page.keyboard.press("Escape");
     await expect(dialog).toBeHidden();
@@ -503,5 +571,11 @@ test.describe("cancelar el viaje (D6)", () => {
       "cancelada porque se canceló el viaje. no se había cobrado la seña."
     );
     await expect(row).not.toContainText("retirada");
+    // RD4: las paradas se actualizan sin recargar (antes quedaba la cancelada
+    // como «pendiente» y arrastrable)
+    await expect(
+      page.getByText("este viaje no tiene paradas de retiro cargadas.")
+    ).toBeVisible();
+    await expect(page.getByText(/arrastrá los ítems/)).toHaveCount(0);
   });
 });

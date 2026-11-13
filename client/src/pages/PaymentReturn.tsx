@@ -1,5 +1,6 @@
 import { useMemo, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import { useLoginHref } from "../hooks/useLoginHref";
 import { Button } from "../components/Button";
 import { CheckCircle, Clock, XCircle } from "../components/icons";
 import { useAuth } from "../hooks/useAuth";
@@ -59,6 +60,8 @@ function Card({
 /** U16 / 03§1.1: el retorno de Mercado Pago con el estado real del pago */
 export default function PaymentReturn() {
   const { user, isLoading: authLoading } = useAuth();
+  // RD8: ingresar desde acá vuelve acá
+  const loginLink = useLoginHref();
   const target = usePaymentTarget();
   const { trip, item, payment, timedOut, isError } = usePaymentStatus(
     user ? target : null
@@ -103,7 +106,7 @@ export default function PaymentReturn() {
         title="ingresá para ver tu pago"
         actions={
           <Button asChild variant="primary" size="sm">
-            <Link to="/ingresar">ingresar</Link>
+            <Link to={loginLink()}>ingresar</Link>
           </Button>
         }
       >

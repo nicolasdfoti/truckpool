@@ -4,12 +4,13 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "../components/Button";
 import { Logo } from "../components/Logo";
 import { api, setToken } from "../api/client";
+import { safeReturnTo } from "../lib/returnTo";
 
 type Tab = "login" | "register";
 type Role = "COMPANY" | "CARRIER";
 
 const inputClass =
-  "mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm outline-none placeholder:text-ink-muted focus:border-brand";
+  "mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm placeholder:text-ink-muted focus:border-brand";
 
 export default function Login() {
   const navigate = useNavigate();
@@ -40,8 +41,14 @@ export default function Login() {
       setError("ingresá un email válido.");
       return;
     }
-    if (password.length < 8) {
+    // QW3: el mínimo de 8 es del registro; para acceder alcanza con que no esté
+    // vacía (el server responde «email o contraseña incorrectos»)
+    if (isRegister && password.length < 8) {
       setError("la contraseña debe tener al menos 8 caracteres.");
+      return;
+    }
+    if (!password) {
+      setError("ingresá tu contraseña.");
       return;
     }
     if (isRegister && !name.trim()) {
@@ -60,7 +67,12 @@ export default function Login() {
       .then((result) => {
         setToken(result.token);
         queryClient.invalidateQueries({ queryKey: ["me"] });
-        navigate(result.user.role === "CARRIER" ? "/viajes/nuevo" : "/viajes");
+        // RD8: vuelve a la página desde la que se vino; si no hay, según el rol
+        navigate(
+          safeReturnTo(params.get("volver")) ??
+            (result.user.role === "CARRIER" ? "/viajes/nuevo" : "/viajes"),
+          { replace: true }
+        );
       })
       .catch((err: unknown) => {
         setError(err instanceof Error ? err.message : "algo salió mal, probá de nuevo.");
@@ -105,6 +117,7 @@ export default function Login() {
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="ej: Comercial Norte"
+                autoComplete="organization"
                 className={inputClass}
               />
             </div>
@@ -120,6 +133,7 @@ export default function Login() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="vos@empresa.com"
+              autoComplete="email"
               className={inputClass}
             />
           </div>
@@ -150,7 +164,10 @@ export default function Login() {
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="mínimo 8 caracteres"
+              // QW3: el gestor de contraseñas completa la guardada al acceder y
+              // propone una nueva al crear la cuenta
+              autoComplete={isRegister ? "new-password" : "current-password"}
+              placeholder={isRegister ? "mínimo 8 caracteres" : undefined}
               className={inputClass}
             />
           </div>

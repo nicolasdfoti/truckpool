@@ -30,7 +30,7 @@ export function ClosingCta() {
               id="cta-titulo"
               className="mb-4 font-display text-3xl font-semibold leading-tight text-white sm:text-4xl"
             >
-              PUBLICÁ TU CARGA O LLENÁ TU CAMIÓN HOY
+              SUMÁ TU CARGA O LLENÁ TU CAMIÓN HOY
             </h2>
             <p className="mb-8 max-w-lg text-lg text-white/70">
               Uníte a la red logística de TruckPool y empezá a mover carga en la próxima
@@ -39,14 +39,10 @@ export function ClosingCta() {
 
             <div className="flex flex-col gap-4 sm:flex-row">
               <Button asChild variant="primary" size="md" className="shadow-lg">
-                <Link to="/ingresar?tab=register&role=company">
-                  EMPRESAS: PUBLICAR CARGA
-                </Link>
+                <Link to="/viajes">Buscar un viaje para mi carga</Link>
               </Button>
               <Button asChild variant="dark" size="md" className="shadow-lg">
-                <Link to="/ingresar?tab=register&role=carrier">
-                  TRANSPORTISTAS: ENCONTRAR CARGA
-                </Link>
+                <Link to="/viajes/nuevo">Publicar mi viaje</Link>
               </Button>
             </div>
           </div>

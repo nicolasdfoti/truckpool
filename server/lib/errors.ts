@@ -148,6 +148,20 @@ export class VerificationNotPendingError extends AppError {
   }
 }
 
+/**
+ * Admin#1: aprobar sin DNI/CUIT cargado dejaría publicar viajes a alguien sin
+ * identidad. El pedido se puede rechazar (con nota) para que lo cargue.
+ */
+export class VerificationTaxIdMissingError extends AppError {
+  constructor() {
+    super(
+      "sin CUIT no se puede aprobar: rechazá el pedido para que lo cargue",
+      409,
+      "VERIFICATION_TAX_ID_MISSING"
+    );
+  }
+}
+
 export class VerificationNoteRequiredError extends AppError {
   constructor() {
     super(

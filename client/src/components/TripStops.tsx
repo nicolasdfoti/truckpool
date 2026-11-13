@@ -6,7 +6,10 @@ import {
   PointerSensor,
   useSensor,
   useSensors,
+  type Announcements,
   type DragEndEvent,
+  type ScreenReaderInstructions,
+  type UniqueIdentifier,
 } from "@dnd-kit/core";
 import {
   arrayMove,
@@ -18,6 +21,35 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { useTripStops, useReorderTripStops } from "../hooks/useTripStops";
 import type { FullStopItem } from "../types/trip";
+
+// QW10: lo que lee el lector de pantalla al reordenar. Por defecto dnd-kit lo
+// dice en inglés y con los ids («Draggable item cmw… was moved over…»).
+const SCREEN_READER_INSTRUCTIONS: ScreenReaderInstructions = {
+  draggable:
+    "para mover una parada, apretá espacio o enter. con las flechas arriba y abajo la cambiás de lugar; espacio o enter la deja ahí y escape cancela.",
+};
+
+function stopAnnouncements(stops: FullStopItem[]): Announcements {
+  const total = stops.length;
+  const position = (id: UniqueIdentifier) =>
+    stops.findIndex((s) => s.cargoItemId === id) + 1;
+  const name = (id: UniqueIdentifier) =>
+    stops.find((s) => s.cargoItemId === id)?.pickupAddress ?? "la parada";
+  return {
+    onDragStart: ({ active }) =>
+      `agarraste la parada ${position(active.id)} de ${total}: ${name(active.id)}.`,
+    onDragOver: ({ active, over }) =>
+      over
+        ? `${name(active.id)} va a la posición ${position(over.id)} de ${total}.`
+        : `${name(active.id)} no está sobre ninguna posición.`,
+    onDragEnd: ({ active, over }) =>
+      over
+        ? `soltaste ${name(active.id)} en la posición ${position(over.id)} de ${total}.`
+        : `soltaste ${name(active.id)}: el orden no cambió.`,
+    onDragCancel: ({ active }) =>
+      `cancelaste el movimiento: ${name(active.id)} quedó en la posición ${position(active.id)}.`,
+  };
+}
 
 interface SortableItemProps {
   item: FullStopItem;
@@ -237,6 +269,10 @@ export function TripStops({
         sensors={sensors}
         collisionDetection={closestCenter}
         onDragEnd={handleDragEnd}
+        accessibility={{
+          announcements: stopAnnouncements(displayStops),
+          screenReaderInstructions: SCREEN_READER_INSTRUCTIONS,
+        }}
       >
         <SortableContext
           items={displayStops.map((s) => s.cargoItemId)}

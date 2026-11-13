@@ -52,10 +52,6 @@ export function Benefits() {
             </div>
           ))}
         </div>
-
-        <div className="mt-12 text-center text-sm font-medium text-ink-muted">
-          MVP: Publicación y Búsqueda, Dashboard. Próximamente: Chat, Pagos, IA.
-        </div>
       </div>
     </section>
   );

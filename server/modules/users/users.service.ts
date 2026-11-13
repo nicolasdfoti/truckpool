@@ -11,6 +11,7 @@ import {
   CarrierNotFoundError,
   VerificationNotPendingError,
   VerificationNoteRequiredError,
+  VerificationTaxIdMissingError,
 } from "../../lib/errors.js";
 import {
   CARRIER_CAN_CHARGE,
@@ -278,6 +279,7 @@ export async function reviewVerification(userId: string, input: ReviewVerificati
   }
   if (user.verificationStatus !== "PENDING") throw new VerificationNotPendingError();
   if (!input.approve && !input.note) throw new VerificationNoteRequiredError();
+  if (input.approve && !user.taxId?.trim()) throw new VerificationTaxIdMissingError();
 
   const updated = await prisma.user.update({
     where: { id: userId },

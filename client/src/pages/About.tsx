@@ -64,14 +64,10 @@ export default function About() {
 
             <div className="flex flex-col justify-center gap-4 sm:flex-row lg:justify-start">
               <Button asChild variant="dark" size="md" className="shadow-lg">
-                <a href="/ingresar?tab=register&role=company">
-                  SOY EMPRESA, QUIERO PUBLICAR CARGA
-                </a>
+                <a href="/viajes">Buscar un viaje para mi carga</a>
               </Button>
               <Button asChild variant="primary" size="md" className="shadow-lg">
-                <a href="/ingresar?tab=register&role=carrier">
-                  SOY TRANSPORTISTA, TENGO CAPACIDAD
-                </a>
+                <a href="/viajes/nuevo">Publicar mi viaje</a>
               </Button>
             </div>
           </div>
@@ -184,7 +180,7 @@ export default function About() {
               size="md"
               className="shadow-lg w-full sm:w-auto"
             >
-              <a href="/ingresar?tab=register&role=company">EMPRESAS: PUBLICAR CARGA</a>
+              <a href="/viajes">Buscar un viaje para mi carga</a>
             </Button>
             <Button
               asChild
@@ -192,9 +188,7 @@ export default function About() {
               size="md"
               className="shadow-lg w-full sm:w-auto"
             >
-              <a href="/ingresar?tab=register&role=carrier">
-                TRANSPORTISTAS: ENCONTRAR CARGA
-              </a>
+              <a href="/viajes/nuevo">Publicar mi viaje</a>
             </Button>
           </div>
         </div>

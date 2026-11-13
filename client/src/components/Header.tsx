@@ -6,6 +6,7 @@ import { Menu, X } from "./icons";
 import { NotificationBell } from "./NotificationBell";
 import { UserMenu } from "./UserMenu";
 import { useAuth } from "../hooks/useAuth";
+import { useLoginHref } from "../hooks/useLoginHref";
 import { SkeletonBar } from "./Loading";
 
 const NAV_LINKS = [
@@ -32,6 +33,8 @@ export function Header() {
   const [scrolled, setScrolled] = useState(false);
   const navigate = useNavigate();
   const { user, isLoading, logout } = useAuth();
+  // RD8: ingresar desde cualquier página vuelve a esa página
+  const loginLink = useLoginHref();
 
   // Detectar scroll para sombra
   useEffect(() => {
@@ -136,10 +139,10 @@ export function Header() {
             ) : (
               <>
                 <Button asChild variant="outline" size="sm">
-                  <Link to="/ingresar">Iniciar Sesión</Link>
+                  <Link to={loginLink()}>Iniciar Sesión</Link>
                 </Button>
                 <Button asChild variant="primary" size="sm">
-                  <Link to="/ingresar?tab=register&role=company">Registrarse</Link>
+                  <Link to={loginLink({ tab: "register", role: "company" })}>Registrarse</Link>
                 </Button>
               </>
             )}
@@ -148,10 +151,15 @@ export function Header() {
           {/* Mobile hamburger */}
           <div className="lg:hidden flex items-center gap-2">
             <NotificationBell />
+            {/* RD1: a menos de sm no entra junto a la campanita, el avatar y la
+                hamburguesa (la página se ensanchaba y el menú quedaba afuera);
+                ahí «publicar viaje» queda en el menú móvil */}
             {user?.role === "CARRIER" && (
-              <Button asChild variant="primary" size="sm">
-                <Link to="/viajes/nuevo">Publicar viaje</Link>
-              </Button>
+              <span className="hidden sm:inline-flex">
+                <Button asChild variant="primary" size="sm">
+                  <Link to="/viajes/nuevo">Publicar viaje</Link>
+                </Button>
+              </span>
             )}
             {/* bajo lg el menú se reduce al avatar (el nombre y el chevron
                 se ocultan solos con lg:block dentro de UserMenu) */}
@@ -274,7 +282,7 @@ export function Header() {
                   className="w-full"
                   onClick={() => setMobileOpen(false)}
                 >
-                  <Link to="/ingresar">Iniciar Sesión</Link>
+                  <Link to={loginLink()}>Iniciar Sesión</Link>
                 </Button>
                 <Button
                   asChild
@@ -283,7 +291,7 @@ export function Header() {
                   className="w-full"
                   onClick={() => setMobileOpen(false)}
                 >
-                  <Link to="/ingresar?tab=register&role=company">Registrarse</Link>
+                  <Link to={loginLink({ tab: "register", role: "company" })}>Registrarse</Link>
                 </Button>
               </>
             )}
