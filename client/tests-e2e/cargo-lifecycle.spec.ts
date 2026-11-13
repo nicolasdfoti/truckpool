@@ -144,3 +144,91 @@ test.describe("confirmar carga solo el fletero (D1)", () => {
     await expect(row.getByRole("button", { name: "confirmar carga" })).toHaveCount(0);
   });
 });
+
+test.describe("pagar la seña (03/Pagar seña#2)", () => {
+  const ROLES_TRIP = `/viajes/${E2E.rolesTripId}`;
+
+  test("fletero sin MP: el error queda en la fila y el botón se deshabilita", async ({
+    page,
+  }) => {
+    await page.route("**/api/cargo-items/*/payment-preference", (route) =>
+      route.fulfill({
+        status: 409,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error:
+            "el transportista de este viaje no tiene cuenta de Mercado Pago conectada",
+          code: "MP_ACCOUNT_NOT_CONNECTED",
+        }),
+      })
+    );
+    await loginAs(page, "company");
+    await page.goto(ROLES_TRIP);
+
+    const row = cargoRow(page, E2E.cargo.owner.description);
+    const pay = row.getByRole("button", { name: /pagar seña/ });
+    await pay.click();
+
+    await expect(row.getByRole("alert")).toContainText(
+      /este viaje no puede recibir pagos por ahora\. tu lugar queda reservado hasta el \S+ \d{1,2}\/\d{1,2} \d{2}:\d{2}\./
+    );
+    await expect(pay).toBeDisabled();
+  });
+
+  test("otro error: el mensaje del server en la fila y se puede reintentar", async ({
+    page,
+  }) => {
+    await page.route("**/api/cargo-items/*/payment-preference", (route) =>
+      route.fulfill({
+        status: 502,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: "no pudimos conectar con Mercado Pago",
+          code: "MP_ERROR",
+        }),
+      })
+    );
+    await loginAs(page, "company");
+    await page.goto(ROLES_TRIP);
+
+    const row = cargoRow(page, E2E.cargo.owner.description);
+    const pay = row.getByRole("button", { name: /pagar seña/ });
+    await pay.click();
+    await expect(row.getByRole("alert")).toHaveText(
+      "no pudimos conectar con Mercado Pago"
+    );
+    await expect(pay).toBeEnabled();
+  });
+
+  test("con la preference creada, va al checkout de MP (interceptado)", async ({
+    page,
+  }) => {
+    const initPoint = "https://www.mercadopago.com.ar/checkout/v1/redirect?pref_id=e2e";
+    await page.route("**/api/cargo-items/*/payment-preference", (route) =>
+      route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({
+          paymentId: "e2e-pay",
+          cargoItemId: "e2e",
+          type: "DEPOSIT",
+          amount: 80,
+          status: "PENDING",
+          initPoint,
+        }),
+      })
+    );
+    // nunca sale a la red de MP
+    await page.route("https://www.mercadopago.com.ar/**", (route) =>
+      route.fulfill({ contentType: "text/html", body: "<h1>checkout e2e</h1>" })
+    );
+    await loginAs(page, "company");
+    await page.goto(ROLES_TRIP);
+
+    await cargoRow(page, E2E.cargo.owner.description)
+      .getByRole("button", { name: /pagar seña/ })
+      .click();
+    await expect(page).toHaveURL(initPoint);
+    await expect(page.getByRole("heading", { name: "checkout e2e" })).toBeVisible();
+  });
+});

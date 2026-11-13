@@ -304,9 +304,15 @@ export default function TripDetail() {
       ? updateStatus.error.message
       : confirmCargoItem.error instanceof Error
         ? confirmCargoItem.error.message
-        : createPaymentPreference.error instanceof Error
-          ? createPaymentPreference.error.message
-          : null;
+        : null;
+
+  // 03/Pagar seña#2: el error del pago va en la fila de la carga que se quiso
+  // pagar, no abajo de todo
+  const paymentErrorFor = (cargoItemId: string) =>
+    createPaymentPreference.error instanceof Error &&
+    createPaymentPreference.variables?.cargoItemId === cargoItemId
+      ? createPaymentPreference.error
+      : null;
 
   return (
     <div className="bg-canvas font-sans text-ink">
@@ -557,6 +563,12 @@ export default function TripDetail() {
                   balance?.status !== "APPROVED" &&
                   balance?.status !== "CHARGED_BACK";
                 const showPayButton = showDepositPayButton || showBalancePayButton;
+                const paymentError = paymentErrorFor(item.id);
+                // el fletero desconectó Mercado Pago: reintentar no sirve, así
+                // que el botón queda deshabilitado con el motivo
+                const cannotCharge =
+                  paymentError instanceof ApiError &&
+                  paymentError.code === "MP_ACCOUNT_NOT_CONNECTED";
                 // se retira lo pendiente o confirmado (hasta la salida, con la misma
                 // penalidad) mientras el viaje no arrancó: el botón vive al lado
                 // de las otras acciones.
@@ -651,6 +663,17 @@ export default function TripDetail() {
                             {cancellationNote(item)}
                           </p>
                         )}
+                        {showPayButton && paymentError && (
+                          <p role="alert" className="mt-1 text-[13px] text-danger">
+                            {cannotCharge
+                              ? `este viaje no puede recibir pagos por ahora.${
+                                  item.reservationExpiresAt
+                                    ? ` tu lugar queda reservado hasta el ${formatInstant(item.reservationExpiresAt)}.`
+                                    : ""
+                                }`
+                              : paymentError.message}
+                          </p>
+                        )}
                       </div>
                     </div>
                     {showPayButton || showCancelButton ? (
@@ -672,7 +695,7 @@ export default function TripDetail() {
                           <Button
                             variant="primary"
                             size="sm"
-                            disabled={createPaymentPreference.isPending}
+                            disabled={createPaymentPreference.isPending || cannotCharge}
                             onClick={() =>
                               createPaymentPreference.mutate({
                                 cargoItemId: item.id,
