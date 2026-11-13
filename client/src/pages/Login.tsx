@@ -9,8 +9,7 @@ import { safeReturnTo } from "../lib/returnTo";
 type Tab = "login" | "register";
 type Role = "COMPANY" | "CARRIER";
 
-const inputClass =
-  "mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm placeholder:text-ink-muted focus:border-brand";
+const inputClass = "input mt-1.5";
 
 export default function Login() {
   const navigate = useNavigate();
@@ -82,35 +81,44 @@ export default function Login() {
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-canvas px-6 py-16 font-sans text-ink">
-      <div className="w-full max-w-md rounded-[12px] border border-line bg-white p-8">
+      <div className="w-full max-w-md rounded-xl border border-line bg-white p-6 shadow-[0_16px_40px_-28px_rgba(11,61,92,0.55)] sm:p-8">
         <Logo />
+        <h1 className="mt-8 font-display text-[28px] leading-tight font-semibold">
+          {isRegister ? "Creá tu cuenta" : "Ingresá a TruckPool"}
+        </h1>
 
-        <div className="mt-8 grid grid-cols-2 rounded-md border border-line p-1 text-center text-sm">
+        <div className="mt-6 grid grid-cols-2 border-b border-line text-center text-[15px]">
           <button
             type="button"
             onClick={() => setTab("login")}
-            className={`rounded-md px-3 py-2 transition-colors ${
-              tab === "login" ? "bg-brand text-white" : "text-ink-soft hover:text-ink"
+            aria-pressed={tab === "login"}
+            className={`min-h-11 px-3 transition-colors ${
+              tab === "login"
+                ? "font-semibold text-brand shadow-[inset_0_-3px_0_var(--color-brand)]"
+                : "text-ink-soft hover:text-ink"
             }`}
           >
-            acceder
+            Ingresar
           </button>
           <button
             type="button"
             onClick={() => setTab("register")}
-            className={`rounded-md px-3 py-2 transition-colors ${
-              tab === "register" ? "bg-brand text-white" : "text-ink-soft hover:text-ink"
+            aria-pressed={tab === "register"}
+            className={`min-h-11 px-3 transition-colors ${
+              tab === "register"
+                ? "font-semibold text-brand shadow-[inset_0_-3px_0_var(--color-brand)]"
+                : "text-ink-soft hover:text-ink"
             }`}
           >
-            crear cuenta
+            Crear cuenta
           </button>
         </div>
 
         <form onSubmit={handleSubmit} className="mt-6">
           {isRegister && (
             <div className="mt-4">
-              <label className="text-[13px] text-ink-soft" htmlFor="name">
-                nombre de empresa o fletero
+              <label className="field-label" htmlFor="name">
+                Nombre de empresa o fletero
               </label>
               <input
                 id="name"
@@ -124,8 +132,8 @@ export default function Login() {
           )}
 
           <div className={isRegister ? "mt-4" : "mt-0"}>
-            <label className="text-[13px] text-ink-soft" htmlFor="email">
-              email
+            <label className="field-label" htmlFor="email">
+              Email
             </label>
             <input
               id="email"
@@ -140,8 +148,8 @@ export default function Login() {
 
           {isRegister && (
             <div className="mt-4">
-              <label className="text-[13px] text-ink-soft" htmlFor="role">
-                rol
+              <label className="field-label" htmlFor="role">
+                Rol
               </label>
               <select
                 id="role"
@@ -156,8 +164,8 @@ export default function Login() {
           )}
 
           <div className="mt-4">
-            <label className="text-[13px] text-ink-soft" htmlFor="password">
-              contraseña
+            <label className="field-label" htmlFor="password">
+              Contraseña
             </label>
             <input
               id="password"
@@ -174,8 +182,8 @@ export default function Login() {
 
           {error && <p className="mt-4 text-[13px] text-danger">{error}</p>}
 
-          <Button type="submit" className="mt-6 w-full" disabled={pending}>
-            {pending ? "un momento…" : isRegister ? "crear cuenta" : "entrar"}
+          <Button type="submit" size="md" className="mt-6 w-full" disabled={pending}>
+            {pending ? "un momento…" : isRegister ? "Crear cuenta" : "Entrar"}
           </Button>
         </form>
       </div>
