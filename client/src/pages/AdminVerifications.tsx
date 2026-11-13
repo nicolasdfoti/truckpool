@@ -59,6 +59,25 @@ export default function AdminVerifications() {
           <p className="mt-8 text-sm text-ink-muted">cargando solicitudes…</p>
         )}
 
+        {/* QW7: con un error la página quedaba en blanco */}
+        {isAdmin && verifications.isError && (
+          <div
+            role="alert"
+            className="mt-8 rounded-md bg-danger/10 px-3 py-3 text-[13px] text-danger"
+          >
+            <p>no pudimos cargar las verificaciones pendientes.</p>
+            <Button
+              variant="outline"
+              size="sm"
+              className="mt-2"
+              disabled={verifications.isFetching}
+              onClick={() => verifications.refetch()}
+            >
+              {verifications.isFetching ? "reintentando…" : "reintentar"}
+            </Button>
+          </div>
+        )}
+
         {isAdmin && error && (
           <p className="mt-6 rounded-md bg-danger/10 px-3 py-2 text-[13px] text-danger">
             {error}

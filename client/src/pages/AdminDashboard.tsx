@@ -1,5 +1,6 @@
 import { Navigate, Link } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
+import { Button } from "../components/Button";
 import { LoadingBlock, SkeletonList } from "../components/Loading";
 import { useAdminStats, type AdminStats } from "../hooks/useAdminStats";
 
@@ -112,12 +113,23 @@ export default function AdminDashboard() {
           </LoadingBlock>
         )}
 
+        {/* QW7: sin el «error interno» crudo del server, y con reintentar */}
         {isAdmin && stats.isError && (
-          <p className="mt-6 rounded-md bg-danger/10 px-3 py-2 text-[13px] text-danger">
-            {stats.error instanceof Error
-              ? stats.error.message
-              : "no pudimos cargar las métricas."}
-          </p>
+          <div
+            role="alert"
+            className="mt-6 rounded-md bg-danger/10 px-3 py-3 text-[13px] text-danger"
+          >
+            <p>no pudimos cargar las métricas.</p>
+            <Button
+              variant="outline"
+              size="sm"
+              className="mt-2"
+              disabled={stats.isFetching}
+              onClick={() => stats.refetch()}
+            >
+              {stats.isFetching ? "reintentando…" : "reintentar"}
+            </Button>
+          </div>
         )}
 
         {isAdmin && data && (
