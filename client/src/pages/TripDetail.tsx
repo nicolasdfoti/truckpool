@@ -81,6 +81,9 @@ function quotableVolume(raw: string): number | null {
 /** faltando menos de esto, «reservado hasta» se pone en rojo (03§1.2) */
 const RESERVATION_URGENT_MS = 3 * 60 * 60 * 1000;
 
+/** RD3 / QW13: botones de la fila de una carga; en mobile a lo ancho y de 44 px */
+const ROW_ACTION = "min-h-11 w-full whitespace-nowrap sm:min-h-0 sm:w-auto";
+
 /** campo de dirección de pickup con el mismo picker de mapa que PublishTrip */
 function PickupAddressField({
   value,
@@ -623,31 +626,35 @@ export default function TripDetail() {
                   (item.status === "PENDING" || item.status === "CONFIRMED") &&
                   canCancelTrip;
                 return (
+                  // RD3 / QW13: en mobile la fila se apila (estado, datos y
+                  // botones a lo ancho); en desktop vuelve a ser una línea
                   <li
                     key={item.id}
-                    className="flex items-center justify-between gap-4 rounded-[10px] border border-line bg-white p-4"
+                    className="flex flex-col gap-3 rounded-[10px] border border-line bg-white p-4 sm:flex-row sm:items-center sm:justify-between sm:gap-4"
                   >
-                    <div className="flex items-center gap-3">
-                      {depositApproved && (
-                        <span className="inline-flex items-center rounded-full bg-brand px-3 py-1 text-xs font-medium text-white">
-                          seña pagada
-                        </span>
-                      )}
-                      {balance?.status === "APPROVED" && (
-                        <span className="inline-flex items-center rounded-full bg-brand px-3 py-1 text-xs font-medium text-white">
-                          saldo pagado
-                        </span>
-                      )}
-                      {!showPayButton && (
-                        <span
-                          className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${CARGO_STATUS_STYLES[item.status]}`}
-                        >
-                          {item.status === "CANCELLED"
-                            ? cancelledLabel(item.cancellationReason)
-                            : CARGO_STATUS_LABELS[item.status]}
-                        </span>
-                      )}
-                      <div>
+                    <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
+                      <div className="flex flex-wrap items-center gap-2 sm:contents">
+                        {depositApproved && (
+                          <span className="inline-flex items-center rounded-full bg-brand px-3 py-1 text-xs font-medium text-white">
+                            seña pagada
+                          </span>
+                        )}
+                        {balance?.status === "APPROVED" && (
+                          <span className="inline-flex items-center rounded-full bg-brand px-3 py-1 text-xs font-medium text-white">
+                            saldo pagado
+                          </span>
+                        )}
+                        {!showPayButton && (
+                          <span
+                            className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${CARGO_STATUS_STYLES[item.status]}`}
+                          >
+                            {item.status === "CANCELLED"
+                              ? cancelledLabel(item.cancellationReason)
+                              : CARGO_STATUS_LABELS[item.status]}
+                          </span>
+                        )}
+                      </div>
+                      <div className="min-w-0">
                         <p className="text-sm font-medium">{item.description}</p>
                         <p className="text-[13px] text-ink-muted">
                           {item.volume.toFixed(1)} m³ · {currency(item.priceShare)} del
@@ -662,12 +669,12 @@ export default function TripDetail() {
                             </p>
                           )}
                         {item.pickupAddress && (
-                          <p className="text-[12px] text-ink-muted font-mono">
+                          <p className="text-[12px] text-ink-muted font-mono break-words">
                             retiro: {item.pickupAddress}
                           </p>
                         )}
                         {item.trackingCode && (
-                          <p className="text-[12px] text-ink-muted font-mono">
+                          <p className="text-[12px] text-ink-muted font-mono break-all">
                             código: {item.trackingCode}
                           </p>
                         )}
@@ -750,11 +757,12 @@ export default function TripDetail() {
                       </div>
                     </div>
                     {showPayButton || showCancelButton ? (
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-col gap-2 sm:shrink-0 sm:flex-row sm:items-center">
                         {showCancelButton && (
                           <Button
                             variant="outline-danger"
                             size="sm"
+                            className={ROW_ACTION}
                             disabled={cancelCargoItem.isPending}
                             onClick={() => {
                               cancelCargoItem.reset();
@@ -768,6 +776,7 @@ export default function TripDetail() {
                           <Button
                             variant="primary"
                             size="sm"
+                            className={ROW_ACTION}
                             disabled={createPaymentPreference.isPending || cannotCharge}
                             onClick={() =>
                               createPaymentPreference.mutate({
@@ -791,6 +800,7 @@ export default function TripDetail() {
                         <Button
                           variant="primary"
                           size="sm"
+                          className={ROW_ACTION}
                           disabled={confirmCargoItem.isPending}
                           onClick={() => confirmCargoItem.mutate(item.id)}
                         >

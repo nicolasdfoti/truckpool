@@ -93,3 +93,30 @@ test.describe("RD1: header y diálogos del fletero", () => {
     );
   });
 });
+
+test.describe("RD3 / QW13: la fila de la carga en mobile", () => {
+  test("los textos de la seña se leen a lo ancho y los botones quedan en la tarjeta", async ({
+    page,
+  }) => {
+    await loginAs(page, "company");
+    await page.goto(`/viajes/${E2E.rolesTripId}`);
+    const row = page
+      .getByRole("list", { name: "cargas del viaje" })
+      .getByRole("listitem")
+      .filter({ hasText: "E2E carga de la dueña" });
+    await expect(row.getByRole("button", { name: "retirar carga" })).toBeVisible();
+    expect(await pageWidth(page)).toBeLessThanOrEqual(WIDTH);
+
+    const card = (await row.boundingBox())!;
+    // antes: una columna de 1-2 palabras al lado de los botones
+    const deposit = (await row.getByText(/^seña de \$/).boundingBox())!;
+    expect(deposit.width).toBeGreaterThan(card.width * 0.6);
+
+    for (const name of ["retirar carga", /^pagar seña/]) {
+      const box = (await row.getByRole("button", { name }).boundingBox())!;
+      expect(box.x).toBeGreaterThanOrEqual(card.x);
+      expect(box.x + box.width).toBeLessThanOrEqual(card.x + card.width);
+      expect(box.height).toBeGreaterThanOrEqual(44);
+    }
+  });
+});
