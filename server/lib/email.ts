@@ -232,6 +232,53 @@ export function cargoCancelledEmail(input: {
   };
 }
 
+/**
+ * L7: el viaje le canceló la carga a la empresa (no la retiró ella): salió sin
+ * confirmarla (D3), el fletero lo canceló (D6) o no salió a tiempo (D6
+ * automática). Informa una devolución de plata, así que dice qué carga, por qué
+ * y cuánto vuelve de la seña, o que no se había cobrado.
+ */
+export function tripCargoCancelledEmail(input: {
+  company: EmailRecipient;
+  trip: { id: string; origin: string; destination: string; carrierName: string };
+  description: string;
+  volume: number;
+  reason: "TRIP_DEPARTED" | "CARRIER_CANCELLED" | "NO_DEPARTURE";
+  /** la seña cobrada que vuelve entera; 0 si no se había cobrado */
+  refundAmount: number;
+}): { subject: string; html: string } {
+  const { trip } = input;
+  const ruta = `${trip.origin} → ${trip.destination}`;
+  const carga = `${input.description.toLowerCase()} (${input.volume} m³)`;
+  const motivo =
+    input.reason === "TRIP_DEPARTED"
+      ? `el viaje ${ruta} salió sin que tu carga estuviera confirmada, así que ${carga} no viaja.`
+      : input.reason === "CARRIER_CANCELLED"
+        ? `${trip.carrierName} canceló el viaje ${ruta}, así que ${carga} no viaja.`
+        : `el viaje ${ruta} no salió dentro de las 24 h posteriores a la salida, así que lo cancelamos y ${carga} no viaja.`;
+  const plata =
+    input.refundAmount > 0
+      ? [
+          `te devolvemos la seña entera: $${formatMoney(input.refundAmount)}.`,
+          "el reembolso lo procesa Mercado Pago y puede tardar unos días en verse en tu medio de pago.",
+        ]
+      : [
+          "no se había cobrado la seña, así que no hay nada que devolver. si se llega a acreditar, te la devolvemos entera.",
+        ];
+
+  return {
+    subject:
+      input.reason === "TRIP_DEPARTED"
+        ? `tu carga se canceló: ${ruta}`
+        : `se canceló el viaje: ${ruta}`,
+    html: renderEmail({
+      greeting: `hola ${input.company.name},`,
+      paragraphs: [motivo, ...plata],
+      cta: { label: "ver el viaje", url: tripUrl(trip.id) },
+    }),
+  };
+}
+
 /** el viaje arrancó: la empresa tiene que pagar el saldo de sus cargas */
 export function balanceDueEmail(input: {
   company: EmailRecipient;

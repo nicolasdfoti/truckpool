@@ -37,6 +37,7 @@ import {
   cargoAddedEmail,
   cargoCancelledEmail,
   cargoConfirmedEmail,
+  tripCargoCancelledEmail,
   tripStatusEmail,
 } from "../../lib/email.js";
 import { notifyUsers } from "../../lib/notifications.js";
@@ -613,6 +614,7 @@ type CancelledByTrip = {
   cargoItemId: string;
   companyId: string;
   description: string;
+  volume: number;
   /** la seña cobrada que vuelve entera por el outbox; 0 si no había seña cobrada */
   refundAmount: number;
 };
@@ -621,6 +623,7 @@ type CargoForTripCancellation = {
   id: string;
   companyId: string;
   description: string;
+  volume: number;
   depositAmount: Prisma.Decimal;
   payments: {
     id: string;
@@ -691,6 +694,7 @@ async function cancelCargoForTrip(
       cargoItemId: item.id,
       companyId: item.companyId,
       description: item.description,
+      volume: item.volume,
       refundAmount: paid ? Number(item.depositAmount) : 0,
     });
   }
@@ -1045,6 +1049,26 @@ async function applyTripStatus(
             : `tu carga se canceló: ${ruta}`,
         body: `${motivo} ${plata}`,
         tripId,
+        // L7: informa una devolución de plata, con su propia plantilla
+        email: (user) =>
+          tripCargoCancelledEmail({
+            company: user,
+            trip: {
+              id: tripId,
+              origin: result.trip.origin,
+              destination: result.trip.destination,
+              carrierName: result.trip.carrierName,
+            },
+            description: item.description,
+            volume: item.volume,
+            reason:
+              status !== "CANCELLED"
+                ? "TRIP_DEPARTED"
+                : actor.by === "NO_DEPARTURE"
+                  ? "NO_DEPARTURE"
+                  : "CARRIER_CANCELLED",
+            refundAmount: item.refundAmount,
+          }),
       })
     );
   }

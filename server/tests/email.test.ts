@@ -4,6 +4,7 @@ import {
   cargoCancelledEmail,
   cargoConfirmedEmail,
   renderEmail,
+  tripCargoCancelledEmail,
   sendEmail,
   sendEmailToUser,
   tripRequestEmail,
@@ -395,5 +396,79 @@ describe("emails de solicitudes de viaje", () => {
 
     expect(subject).toBe("tu solicitud fue rechazada: Córdoba → Rosario");
     expect(html).not.toContain("/viajes/");
+  });
+});
+
+// L7: la empresa se entera por email de que el viaje le canceló la carga y de
+// cuánto se le devuelve (antes: el email genérico, sin formato propio)
+describe("tripCargoCancelledEmail", () => {
+  const base = {
+    company: { name: "Empresa Uno" },
+    trip: {
+      id: "t1",
+      origin: "Córdoba",
+      destination: "Rosario",
+      carrierName: "Transportes Flete",
+    },
+    description: "Maquinaria",
+    volume: 10,
+  };
+
+  it("salió sin confirmarla (D3): qué carga, por qué y la seña devuelta entera", () => {
+    const { subject, html } = tripCargoCancelledEmail({
+      ...base,
+      reason: "TRIP_DEPARTED",
+      refundAmount: 100,
+    });
+    expect(subject).toBe("tu carga se canceló: Córdoba → Rosario");
+    expect(html).toContain("hola Empresa Uno,");
+    expect(html).toContain("maquinaria (10 m³)");
+    expect(html).toContain("salió sin que tu carga estuviera confirmada");
+    expect(html).toContain("te devolvemos la seña entera: $100,00");
+    expect(html).toContain("puede tardar unos días");
+    expect(html).toContain("http://localhost:5173/viajes/t1");
+  });
+
+  it("sin seña cobrada: no promete una devolución", () => {
+    const { html } = tripCargoCancelledEmail({
+      ...base,
+      reason: "TRIP_DEPARTED",
+      refundAmount: 0,
+    });
+    expect(html).toContain("no se había cobrado la seña");
+    expect(html).toContain("si se llega a acreditar, te la devolvemos entera");
+    expect(html).not.toContain("$");
+    expect(html).not.toContain("puede tardar unos días");
+  });
+
+  it("el fletero canceló el viaje (D6 manual)", () => {
+    const { subject, html } = tripCargoCancelledEmail({
+      ...base,
+      reason: "CARRIER_CANCELLED",
+      refundAmount: 100,
+    });
+    expect(subject).toBe("se canceló el viaje: Córdoba → Rosario");
+    expect(html).toContain("Transportes Flete canceló el viaje");
+  });
+
+  it("el viaje no salió a tiempo (D6 automática)", () => {
+    const { subject, html } = tripCargoCancelledEmail({
+      ...base,
+      reason: "NO_DEPARTURE",
+      refundAmount: 100,
+    });
+    expect(subject).toBe("se canceló el viaje: Córdoba → Rosario");
+    expect(html).toContain("no salió dentro de las 24 h posteriores a la salida");
+    expect(html).not.toContain("Transportes Flete canceló");
+  });
+
+  it("escapa lo que escribió la empresa", () => {
+    const { html } = tripCargoCancelledEmail({
+      ...base,
+      description: "<script>x</script>",
+      reason: "TRIP_DEPARTED",
+      refundAmount: 0,
+    });
+    expect(html).not.toContain("<script>");
   });
 });

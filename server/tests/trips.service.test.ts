@@ -3206,6 +3206,22 @@ describe("addCargoItem", () => {
           };
         });
 
+      it("a cada empresa que no viaja, la plantilla con lo que se le devuelve (L7)", async () => {
+        await tripsService.updateTripStatus("t1", "u1", "IN_TRANSIT");
+
+        type Builder = (u: { name: string; email: string }) => { html: string };
+        const htmls = vi
+          .mocked(notifyUsers)
+          .mock.calls.filter(([, data]) => data.type === "CARGO_CANCELLED")
+          .map(([, data]) => (data.email as Builder)({ name: "Empresa", email: "e@e.com" }).html);
+        expect(htmls).toHaveLength(2);
+        for (const html of htmls) {
+          expect(html).toContain("salió sin que tu carga estuviera confirmada");
+        }
+        expect(htmls[0]).toContain("te devolvemos la seña entera: $");
+        expect(htmls[1]).toContain("no se había cobrado la seña");
+      });
+
       it("las que no viajan quedan con el motivo TRIP_DEPARTED (L7)", async () => {
         await tripsService.updateTripStatus("t1", "u1", "IN_TRANSIT");
 
@@ -3766,6 +3782,25 @@ describe("addCargoItem", () => {
         expect(conSeña.body).not.toContain("canceló el viaje");
         const [, sinSeña] = cancelaciones[2]!;
         expect(sinSeña.body).not.toContain("$");
+      });
+
+      it("el aviso a la empresa lleva la plantilla con el monto devuelto (L7)", async () => {
+        viajes(viaje());
+
+        await tripsService.autoCancelUndepartedTrips(AHORA);
+
+        const [, conSeña] = avisos("CARGO_CANCELLED")[0]!;
+        expect(typeof conSeña.email).toBe("function");
+        const email = (
+          conSeña.email as (u: { name: string; email: string }) => {
+            subject: string;
+            html: string;
+          }
+        )({ name: "Empresa c1", email: "c1@empresa.com" });
+        expect(email.subject).toBe("se canceló el viaje: Córdoba → Rosario");
+        expect(email.html).toContain("maquinaria");
+        expect(email.html).toContain("no salió dentro de las 24 h");
+        expect(email.html).toContain("te devolvemos la seña entera: $100,00");
       });
 
       it("avisa al fletero solo in-app que se le canceló el viaje", async () => {
