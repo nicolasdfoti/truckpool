@@ -3803,7 +3803,7 @@ describe("addCargoItem", () => {
         expect(email.html).toContain("te devolvemos la seña entera: $100,00");
       });
 
-      it("avisa al fletero solo in-app que se le canceló el viaje", async () => {
+      it("avisa al fletero que se le canceló el viaje, in-app y por email (L7)", async () => {
         viajes(viaje());
 
         await tripsService.autoCancelUndepartedTrips(AHORA);
@@ -3815,10 +3815,19 @@ describe("addCargoItem", () => {
         expect(data).toMatchObject({
           title: "se canceló tu viaje: Córdoba → Rosario",
           tripId: "t1",
-          email: false,
         });
         expect(data.body).toContain("24 h");
         expect(data.body).toContain("3 cargas");
+        // antes era solo in-app (email: false); ahora lleva su plantilla
+        expect(typeof data.email).toBe("function");
+        const email = (
+          data.email as (u: { name: string; email: string }) => {
+            subject: string;
+            html: string;
+          }
+        )({ name: "Transportes Flete", email: "flete@x.com" });
+        expect(email.subject).toBe("se canceló tu viaje: Córdoba → Rosario");
+        expect(email.html).toContain("se cancelaron 3 cargas");
       });
 
       it("las cargas quedan con el motivo TRIP_CANCELLED, como en la manual (L7)", async () => {

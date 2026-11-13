@@ -279,6 +279,37 @@ export function tripCargoCancelledEmail(input: {
   };
 }
 
+/**
+ * L7: el scheduler le canceló al fletero un viaje que no pasó a «en tránsito»
+ * dentro de las 24 h posteriores a la salida (D6 automática). Antes era solo
+ * in-app: lo canceló el sistema, así que el fletero puede no haberse enterado.
+ */
+export function tripAutoCancelledEmail(input: {
+  carrier: EmailRecipient;
+  trip: { id: string; origin: string; destination: string };
+  cancelledCount: number;
+}): { subject: string; html: string } {
+  const { trip } = input;
+  const ruta = `${trip.origin} → ${trip.destination}`;
+  const n = input.cancelledCount;
+  const cargas =
+    n === 0
+      ? "el viaje no tenía cargas activas."
+      : `${n === 1 ? "se canceló 1 carga" : `se cancelaron ${n} cargas`} y a cada empresa se le devuelve entera la seña cobrada.`;
+
+  return {
+    subject: `se canceló tu viaje: ${ruta}`,
+    html: renderEmail({
+      greeting: `hola ${input.carrier.name},`,
+      paragraphs: [
+        `tu viaje ${ruta} no pasó a «en tránsito» dentro de las 24 h posteriores a la salida, así que lo cancelamos.`,
+        cargas,
+      ],
+      cta: { label: "ver el viaje", url: tripUrl(trip.id) },
+    }),
+  };
+}
+
 /** el viaje arrancó: la empresa tiene que pagar el saldo de sus cargas */
 export function balanceDueEmail(input: {
   company: EmailRecipient;

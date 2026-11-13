@@ -4,6 +4,7 @@ import {
   cargoCancelledEmail,
   cargoConfirmedEmail,
   renderEmail,
+  tripAutoCancelledEmail,
   tripCargoCancelledEmail,
   sendEmail,
   sendEmailToUser,
@@ -470,5 +471,37 @@ describe("tripCargoCancelledEmail", () => {
       refundAmount: 0,
     });
     expect(html).not.toContain("<script>");
+  });
+});
+
+// L7: el fletero se entera por email de que el scheduler le canceló un viaje
+// que no salió (D6 automática); antes era solo in-app
+describe("tripAutoCancelledEmail", () => {
+  const base = {
+    carrier: { name: "Transportes Flete" },
+    trip: { id: "t1", origin: "Córdoba", destination: "Rosario" },
+  };
+
+  it("dice por qué se canceló y cuántas cargas", () => {
+    const { subject, html } = tripAutoCancelledEmail({ ...base, cancelledCount: 3 });
+    expect(subject).toBe("se canceló tu viaje: Córdoba → Rosario");
+    expect(html).toContain("hola Transportes Flete,");
+    expect(html).toContain(
+      "no pasó a «en tránsito» dentro de las 24 h posteriores a la salida"
+    );
+    expect(html).toContain("se cancelaron 3 cargas");
+    expect(html).toContain("a cada empresa se le devuelve entera la seña cobrada");
+    expect(html).toContain("http://localhost:5173/viajes/t1");
+  });
+
+  it("una sola carga, en singular", () => {
+    const { html } = tripAutoCancelledEmail({ ...base, cancelledCount: 1 });
+    expect(html).toContain("se canceló 1 carga");
+  });
+
+  it("sin cargas: no habla de devoluciones", () => {
+    const { html } = tripAutoCancelledEmail({ ...base, cancelledCount: 0 });
+    expect(html).toContain("no tenía cargas activas");
+    expect(html).not.toContain("seña");
   });
 });

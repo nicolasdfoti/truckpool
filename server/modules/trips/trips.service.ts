@@ -37,6 +37,7 @@ import {
   cargoAddedEmail,
   cargoCancelledEmail,
   cargoConfirmedEmail,
+  tripAutoCancelledEmail,
   tripCargoCancelledEmail,
   tripStatusEmail,
 } from "../../lib/email.js";
@@ -1073,8 +1074,8 @@ async function applyTripStatus(
     );
   }
 
-  // D6 automática: el fletero se entera de que el viaje se canceló sin él.
-  // Solo in-app: el email queda para L7.
+  // D6 automática: el fletero se entera de que el viaje se canceló sin él,
+  // in-app y por email (L7): lo canceló el sistema, puede no haberse enterado
   if (actor.by === "NO_DEPARTURE") {
     const n = result.cancelled.length;
     const cargas =
@@ -1087,7 +1088,16 @@ async function applyTripStatus(
         title: `se canceló tu viaje: ${ruta}`,
         body: `no pasó a «en tránsito» dentro de las 24 h posteriores a la salida, así que lo cancelamos. ${cargas}`,
         tripId,
-        email: false,
+        email: (user) =>
+          tripAutoCancelledEmail({
+            carrier: user,
+            trip: {
+              id: tripId,
+              origin: result.trip.origin,
+              destination: result.trip.destination,
+            },
+            cancelledCount: n,
+          }),
       })
     );
   }
