@@ -4,6 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "../components/Button";
 import { Logo } from "../components/Logo";
 import { api, setToken } from "../api/client";
+import { safeReturnTo } from "../lib/returnTo";
 
 type Tab = "login" | "register";
 type Role = "COMPANY" | "CARRIER";
@@ -60,7 +61,12 @@ export default function Login() {
       .then((result) => {
         setToken(result.token);
         queryClient.invalidateQueries({ queryKey: ["me"] });
-        navigate(result.user.role === "CARRIER" ? "/viajes/nuevo" : "/viajes");
+        // RD8: vuelve a la página desde la que se vino; si no hay, según el rol
+        navigate(
+          safeReturnTo(params.get("volver")) ??
+            (result.user.role === "CARRIER" ? "/viajes/nuevo" : "/viajes"),
+          { replace: true }
+        );
       })
       .catch((err: unknown) => {
         setError(err instanceof Error ? err.message : "algo salió mal, probá de nuevo.");

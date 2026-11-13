@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import { useLoginHref } from "../hooks/useLoginHref";
 import { Button } from "../components/Button";
 import { StatusBadge } from "../components/StatusBadge";
 import { TripCard } from "../components/TripCard";
@@ -85,6 +86,8 @@ function moneyLine(item: MyCargoItem) {
 
 export default function Profile() {
   const { user, isLoading: authLoading } = useAuth();
+  // RD8: ingresar desde acá vuelve acá
+  const loginLink = useLoginHref();
   const { data: profile, isLoading: profileLoading } = useMyProfile(Boolean(user));
   const updateProfile = useUpdateProfile();
   const toggleAvailability = useToggleAvailability();
@@ -231,13 +234,13 @@ export default function Profile() {
             <p className="text-sm text-ink-muted">
               para ver tu perfil necesitás una cuenta:{" "}
               <Link
-                to="/ingresar?tab=register&role=company"
+                to={loginLink({ tab: "register", role: "company" })}
                 className="text-brand underline"
               >
                 crear cuenta
               </Link>{" "}
               ·{" "}
-              <Link to="/ingresar" className="text-brand underline">
+              <Link to={loginLink()} className="text-brand underline">
                 ingresar
               </Link>
             </p>

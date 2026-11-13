@@ -10,6 +10,7 @@ import { TripStops } from "../components/TripStops";
 import { useTrip } from "../hooks/useTrip";
 import { useAuth } from "../hooks/useAuth";
 import { useAddCargoItem } from "../hooks/useAddCargoItem";
+import { useLoginHref } from "../hooks/useLoginHref";
 import { useUpdateTripStatus } from "../hooks/useUpdateTripStatus";
 import { useCancelCargoItem } from "../hooks/useCancelCargoItem";
 import { useConfirmCargoItem } from "../hooks/useConfirmCargoItem";
@@ -134,6 +135,8 @@ export default function TripDetail() {
   const createPaymentPreference = useCreatePaymentPreference(id ?? "");
   const createReview = useCreateReview(id ?? "");
   const reviewStatus = useTripReviewStatus(trip, user);
+  // RD8: ingresar o crear cuenta desde el viaje vuelve al viaje
+  const loginLink = useLoginHref();
   // U7/U8: recorrido, paradas, ubicación y remito son del fletero dueño y de
   // las empresas con carga viva. Al resto (también el ex participante, D9) el
   // server le responde 401/403, así que ni se piden.
@@ -982,13 +985,13 @@ export default function TripDetail() {
               <p className="mt-2 text-[13px] text-ink-muted">
                 para sumar carga necesitás una cuenta de empresa:{" "}
                 <Link
-                  to="/ingresar?tab=register&role=company"
+                  to={loginLink({ tab: "register", role: "company" })}
                   className="text-brand underline"
                 >
                   crear cuenta
                 </Link>{" "}
                 ·{" "}
-                <Link to="/ingresar" className="text-brand underline">
+                <Link to={loginLink()} className="text-brand underline">
                   ingresar
                 </Link>
               </p>
@@ -997,7 +1000,7 @@ export default function TripDetail() {
               <p className="mt-2 text-[13px] text-ink-muted">
                 para sumar carga necesitás una cuenta de empresa.{" "}
                 <Link
-                  to="/ingresar?tab=register&role=company"
+                  to={loginLink({ tab: "register", role: "company" })}
                   className="text-brand underline"
                 >
                   crear cuenta de empresa

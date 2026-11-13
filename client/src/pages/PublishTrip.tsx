@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { useLoginHref } from "../hooks/useLoginHref";
 import { Button } from "../components/Button";
 import { FEATURE_META } from "../lib/tripFeatures";
 import { useAuth } from "../hooks/useAuth";
@@ -91,6 +92,8 @@ export default function PublishTrip() {
   const navigate = useNavigate();
   const createTrip = useCreateTrip();
   const { user, isLoading: authLoading } = useAuth();
+  // RD8: ingresar desde acá vuelve acá
+  const loginLink = useLoginHref();
   const canPublish = user?.role === "CARRIER";
   // el server exige VERIFIED; el perfil trae el estado para explicar el bloqueo
   // antes de que el usuario llene el formulario.
@@ -254,13 +257,13 @@ export default function PublishTrip() {
             <p className="text-sm text-ink-muted">
               para publicar un viaje necesitás una cuenta de fletero:{" "}
               <Link
-                to="/ingresar?tab=register&role=carrier"
+                to={loginLink({ tab: "register", role: "carrier" })}
                 className="text-brand underline"
               >
                 crear cuenta
               </Link>{" "}
               ·{" "}
-              <Link to="/ingresar" className="text-brand underline">
+              <Link to={loginLink()} className="text-brand underline">
                 ingresar
               </Link>
             </p>
