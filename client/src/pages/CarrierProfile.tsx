@@ -7,6 +7,8 @@ import { useCarrier } from "../hooks/useUserProfile";
 import { useAuth } from "../hooks/useAuth";
 import { useCreateTripRequest } from "../hooks/useTripRequests";
 import { LoadingBlock, SkeletonBar } from "../components/Loading";
+import { ApiError } from "../api/client";
+import { useDocumentTitle } from "../hooks/useDocumentTitle";
 
 function formatReviewDate(value: string) {
   return new Date(value).toLocaleDateString("es-AR", {
@@ -20,7 +22,10 @@ export default function CarrierProfile() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const { id } = useParams<{ id: string }>();
-  const { data: profile, isLoading, isError } = useCarrier(id);
+  const { data: profile, isLoading, isError, error, refetch } = useCarrier(id);
+  const notFound = error instanceof ApiError && error.status === 404;
+  // QW8: la pestaña dice qué fletero es
+  useDocumentTitle(profile ? `${profile.name} — TruckPool` : null);
   const createTripRequest = useCreateTripRequest();
 
   // handler not used directly; navigation happens in the button onClick
@@ -49,10 +54,20 @@ export default function CarrierProfile() {
           </LoadingBlock>
         )}
 
+        {/* RD10: un 404 no se reintenta; otro error sí, con el botón */}
         {isError && (
-          <p className="mt-10 rounded-md border border-line bg-white p-4 text-sm text-danger">
-            no encontramos este transportista.
-          </p>
+          <div className="mt-10 rounded-md border border-line bg-white p-4 text-sm">
+            <p className="text-danger">
+              {notFound
+                ? "no encontramos este transportista."
+                : "no pudimos cargar este transportista. probá de nuevo en un rato."}
+            </p>
+            {!notFound && (
+              <Button variant="outline" size="sm" className="mt-3" onClick={() => refetch()}>
+                reintentar
+              </Button>
+            )}
+          </div>
         )}
 
         {profile && (

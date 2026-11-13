@@ -11,6 +11,7 @@ import { useTrip } from "../hooks/useTrip";
 import { useAuth } from "../hooks/useAuth";
 import { useAddCargoItem } from "../hooks/useAddCargoItem";
 import { useLoginHref } from "../hooks/useLoginHref";
+import { useDocumentTitle } from "../hooks/useDocumentTitle";
 import { useUpdateTripStatus } from "../hooks/useUpdateTripStatus";
 import { useCancelCargoItem } from "../hooks/useCancelCargoItem";
 import { useConfirmCargoItem } from "../hooks/useConfirmCargoItem";
@@ -125,7 +126,22 @@ function PickupAddressField({
 
 export default function TripDetail() {
   const { id } = useParams<{ id: string }>();
-  const { data: trip, isLoading, isError } = useTrip(id ?? "");
+  const {
+    data: trip,
+    isLoading,
+    isError,
+    error: tripError,
+    refetch: refetchTrip,
+  } = useTrip(id ?? "");
+  const tripNotFound = tripError instanceof ApiError && tripError.status === 404;
+  // QW8: la pestaña dice qué viaje es
+  useDocumentTitle(
+    trip
+      ? `${trip.origin} → ${trip.destination} — TruckPool`
+      : tripNotFound
+        ? "Viaje no encontrado — TruckPool"
+        : null
+  );
   const { user } = useAuth();
   const addCargoItem = useAddCargoItem(id ?? "");
   const updateStatus = useUpdateTripStatus(id ?? "");
@@ -233,11 +249,31 @@ export default function TripDetail() {
     );
   }
 
+  // RD10 / QW8: un 404 no es un error de carga; los dos con salida
   if (isError || !trip) {
     return (
-      <div className="bg-canvas font-sans">
-        <div className="mx-auto max-w-3xl px-6 py-20 text-sm text-danger">
-          no pudimos cargar este viaje.
+      <div className="bg-canvas font-sans text-ink">
+        <div className="mx-auto max-w-3xl px-6 py-20">
+          <h1 className="font-display text-2xl font-semibold">
+            {tripNotFound
+              ? "este viaje no existe o ya no está publicado"
+              : "no pudimos cargar este viaje"}
+          </h1>
+          <p className="mt-2 text-sm text-ink-soft">
+            {tripNotFound
+              ? "puede que el link esté incompleto o que el viaje se haya dado de baja."
+              : "puede ser un problema de conexión. probá de nuevo en un rato."}
+          </p>
+          <div className="mt-6 flex flex-wrap gap-3">
+            {!tripNotFound && (
+              <Button variant="primary" size="md" onClick={() => refetchTrip()}>
+                reintentar
+              </Button>
+            )}
+            <Button asChild variant={tripNotFound ? "primary" : "outline"} size="md">
+              <Link to="/viajes">ver viajes disponibles</Link>
+            </Button>
+          </div>
         </div>
       </div>
     );

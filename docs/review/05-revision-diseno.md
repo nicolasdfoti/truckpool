@@ -139,7 +139,7 @@ Se arregla en `feat/revision-diseno`, un commit por hallazgo, con e2e cuando apl
 - [x] RD7 (mínima) — aviso de que reservaste y scroll a la fila: «listo, reservaste tu lugar. pagá la seña para confirmarlo.» en la fila nueva (resaltada), que se lleva a la vista una sola vez. e2e `reserve-feedback.spec.ts`.
 - [x] RD8 — el login vuelve a donde estabas: `/ingresar?volver=<ruta>` desde el header, el detalle, el retorno del pago, el perfil y publicar; solo rutas internas (`lib/returnTo.ts`). e2e `login-return.spec.ts`.
 - [x] RD9 — `/rastrear` con resultado en mobile: «← volver al inicio» arriba y la fila del buscador se parte; la página queda en 390 px. e2e en `mobile-layout.spec.ts`.
-- [ ] RD10 / QW8 — 404 sin reintentos, copy y link de vuelta, y título de la pestaña.
+- [x] RD10 / QW8 — 404 sin reintentos, copy y link de vuelta, y título de la pestaña. `retryUnlessDenied` es el default de todas las queries (también saca los 8 s de `/solicitudes` sin sesión de RD20). En el detalle, 404 → «este viaje no existe o ya no está publicado» + «ver viajes disponibles»; otro error → «reintentar». La pestaña dice «origen → destino» y el título por ruta matchea `/viajes/:id`. e2e `not-found.spec.ts`.
 - [ ] QW3 — login sin mínimo en «acceder» y con `autocomplete`.
 - [ ] QW7 — error de las verificaciones de admin.
 - [ ] QW10 — anuncios del arrastre en español.
