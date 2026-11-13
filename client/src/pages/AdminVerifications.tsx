@@ -4,8 +4,7 @@ import { Button } from "../components/Button";
 import { useAuth } from "../hooks/useAuth";
 import { usePendingVerifications, useReviewVerification } from "../hooks/useUserProfile";
 
-const inputClass =
-  "mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm placeholder:text-ink-muted focus:border-brand";
+const inputClass = "input mt-1.5";
 
 export default function AdminVerifications() {
   const { user, isLoading: authLoading } = useAuth();
@@ -98,10 +97,7 @@ export default function AdminVerifications() {
               const missingTaxId = !item.taxId?.trim();
               const reasonId = `sin-cuit-${item.id}`;
               return (
-                <li
-                  key={item.id}
-                  className="rounded-[10px] border border-line bg-white p-6"
-                >
+                <li key={item.id} className="rounded-xl border border-line bg-white p-6">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <p className="text-sm font-medium">{item.name}</p>
@@ -163,11 +159,8 @@ export default function AdminVerifications() {
 
                   {rejectedId === item.id && (
                     <div className="mt-4 border-t border-line pt-4">
-                      <label
-                        className="text-[13px] text-ink-soft"
-                        htmlFor={`note-${item.id}`}
-                      >
-                        motivo del rechazo
+                      <label className="field-label" htmlFor={`note-${item.id}`}>
+                        Motivo del rechazo
                       </label>
                       <input
                         id={`note-${item.id}`}

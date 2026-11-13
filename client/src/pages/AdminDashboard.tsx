@@ -140,7 +140,7 @@ export default function AdminDashboard() {
                 return (
                   <div
                     key={card.label}
-                    className="rounded-[10px] border border-line bg-white p-6"
+                    className="rounded-xl border border-line bg-white p-6"
                   >
                     <p className="text-[13px] uppercase tracking-wide text-ink-muted">
                       {card.label}
@@ -167,8 +167,8 @@ export default function AdminDashboard() {
               })}
             </section>
 
-            <section className="mt-8 rounded-[10px] border border-line bg-white p-6">
-              <h2 className="font-display text-[17px] font-medium">viajes por estado</h2>
+            <section className="mt-8 rounded-xl border border-line bg-white p-6">
+              <h2 className="font-display text-xl font-semibold">viajes por estado</h2>
               <dl className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                 {STATUS_LABELS.map(([status, label]) => (
                   <div key={status}>
@@ -183,8 +183,8 @@ export default function AdminDashboard() {
               </dl>
             </section>
 
-            <section className="mt-8 rounded-[10px] border border-line bg-white p-6">
-              <h2 className="font-display text-[17px] font-medium">notas</h2>
+            <section className="mt-8 rounded-xl border border-line bg-white p-6">
+              <h2 className="font-display text-xl font-semibold">notas</h2>
               <ul className="mt-3 grid gap-2">
                 {data.notes.map((note) => (
                   <li key={note} className="text-[13px] text-ink-soft">
