@@ -105,10 +105,10 @@ La regla del gate («revisión de diseño sin P1 ni P2 abiertos») también alca
 | Solicitudes#1 | **P1 → P2** | El server las rechaza desde L5, pero la del 30/9 sigue «pendiente» con «aceptar». | L8 QW18 |
 | Solicitudes#2-3 | P2 | El modal sigue sin `role="dialog"` y Escape no lo cierra; en mobile, encima, RD1 ([captura](./screens-revision/09-solicitud-aceptar-mobile.jpg)). | L10 |
 | Confirmar#3 | P2 | Sin barra de estado; el checklist «antes de salir» queda debajo del botón. | L10 |
-| Admin#1 | P1 | No se reprobó: no había pedidos pendientes y no se simularon. L9 sigue sin tildar. | L9 |
+| Admin#1 | P1 | No se reprobó: no había pedidos pendientes y no se simularon. L9 sigue sin tildar. Después se adelantó y se arregló (§4). | L9 → §4 |
 | Admin#2 | P2 | Con un 500, la página queda en blanco ([captura](./screens-revision/06-estado-admin-verif-error-desktop.jpg)). | L8 QW7 |
 | Admin#3 | P2 | El admin sigue sin entrada en la navegación. | L9 |
-| §3 foco | P2 | Links y header con el outline de 1 px del navegador; los inputs, solo con el cambio de borde. Los botones y los diálogos están bien: foco en «mantener», Tab atrapado, Escape y vuelta del foco. | L8 QW16 |
+| §3 foco | P2 | Links y header con el outline de 1 px del navegador; los inputs, solo con el cambio de borde. Los botones y los diálogos están bien: foco en «mantener», Tab atrapado, Escape y vuelta del foco. Después se adelantó y se arregló (§4). | L8 QW16 → §4 |
 
 **Aceptados para el gate (decisión 2026-11-13)**: los P2 de 03 que dependen de L9 o L10 quedan
 abiertos y no bloquean el gate. Son:
@@ -117,8 +117,8 @@ abiertos y no bloquean el gate. Son:
 - L9: Ingresar#2 y Admin#3.
 
 Los de L8 (QW3, QW7, QW8, QW10, QW13, QW18 y QW5, que es P1) se adelantan y se arreglan antes del
-gate (§4). Quedan por decidir Admin#1 (P1, L9) y el foco de §3 (P2, L8 QW16), que la regla no
-cubre.
+gate (§4). Admin#1 (P1, L9) y el foco de §3 (P2, L8 QW16), que la regla no cubría, también se
+adelantaron (decisión 2026-11-13, §4).
 
 **Lo que L1–L7 dejó resuelto y se verificó acá:** el retorno del pago (los 6 estados, en
 desktop y mobile, nunca usa el `?status`), el diálogo de retiro con desglose por ventana, «¿salís
@@ -145,6 +145,21 @@ Se arregla en `feat/revision-diseno`, un commit por hallazgo, con e2e cuando apl
 - [x] QW10 — anuncios del arrastre en español, con la dirección y la posición en vez del id; las instrucciones del teclado también. e2e `stops-a11y.spec.ts`.
 - [x] QW18 — solicitudes vencidas: chip «vencida» y sin «aceptar» (el server la rechaza desde L5), con la misma regla de fecha en Argentina. «rechazar» queda porque es la forma de sacarla de la lista (así lo dejó L5 en el server). La empresa también la ve «vencida». e2e `trip-requests-expired.spec.ts`.
 
+Después del cierre se sumaron dos más (decisión 2026-11-13), para no dejar nada abierto que la
+regla no cubra:
+- [x] Admin#1 — no se aprueba una verificación sin CUIT. El server responde 409
+  `VERIFICATION_TAX_ID_MISSING` si el pedido no tiene DNI/CUIT (null o en blanco); rechazarlo con
+  nota sigue andando. En `/admin/verificaciones`, «aprobar» queda deshabilitado con el motivo «sin
+  CUIT no se puede aprobar» (descripción accesible del botón). `seed-e2e` suma
+  `e2e-sin-cuit@` (CARRIER, PENDING, sin CUIT). Tests del server en `users.service.test.ts`; e2e
+  `admin-verifications.spec.ts` (el botón y el 409 por API). El resto del ítem de L9 (dígito
+  verificador, confirmación, `requestedAt` real) sigue en L9.
+- [x] QW16 — anillo de foco global: `:focus-visible` en la capa base de `index.css`, 2 px de
+  accent-strong separado 2 px, para links, inputs y botones. Da 3.3:1 o más contra todos los
+  fondos, también el azul del hero y el footer. Los inputs tenían `outline-none`, que tapaba el
+  anillo: se sacó. e2e `focus-visible.spec.ts`: en el login, un link del header, los dos inputs
+  y «entrar»; en «¿salís ahora?» abierto con teclado, sus botones.
+
 La regla del gate queda en `04-launch.md` §3: cero P1, cero P2 nuevos y los P2 de 03 que
 dependen de L9 o L10 aceptados (§3). Los P3 (RD11–RD20) van a L8 o L10.
 
@@ -154,13 +169,18 @@ Los 14 ítems de §4 están hechos, cada uno en su commit y con su e2e. Los e2e 
 `stops-a11y` y `trip-requests-expired`. También se ampliaron `cargo-lifecycle` (RD4, RD5 y
 RD6).
 
-Verificación final:
+Verificación al cerrar los 14:
 - client: e2e 85/85, `lint` y `build` sin errores;
 - server: 1186 tests, `typecheck` y `lint` sin errores (el server no se tocó).
 
-Para el gate quedan abiertos dos ítems que la regla nueva no cubre:
-- **Admin#1 (P1, L9)**: aprobar una verificación sin CUIT. No se volvió a probar.
-- **Foco (P2, L8 QW16)**: links e inputs sin `:focus-visible` propio.
+Quedaban abiertos dos ítems que la regla nueva no cubría: Admin#1 (P1, L9) y el foco (P2, L8
+QW16). Se adelantaron y se arreglaron en dos commits más (§4), cada uno con su e2e
+(`admin-verifications` y `focus-visible`). Admin#1 tiene además tests del server.
 
-Hay que decidir si se adelantan o se aceptan explícitamente.
+Verificación después de los dos commits:
+- client: e2e 89/89, `lint` y `build` sin errores;
+- server: 1190 tests, `typecheck` y `lint` sin errores.
+
+Con eso, la revisión de diseño cumple la regla del gate: cero P1 y cero P2 nuevos, y los P2 de 03
+que dependen de L9 o L10 están aceptados y listados en §3.
 

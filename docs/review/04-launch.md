@@ -228,10 +228,10 @@ Tests: e2e `tests-e2e/payment-return.spec.ts` y `tests-e2e/cargo-lifecycle.spec.
 
 ### L8 — Quick wins · 1ª SEMANA · S
 Los de 03§5 no absorbidos. Validación: `npm run lint && npm run build` + e2e. Conviene meterlo antes del lanzamiento si sobra medio día.
-**Adelantados a la revisión de diseño (decisión 2026-11-13):** QW3, QW5, QW7, QW8, QW10, QW13 y QW18 se hacen antes del gate en `feat/revision-diseno` y se tildan acá al cerrarlos (lista en 05§4). Lo demás de L8 sigue para la 1ª semana.
+**Adelantados a la revisión de diseño (decisión 2026-11-13):** QW3, QW5, QW7, QW8, QW10, QW13, QW16 y QW18 se hacen antes del gate en `feat/revision-diseno` y se tildan acá al cerrarlos (lista en 05§4). Lo demás de L8 sigue para la 1ª semana.
 - [ ] QW2 copy del diagrama · ~~QW3 login (`autocomplete`, sin mínimo en "acceder")~~ (hecho en la revisión de diseño) · ~~QW5 landing sin "MVP… Próximamente: Pagos" y CTA corregidos~~ (hecho en la revisión de diseño, RD2).
 - [ ] ~~QW7 error en admin~~ (hecho en la revisión de diseño) · ~~QW8 404 vs error + título de pestaña~~ (hecho en la revisión de diseño, RD10) · ~~QW10 anuncios de DnD en español~~ (hecho en la revisión de diseño) · QW11 copy de `MP_NOT_CONFIGURED`.
-- [ ] ~~QW13 fila de carga en mobile~~ (hecho en la revisión de diseño, RD3) · QW15 contraste · QW16 `:focus-visible` global · QW17 campanita oculta a anónimos · ~~QW18 solicitudes vencidas (el server ya las rechaza por L5)~~ (hecho en la revisión de diseño).
+- [ ] ~~QW13 fila de carga en mobile~~ (hecho en la revisión de diseño, RD3) · QW15 contraste · ~~QW16 `:focus-visible` global~~ (hecho en la revisión de diseño) · QW17 campanita oculta a anónimos · ~~QW18 solicitudes vencidas (el server ya las rechaza por L5)~~ (hecho en la revisión de diseño).
 - [ ] `NotificationType` del client (`client/src/types/notification.ts`) sin `TRIP_REQUEST` ni `TRIP_REQUEST_RESPONSE`, que el enum del server sí tiene (`server/schema.prisma`). Hoy ningún `switch` ni mapa del client depende del tipo, así que no se ve; agregarlos antes de que alguno lo haga. Detectado al cerrar L4 (2026-11-10), anterior a L4.
 - [ ] P3 de la revisión de diseño que son quick wins (`05-revision-diseno.md` §2): RD11 footer (links a `#` y contraste), RD12 dashboard de admin («monto facturado», labels, nota de desarrollo, error crudo), RD14 avisos (descripción en minúscula, formato de la plata), RD16 «sumar carga» en viajes que no admiten, RD17 errores de pago sin próximo paso, RD18 sugerencia de precio antes de escribir y «48hs», RD20 estados menores (`/solicitudes` sin sesión, 403 de la empresa, marcador sin nombre, «Iniciar Sesión»).
 - [ ] Manifiesto PDF: las columnas «volumen» y «empresa» quedan pegadas («8 m³Comercial Norte», y en el encabezado «VOLUMENEMPRESA»). La columna de volumen va alineada a la derecha y la de empresa arranca justo donde termina, sin separación; falta un margen entre columnas — `lib/manifestPdf.ts` (`columns` de la tabla de cargas). Hallado al revisar el remito por rol de L2. Validación: renderizar el remito del fletero y el de una empresa y mirarlos.
@@ -241,7 +241,7 @@ Archivos: `users.{service,schemas}.ts`, `lib/mercadopago.ts`, `lib/auth.ts`, sch
 Tests: `tests/users.service.test.ts`, `tests/app.test.ts`.
 - [ ] Guardar `refresh_token` cifrado y renovarlo con el scheduler de L4; avisar al fletero si falla — 01§2, 02#17 — `users.service.ts:664,713` — test: token por vencer → refresh.
 - [ ] `state` de OAuth de un solo uso (nonce persistido) — 02#17 — test: reusar `state` → 400.
-- [ ] CUIT con dígito verificador; admin no puede aprobar sin CUIT, confirmación, `requestedAt` real — U18 — test: CUIT inválido → 400.
+- [ ] CUIT con dígito verificador; ~~admin no puede aprobar sin CUIT~~ (hecho en la revisión de diseño, Admin#1: 409 `VERIFICATION_TAX_ID_MISSING` y «aprobar» deshabilitado), confirmación, `requestedAt` real — U18 — test: CUIT inválido → 400.
 - [ ] Rol y estado leídos de la base en `requireAuth` (o revocar tokens al cambiarlos) — 02§2.2 — test: usuario degradado pierde acceso al instante.
 - [ ] Recuperar contraseña por mail (token de un uso, 1 h) — 03/Ingresar#2 — test del flujo completo.
 - [ ] Admin en la navegación y login de ADMIN a `/admin` — 03/Admin#3.
@@ -298,8 +298,8 @@ L10 → L11.
 - **Hecha la revisión (2026-11-13)**: informe en `05-revision-diseno.md`, capturas en
   `screens-revision/`. Lo que se arregla antes del gate (RD1, RD3–RD10 y QW3, QW5, QW7, QW8,
   QW10, QW13, QW18 adelantados de L8) está en la lista de 05§4. **Arreglos terminados
-  (2026-11-13)**: los 14 ítems tildados en 05§4, e2e 85/85; quedan por decidir Admin#1 (P1, L9)
-  y el foco (P2, QW16), ver 05§5.
+  (2026-11-13)**: los 14 ítems tildados en 05§4, más Admin#1 (P1, de L9) y el foco (P2, QW16),
+  adelantados después del cierre. e2e 89/89. La revisión cumple la regla del gate (05§5).
 L11 al final porque mueve archivos que tocan L1–L4. **Gate**: todos los BLOQUEANTE tildados;
 revisión de diseño con cero P1, cero P2 nuevos y los P2 de 03 que
 dependen de L9 o L10 aceptados y listados en 05§3; server `npm test`/`typecheck`/`lint`; client
