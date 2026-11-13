@@ -10,7 +10,7 @@ type Tab = "login" | "register";
 type Role = "COMPANY" | "CARRIER";
 
 const inputClass =
-  "mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm outline-none placeholder:text-ink-muted focus:border-brand";
+  "mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm placeholder:text-ink-muted focus:border-brand";
 
 export default function Login() {
   const navigate = useNavigate();

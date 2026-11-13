@@ -149,7 +149,7 @@ export default function TrackPackage() {
               placeholder="pegá el código que te pasaron"
               inputMode="text"
               autoComplete="off"
-              className="w-full min-w-0 rounded-md border border-line-strong px-3 py-2 text-sm outline-none placeholder:text-ink-muted focus:border-brand font-mono sm:w-auto sm:flex-1"
+              className="w-full min-w-0 rounded-md border border-line-strong px-3 py-2 text-sm placeholder:text-ink-muted focus:border-brand font-mono sm:w-auto sm:flex-1"
               disabled={isFetching}
             />
             <Button type="submit" size="md" disabled={!code.trim() || isFetching}>

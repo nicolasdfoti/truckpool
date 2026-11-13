@@ -15,7 +15,7 @@ import type { TripFeature } from "../types/trip";
 const TRUCK_TYPES = ["Semi", "Chasis", "Tráiler", "Camión"];
 
 const inputClass =
-  "mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm outline-none placeholder:text-ink-muted focus:border-brand";
+  "mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm placeholder:text-ink-muted focus:border-brand";
 
 function parseDecimalInput(raw: string): number {
   return Number(raw.trim().replace(",", "."));

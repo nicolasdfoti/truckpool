@@ -108,7 +108,7 @@ function PickupAddressField({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder="ej: Av. Colón 1234, Córdoba"
-        className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm outline-none placeholder:text-ink-muted focus:border-brand"
+        className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm placeholder:text-ink-muted focus:border-brand"
       />
       {place.resolving && (
         <p className="mt-1 text-xs text-ink-muted">buscando la dirección…</p>
@@ -938,7 +938,7 @@ export default function TripDetail() {
                   maxLength={500}
                   rows={3}
                   placeholder="ej: puntual, avisó cuando hubo demora en la carga"
-                  className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm outline-none placeholder:text-ink-muted focus:border-brand"
+                  className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm placeholder:text-ink-muted focus:border-brand"
                 />
                 <p className="mt-1 text-[13px] text-ink-muted">{comment.length}/500</p>
 
@@ -1055,7 +1055,7 @@ export default function TripDetail() {
                       value={description}
                       onChange={(e) => setDescription(e.target.value)}
                       placeholder="ej: heladera, 6 sillas, 10 cajas"
-                      className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm outline-none placeholder:text-ink-muted focus:border-brand"
+                      className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm placeholder:text-ink-muted focus:border-brand"
                     />
                   </div>
                   <div>
@@ -1068,7 +1068,7 @@ export default function TripDetail() {
                       onChange={(e) => setVolume(e.target.value)}
                       placeholder="ej: 1.5"
                       inputMode="decimal"
-                      className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm outline-none placeholder:text-ink-muted focus:border-brand"
+                      className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm placeholder:text-ink-muted focus:border-brand"
                     />
                   </div>
                   <PickupAddressField

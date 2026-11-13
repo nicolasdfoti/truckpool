@@ -127,7 +127,7 @@ function RespondForm({
             onChange={(e) =>
               setTripDetails({ ...tripDetails, truckType: e.target.value })
             }
-            className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm outline-none placeholder:text-ink-muted focus:border-brand"
+            className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm placeholder:text-ink-muted focus:border-brand"
           >
             {["Semi", "Chasis", "Tráiler", "Camión"].map((type) => (
               <option key={type} value={type}>
@@ -150,7 +150,7 @@ function RespondForm({
               }
               placeholder="ej: 30"
               inputMode="decimal"
-              className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm outline-none placeholder:text-ink-muted focus:border-brand"
+              className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm placeholder:text-ink-muted focus:border-brand"
             />
           </div>
           <div>
@@ -163,7 +163,7 @@ function RespondForm({
               onChange={(e) => setTripDetails({ ...tripDetails, price: e.target.value })}
               placeholder="ej: 1500"
               inputMode="decimal"
-              className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm outline-none placeholder:text-ink-muted focus:border-brand"
+              className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm placeholder:text-ink-muted focus:border-brand"
             />
           </div>
           <div>
@@ -178,7 +178,7 @@ function RespondForm({
               }
               placeholder="20"
               inputMode="numeric"
-              className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm outline-none placeholder:text-ink-muted focus:border-brand"
+              className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm placeholder:text-ink-muted focus:border-brand"
             />
           </div>
           <div>
@@ -193,7 +193,7 @@ function RespondForm({
                 setTripDetails({ ...tripDetails, departureTime: e.target.value })
               }
               required
-              className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm outline-none placeholder:text-ink-muted focus:border-brand"
+              className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm placeholder:text-ink-muted focus:border-brand"
             />
             <p className="mt-1 text-xs text-ink-muted">
               los plazos para retirar una carga se cuentan desde esta hora.
@@ -357,7 +357,7 @@ function CreateTripRequestForm({
           value={formData.origin}
           onChange={(e) => setFormData({ ...formData, origin: e.target.value })}
           placeholder="ej: Córdoba, Argentina"
-          className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm outline-none placeholder:text-ink-muted focus:border-brand"
+          className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm placeholder:text-ink-muted focus:border-brand"
         />
       </div>
 
@@ -370,7 +370,7 @@ function CreateTripRequestForm({
           value={formData.destination}
           onChange={(e) => setFormData({ ...formData, destination: e.target.value })}
           placeholder="ej: Buenos Aires, Argentina"
-          className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm outline-none placeholder:text-ink-muted focus:border-brand"
+          className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm placeholder:text-ink-muted focus:border-brand"
         />
       </div>
 
@@ -385,7 +385,7 @@ function CreateTripRequestForm({
             value={formData.desiredDate}
             onChange={(e) => setFormData({ ...formData, desiredDate: e.target.value })}
             min={new Date().toISOString().split("T")[0]}
-            className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm outline-none placeholder:text-ink-muted focus:border-brand"
+            className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm placeholder:text-ink-muted focus:border-brand"
           />
         </div>
         <div>
@@ -401,7 +401,7 @@ function CreateTripRequestForm({
             onChange={(e) => setFormData({ ...formData, estimatedVolume: e.target.value })}
             placeholder="ej: 25"
             inputMode="decimal"
-            className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm outline-none placeholder:text-ink-muted focus:border-brand"
+            className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm placeholder:text-ink-muted focus:border-brand"
           />
         </div>
       </div>
@@ -416,7 +416,7 @@ function CreateTripRequestForm({
           onChange={(e) => setFormData({ ...formData, note: e.target.value })}
           placeholder="detalles adicionales: tipo de carga, requerimientos especiales, etc."
           rows={3}
-          className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm outline-none placeholder:text-ink-muted focus:border-brand"
+          className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm placeholder:text-ink-muted focus:border-brand"
         />
       </div>
 

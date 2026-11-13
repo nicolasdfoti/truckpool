@@ -21,7 +21,7 @@ import { cancellationNote, cancelledLabel } from "../lib/cancellation";
 import { LoadingBlock, SkeletonBar } from "../components/Loading";
 
 const inputClass =
-  "mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm outline-none placeholder:text-ink-muted focus:border-brand";
+  "mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm placeholder:text-ink-muted focus:border-brand";
 
 /** qué pasó con la conexión, según el motivo que devuelve el callback */
 const MP_ERROR_COPY: Record<string, string> = {

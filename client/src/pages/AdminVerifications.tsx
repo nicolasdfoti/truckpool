@@ -5,7 +5,7 @@ import { useAuth } from "../hooks/useAuth";
 import { usePendingVerifications, useReviewVerification } from "../hooks/useUserProfile";
 
 const inputClass =
-  "mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm outline-none placeholder:text-ink-muted focus:border-brand";
+  "mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm placeholder:text-ink-muted focus:border-brand";
 
 export default function AdminVerifications() {
   const { user, isLoading: authLoading } = useAuth();
