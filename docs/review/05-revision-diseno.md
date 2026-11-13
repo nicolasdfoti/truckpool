@@ -135,7 +135,7 @@ Se arregla en `feat/revision-diseno`, un commit por hallazgo, con e2e cuando apl
 - [ ] RD3 / QW13 — fila de la carga en mobile.
 - [x] RD4 — invalidar paradas y recorrido al salir, cancelar el viaje y confirmar una carga. `hooks/invalidateTripCargo.ts`, usado por las cuatro mutaciones (también refresca la cotización de retiro y «mis cargas»). e2e: «cancelar de verdad» en `cargo-lifecycle.spec.ts`.
 - [x] RD5 — copy de la retención de la seña: «retirada: se retuvieron $ 21,00 de la seña y se devolvieron $ 21,00.», en impersonal porque la nota la leen la empresa y el fletero. e2e: «lo que se retuvo de la seña» en `cargo-lifecycle.spec.ts`.
-- [ ] RD6 — copy del retiro cerrado.
+- [x] RD6 — copy del retiro cerrado según el estado del viaje: con el viaje abierto y la hora pasada, «ya pasó la hora de salida… si el fletero no sale dentro de las 24 h, el viaje se cancela solo y te devolvemos toda la seña que hayas pagado.» (D6); con el viaje en camino, «el viaje ya salió…». e2e en `cargo-lifecycle.spec.ts`.
 - [ ] RD7 (mínima) — aviso de que reservaste y scroll a la fila.
 - [ ] RD8 — el login vuelve a donde estabas.
 - [ ] RD9 — `/rastrear` con resultado en mobile.

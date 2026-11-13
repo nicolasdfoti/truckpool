@@ -64,6 +64,33 @@ test.describe("retiro con diálogo propio (U21)", () => {
     await expect(row).not.toContainText("retirada");
   });
 
+  test("pasada la hora de salida sin salir: explica qué pasa con la seña (RD6)", async ({
+    page,
+  }) => {
+    // el server responde CLOSED desde la hora de salida aunque el viaje siga
+    // abierto; se simula la cotización para no mover la fecha del viaje
+    await page.route("**/cancellation-quote", (route) =>
+      route.fulfill({
+        json: { window: "CLOSED", cancellable: false, refundAmount: 0, feeAmount: 0 },
+      })
+    );
+    await loginAs(page, "company");
+    await page.goto(LIFECYCLE_TRIP);
+
+    await cargoRow(page, confirmed.description)
+      .getByRole("button", { name: "retirar carga" })
+      .click();
+    const dialog = page.getByRole("dialog", {
+      name: "esta carga ya no se puede retirar",
+    });
+    await expect(dialog).toContainText(
+      "ya pasó la hora de salida: la carga no se puede retirar. si el fletero no sale dentro de las 24 h, el viaje se cancela solo y te devolvemos toda la seña que hayas pagado."
+    );
+    await expect(dialog).not.toContainText("ya salió");
+    await dialog.getByRole("button", { name: "entendido" }).click();
+    await expect(dialog).toBeHidden();
+  });
+
   test("el Tab queda atrapado dentro del diálogo", async ({ page }) => {
     await loginAs(page, "company");
     await page.goto(LIFECYCLE_TRIP);

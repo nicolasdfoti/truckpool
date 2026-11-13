@@ -1079,6 +1079,7 @@ export default function TripDetail() {
         {/* el error del retiro se ve dentro del diálogo, no abajo de todo */}
         <WithdrawCargoDialog
           tripId={trip.id}
+          tripStatus={trip.status}
           item={trip.cargoItems.find((c) => c.id === withdrawItemId) ?? null}
           onCancel={() => setWithdrawItemId(null)}
           onConfirm={(cargoItemId) =>
