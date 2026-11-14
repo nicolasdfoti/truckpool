@@ -881,6 +881,20 @@ Playwright levanta el client en `:5174` (o reusa el que ya esté ahí) y antes d
 correr ejecuta `npm run db:seed:e2e` en `server/`. Necesita también el seed
 demo: los specs de admin usan `admin@truckpool.app`, que el seed e2e no crea.
 
+### CI
+
+`.github/workflows/ci.yml` corre en cada push y pull request, con Node 24 y
+caché de npm:
+
+| Job | Qué corre |
+| --- | --- |
+| `server` | `npm ci` · `prisma generate` · `typecheck` · `lint` · `test` |
+| `client` | `npm ci` · `lint` · `build` |
+| `e2e` | Postgres 16 como servicio · `prisma migrate deploy` · seed demo · API con `JOBS_ENABLED=false` · Playwright (Chromium), que corre el seed e2e. Si falla, sube `playwright-report/` y `test-results/` como artifact y muestra el log de la API |
+
+No usa secretos: `DATABASE_URL` y `JWT_SECRET` son valores de prueba escritos en
+el workflow, y no hay credenciales de Mercado Pago ni de Resend.
+
 ---
 
 ## Estructura del repositorio
@@ -924,6 +938,7 @@ truckpool/
 │  ├─ tests/                  Vitest (+ helpers/ y setup.ts)
 │  └─ .env.example
 │
+├─ .github/workflows/ci.yml   CI: server, client y e2e
 ├─ docs/review/               revisiones y plan de lanzamiento
 ├─ docker-compose.yml         PostgreSQL + pgAdmin (solo local)
 ├─ CLAUDE.md
