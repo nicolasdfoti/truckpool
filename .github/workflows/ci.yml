@@ -1,0 +1,159 @@
+# CI (R5 de docs/review/04-launch.md): server, client y e2e en cada push y PR.
+#
+# Sin secretos reales: lo que hace falta para arrancar va acá como valor de
+# prueba. Nada de esto sirve fuera del runner (la base es un servicio efímero
+# del job y no hay credenciales de Mercado Pago, Resend ni Nominatim pago).
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+# un push nuevo a la misma rama cancela la corrida anterior
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "24"
+
+jobs:
+  server:
+    name: server (typecheck, lint, test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: server
+    env:
+      # prisma.config.ts la exige para cargar (también en `prisma generate`).
+      # Los tests mockean Prisma: esta base no existe y nadie se conecta.
+      DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - run: npm ci
+      # Prisma 7 no genera el cliente al instalar: sin esto no hay tipos
+      - run: npx prisma generate
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+
+  client:
+    name: client (lint, build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      # tsc -b + vite build: es también el typecheck del client
+      - run: npm run build
+
+  e2e:
+    name: e2e (Playwright)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: truckpool
+          POSTGRES_DB: truckpool
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d truckpool"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # la API, los seeds y prisma leen esto del entorno (no hay server/.env)
+      NODE_ENV: development
+      DATABASE_URL: postgresql://postgres:truckpool@localhost:5432/truckpool
+      # valor de prueba, solo para firmar los JWT de esta corrida
+      JWT_SECRET: ci-e2e-jwt-secret-solo-para-el-runner-no-es-un-secreto
+      # sin jobs: el e2e trabaja sobre los datos fijos del seed
+      JOBS_ENABLED: "false"
+      PORT: "4000"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            server/package-lock.json
+            client/package-lock.json
+
+      - name: instalar server
+        working-directory: server
+        run: |
+          npm ci
+          npx prisma generate
+      - name: instalar client
+        working-directory: client
+        run: npm ci
+
+      - name: migraciones
+        working-directory: server
+        run: npx prisma migrate deploy
+      # el seed demo crea admin@, que usan los specs de admin y el seed e2e no
+      # crea. El seed e2e lo corre el globalSetup de Playwright antes de los tests.
+      - name: seed demo
+        working-directory: server
+        run: npm run db:seed:demo
+
+      - name: levantar la API
+        working-directory: server
+        run: |
+          nohup npx tsx src/index.ts > "$RUNNER_TEMP/api.log" 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:4000/api/health > /dev/null; then
+              echo "API arriba"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "la API no respondió en 60 s"
+          cat "$RUNNER_TEMP/api.log"
+          exit 1
+
+      - name: instalar Chromium
+        working-directory: client
+        run: npx playwright install --with-deps chromium
+
+      # el client lo levanta Playwright en :5174 (webServer de playwright.config.ts)
+      - name: Playwright
+        working-directory: client
+        run: npx playwright test --reporter=list,html
+
+      - name: log de la API
+        if: failure()
+        run: cat "$RUNNER_TEMP/api.log" || true
+      - name: subir el reporte de Playwright
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report
+          path: |
+            client/playwright-report/
+            client/test-results/
+          retention-days: 14
+          if-no-files-found: ignore

@@ -2,9 +2,10 @@ import { defineConfig, devices } from "@playwright/test";
 
 /**
  * e2e contra la app de verdad (R1). La API no la levanta Playwright: tiene que
- * estar corriendo en :4000 (`npm run dev` en server/, con JOBS_ENABLED="false")
- * y con http://localhost:5174 en CORS_ORIGIN. El client sí: se levanta en 5174
- * o se reusa el que ya esté corriendo ahí.
+ * estar corriendo en :4000 (`npm run dev` en server/, con JOBS_ENABLED="false").
+ * CORS no necesita nada: fuera de producción la API acepta cualquier
+ * http://localhost:<puerto>. El client sí lo levanta Playwright: en 5174, o
+ * reusa el que ya esté corriendo ahí.
  */
 export default defineConfig({
   testDir: "./tests-e2e",

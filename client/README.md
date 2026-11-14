@@ -9,13 +9,16 @@ Detalles del proyecto completo (server, setup de BD, pasos de uso) en el
 
 ## Scripts
 
-- `npm run dev` — servidor de desarrollo (Vite elige el puerto libre)
-- `npm run build` — `tsc -b` + build de producción
+- `npm run dev` — servidor de desarrollo (5173 por defecto)
+- `npm run build` — `tsc -b` + build de producción (es también el typecheck)
 - `npm run preview` — previsualiza el build
 - `npm run lint` — ESLint
+- `npx playwright test` — e2e de `tests-e2e/` contra la app de verdad
 
-No hay suite de tests automatizados en el client: la verificación es
-`npm run typecheck` (`npx tsc --noEmit`), `npm run lint` y `npm run build`.
+No hay tests unitarios en el client: la verificación es `npm run lint` y
+`npm run build`. Los e2e necesitan la API corriendo en :4000 con
+`JOBS_ENABLED=false` y los seeds demo y e2e; Playwright levanta el client en
+:5174. Ver la sección Tests del [README de la raíz](../README.md#tests).
 
 ## API
 
@@ -36,6 +39,9 @@ server acepta cualquier `http://localhost:<puerto>`.
 | `/viajes/nuevo`         | Publicar viaje (mapa con pines arrastrables) |
 | `/viajes/:id`           | Detalle del viaje                        |
 | `/viajes/:id/trackear`  | Tracking GPS (solo transportista)        |
+| `/rastrear`             | Seguimiento público por código           |
+| `/solicitudes`          | Solicitudes de viaje                     |
+| `/nosotros`             | Sobre TruckPool                          |
 | `/perfil`               | Perfil, viajes y cargas                  |
 | `/fleteros` · `/fleteros/:id` | Transportistas                      |
 | `/pagos/retorno`        | Retorno de Mercado Pago                  |
