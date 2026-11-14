@@ -9,6 +9,9 @@
 //   OUT       carpeta de salida, relativa a donde se corre (obligatoria)
 //   API_URL   la API (default http://localhost:4000/api)
 //   SOLO      pantallas separadas por coma (default: todas)
+//   COMPLETA  con «1», también la página completa (`{id}-{vp}.jpg`); por
+//             defecto solo la primera pantalla (`{id}-{vp}-pantalla.jpg`), que
+//             es lo que queda en el repo
 //   CAPTURAS_PASSWORD  contraseña de los usuarios del seed (default: la del seed
 //             demo/e2e, que es pública y sólo existe fuera de producción)
 //
@@ -23,6 +26,7 @@ const { chromium } = require("playwright");
 const base = process.env.BASE_URL;
 const out = process.env.OUT;
 const only = process.env.SOLO;
+const full = process.env.COMPLETA === "1";
 if (!base || !out) {
   console.error("uso: BASE_URL=http://localhost:5175 OUT=despues node capturas.mjs");
   process.exit(1);
@@ -152,25 +156,28 @@ for (const vp of VIEWPORTS) {
     await page.goto(base + s.path, { waitUntil: "networkidle" });
     await page.evaluate(() => document.fonts.ready);
     await page.waitForTimeout(600);
-    // las barras fijas (header sticky, próxima acción) no se repiten en la captura larga
+    // en JPEG: en PNG las capturas de la comparación pesaban 41 MB
     await page.screenshot({
       path: `${out}/${s.id}-${vp.name}-pantalla.jpg`,
       type: "jpeg",
       quality: 82,
     });
-    await page.addStyleTag({
-      content:
-        "header{position:relative!important} [data-fija]{position:static!important}",
-    });
-    // en JPEG: en PNG las 168 capturas de la comparación pesaban 41 MB
-    await page.screenshot({
-      path: `${out}/${s.id}-${vp.name}.jpg`,
-      fullPage: true,
-      // la larga a 1x: a 2x las de mobile solas pesaban 14 MB
-      scale: "css",
-      type: "jpeg",
-      quality: 78,
-    });
+    if (full) {
+      // las barras fijas (header sticky, próxima acción) no se repiten en la
+      // captura larga
+      await page.addStyleTag({
+        content:
+          "header{position:relative!important} [data-fija]{position:static!important}",
+      });
+      await page.screenshot({
+        path: `${out}/${s.id}-${vp.name}.jpg`,
+        fullPage: true,
+        // a 1x: a 2x las de mobile solas pesaban 14 MB
+        scale: "css",
+        type: "jpeg",
+        quality: 78,
+      });
+    }
     await ctx.close();
     console.log("ok", vp.name, s.id);
   }

@@ -6,8 +6,8 @@ a la vez desde un `git worktree` (main en :5174, la rama en :5175) contra la mis
 [`capturas.mjs`](./capturas.mjs).
 
 - Desktop 1440 × 900 y mobile 390 × 844 (dpr 2), `es-AR`, hora de Buenos Aires, movimiento reducido.
-- Cada tabla muestra la primera pantalla, lo que se ve al abrir. `capturas.mjs` también saca la
-  página completa, que no se guarda en el repo por el peso.
+- Cada tabla muestra la primera pantalla, lo que se ve al abrir. Para no cargar el repo, la página
+  completa no se guarda: `COMPLETA=1` en `capturas.mjs` la genera.
 - **Datos simulados:** en dev el listado público está vacío, porque los fleteros del seed no tienen
   Mercado Pago conectado. Dos capturas (`inicio-con-viajes` y `viajes-con-viajes`) responden
   `GET /trips` con 4 viajes de ejemplo de «Transportes de ejemplo». La respuesta es la misma para
@@ -281,7 +281,8 @@ Sólo cambia el barrido: radios, bordes y escala de títulos.
 
 ## Panel admin
 
-Sólo cambia el barrido.
+El barrido, y en el header el link «Admin» con las verificaciones pendientes (`3924dc8`, adelantado de
+L9): el admin entra directo acá después de ingresar.
 
 | Antes (`main`) | Después (rama) |
 |---|---|
@@ -295,7 +296,8 @@ Sólo cambia el barrido.
 
 ## Verificaciones de identidad (admin)
 
-Sólo cambia el barrido. «Aprobar» sigue deshabilitado sin CUIT.
+El barrido y el link «Admin» del header, con el número de pendientes. «Aprobar» sigue deshabilitado
+sin CUIT.
 
 | Antes (`main`) | Después (rama) |
 |---|---|
