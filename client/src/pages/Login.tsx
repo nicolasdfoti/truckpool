@@ -5,11 +5,20 @@ import { Button } from "../components/Button";
 import { Logo } from "../components/Logo";
 import { api, setToken } from "../api/client";
 import { safeReturnTo } from "../lib/returnTo";
+import type { UserRole } from "../types/user";
 
 type Tab = "login" | "register";
+/** el rol que se elige al crear la cuenta (un admin no se registra acá) */
 type Role = "COMPANY" | "CARRIER";
 
 const inputClass = "input mt-1.5";
+
+/** a dónde va cada rol después de ingresar, si no hay un «volver» válido */
+function homeFor(role: UserRole): string {
+  if (role === "ADMIN") return "/admin";
+  if (role === "CARRIER") return "/viajes/nuevo";
+  return "/viajes";
+}
 
 export default function Login() {
   const navigate = useNavigate();
@@ -57,7 +66,7 @@ export default function Login() {
 
     setPending(true);
     api
-      .post<{ token: string; user: { role: Role } }>(
+      .post<{ token: string; user: { role: UserRole } }>(
         isRegister ? "/auth/register" : "/auth/login",
         isRegister
           ? { name: name.trim(), email: email.trim(), password, role }
@@ -67,11 +76,10 @@ export default function Login() {
         setToken(result.token);
         queryClient.invalidateQueries({ queryKey: ["me"] });
         // RD8: vuelve a la página desde la que se vino; si no hay, según el rol
-        navigate(
-          safeReturnTo(params.get("volver")) ??
-            (result.user.role === "CARRIER" ? "/viajes/nuevo" : "/viajes"),
-          { replace: true }
-        );
+        // (03/Admin#3: el admin entra a su panel)
+        navigate(safeReturnTo(params.get("volver")) ?? homeFor(result.user.role), {
+          replace: true,
+        });
       })
       .catch((err: unknown) => {
         setError(err instanceof Error ? err.message : "algo salió mal, probá de nuevo.");

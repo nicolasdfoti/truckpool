@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, type ReactNode } from "react";
 import { Link, NavLink as RouterNavLink, useNavigate } from "react-router-dom";
 import { Button } from "./Button";
 import { Logo } from "./Logo";
@@ -6,6 +6,7 @@ import { Menu, X } from "./icons";
 import { NotificationBell } from "./NotificationBell";
 import { UserMenu } from "./UserMenu";
 import { useAuth } from "../hooks/useAuth";
+import { usePendingVerifications } from "../hooks/useUserProfile";
 import { useLoginHref } from "../hooks/useLoginHref";
 import { SkeletonBar } from "./Loading";
 
@@ -18,7 +19,7 @@ const NAV_LINKS = [
 ];
 
 // la página actual va subrayada en navy, pegada al borde del header
-function NavLink({ label, to }: { label: string; to: string }) {
+function NavLink({ label, to, badge }: { label: string; to: string; badge?: ReactNode }) {
   return (
     <RouterNavLink
       to={to}
@@ -32,7 +33,25 @@ function NavLink({ label, to }: { label: string; to: string }) {
       }
     >
       {label}
+      {badge}
     </RouterNavLink>
+  );
+}
+
+/**
+ * 03/Admin#3: el contador de verificaciones pendientes junto a «Admin». Sale de
+ * la misma consulta que la página de verificaciones, así que se actualiza
+ * cuando el admin aprueba o rechaza. Sin pendientes (o mientras carga), nada.
+ */
+function PendingBadge({ count }: { count: number }) {
+  if (count <= 0) return null;
+  return (
+    <span className="ml-1.5 inline-flex min-w-5 items-center justify-center rounded-full bg-brand px-1.5 text-xs leading-5 font-semibold text-white">
+      {count}
+      <span className="sr-only">
+        {count === 1 ? " verificación pendiente" : " verificaciones pendientes"}
+      </span>
+    </span>
   );
 }
 
@@ -47,6 +66,9 @@ export function Header() {
   const { user, isLoading, logout } = useAuth();
   // RD8: ingresar desde cualquier página vuelve a esa página
   const loginLink = useLoginHref();
+  const isAdmin = user?.role === "ADMIN";
+  const pending = usePendingVerifications(isAdmin);
+  const adminBadge = <PendingBadge count={pending.data?.length ?? 0} />;
 
   // Detectar scroll para sombra
   useEffect(() => {
@@ -121,6 +143,7 @@ export function Header() {
             {NAV_LINKS.map((link) => (
               <NavLink key={link.label} label={link.label} to={link.to} />
             ))}
+            {isAdmin && <NavLink label="Admin" to="/admin" badge={adminBadge} />}
           </nav>
 
           {/* Acciones a la derecha */}
@@ -209,6 +232,16 @@ export function Header() {
                 {link.label}
               </Link>
             ))}
+            {isAdmin && (
+              <Link
+                to="/admin"
+                onClick={() => setMobileOpen(false)}
+                className="flex items-center rounded-lg px-3 py-3 text-base font-medium text-ink transition-colors hover:bg-canvas"
+              >
+                Admin
+                {adminBadge}
+              </Link>
+            )}
           </nav>
 
           <div className="mt-4 flex flex-col gap-2 border-t border-line pt-4">
@@ -255,27 +288,17 @@ export function Header() {
                 >
                   <Link to="/solicitudes">Solicitudes</Link>
                 </Button>
+                {/* «Admin» (el panel) va arriba, en la nav */}
                 {user.role === "ADMIN" && (
-                  <>
-                    <Button
-                      asChild
-                      variant="outline"
-                      size="md"
-                      className="w-full"
-                      onClick={() => setMobileOpen(false)}
-                    >
-                      <Link to="/admin">Dashboard</Link>
-                    </Button>
-                    <Button
-                      asChild
-                      variant="outline"
-                      size="md"
-                      className="w-full"
-                      onClick={() => setMobileOpen(false)}
-                    >
-                      <Link to="/admin/verificaciones">Verificaciones</Link>
-                    </Button>
-                  </>
+                  <Button
+                    asChild
+                    variant="outline"
+                    size="md"
+                    className="w-full"
+                    onClick={() => setMobileOpen(false)}
+                  >
+                    <Link to="/admin/verificaciones">Verificaciones</Link>
+                  </Button>
                 )}
                 <div className="pt-2 border-t border-line">
                   <Button
