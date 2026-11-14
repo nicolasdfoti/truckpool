@@ -20,8 +20,7 @@ import type { MyCargoItem, VerificationStatus } from "../types/user";
 import { cancellationNote, cancelledLabel } from "../lib/cancellation";
 import { LoadingBlock, SkeletonBar } from "../components/Loading";
 
-const inputClass =
-  "mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm placeholder:text-ink-muted focus:border-brand";
+const inputClass = "input mt-1.5";
 
 /** qué pasó con la conexión, según el motivo que devuelve el callback */
 const MP_ERROR_COPY: Record<string, string> = {
@@ -177,18 +176,20 @@ export default function Profile() {
 
   return (
     <div className="bg-canvas font-sans text-ink">
-      <main className="mx-auto max-w-2xl px-4 py-12 sm:px-6">
-        <h1 className="font-display text-3xl font-semibold">Tu perfil</h1>
-        <p className="mt-1 text-sm text-ink-soft">
+      <main className="mx-auto max-w-2xl px-4 py-10 sm:px-6 sm:py-12">
+        <h1 className="font-display text-[clamp(28px,3.4vw,36px)] leading-tight font-semibold">
+          Tu perfil
+        </h1>
+        <p className="mt-2 text-[17px] text-ink-soft">
           {user?.role === "COMPANY"
-            ? "cargá tus datos de contacto para que los fleteros sepan con quién hablan."
-            : "cargá tu bio y un teléfono así las empresas saben con quién hablan."}
+            ? "Cargá tus datos de contacto para que los fleteros sepan con quién hablan."
+            : "Cargá tu bio y un teléfono así las empresas saben con quién hablan."}
         </p>
 
         {mpResult === "connected" && (
           <div
             role="status"
-            className="mt-6 flex items-start justify-between gap-4 rounded-[10px] border border-line bg-success-soft px-4 py-3"
+            className="mt-6 flex items-start justify-between gap-4 rounded-xl border border-line bg-success-soft px-4 py-3"
           >
             <p className="text-sm text-success-deep">
               tu cuenta de Mercado Pago quedó conectada. ya podés recibir pagos.
@@ -206,7 +207,7 @@ export default function Profile() {
         {mpResult === "error" && (
           <div
             role="alert"
-            className="mt-6 flex items-start justify-between gap-4 rounded-[10px] border border-line bg-danger/10 px-4 py-3"
+            className="mt-6 flex items-start justify-between gap-4 rounded-xl border border-line bg-danger/10 px-4 py-3"
           >
             <p className="text-sm text-danger">
               {MP_ERROR_COPY[mpReason ?? ""] ??
@@ -230,7 +231,7 @@ export default function Profile() {
         )}
 
         {!authLoading && !user && (
-          <div className="mt-8 rounded-[10px] border border-line bg-white p-6">
+          <div className="mt-8 rounded-xl border border-line bg-white p-6">
             <p className="text-sm text-ink-muted">
               para ver tu perfil necesitás una cuenta:{" "}
               <Link
@@ -259,11 +260,11 @@ export default function Profile() {
           <>
             <form
               onSubmit={handleSubmit}
-              className="mt-8 rounded-[10px] border border-line bg-white p-6"
+              className="mt-8 rounded-xl border border-line bg-white p-6"
             >
               <div>
-                <label className="text-[13px] text-ink-soft" htmlFor="name">
-                  nombre
+                <label className="field-label" htmlFor="name">
+                  Nombre
                 </label>
                 <input
                   id="name"
@@ -274,8 +275,8 @@ export default function Profile() {
               </div>
 
               <div className="mt-4">
-                <label className="text-[13px] text-ink-soft" htmlFor="bio">
-                  bio
+                <label className="field-label" htmlFor="bio">
+                  Bio
                 </label>
                 <textarea
                   id="bio"
@@ -292,8 +293,8 @@ export default function Profile() {
               </div>
 
               <div className="mt-4">
-                <label className="text-[13px] text-ink-soft" htmlFor="phone">
-                  teléfono
+                <label className="field-label" htmlFor="phone">
+                  Teléfono
                 </label>
                 <input
                   id="phone"
@@ -360,18 +361,19 @@ export default function Profile() {
 
               <Button
                 type="submit"
+                variant="dark"
                 className="mt-6 w-full"
                 disabled={updateProfile.isPending}
               >
-                {updateProfile.isPending ? "guardando…" : "guardar perfil"}
+                {updateProfile.isPending ? "guardando…" : "Guardar perfil"}
               </Button>
             </form>
 
             {user.role === "CARRIER" && profile && (
               <section className="mt-10">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <h2 className="font-display text-[17px] font-medium">
-                    verificación de identidad
+                  <h2 className="font-display text-xl font-semibold">
+                    Verificación de identidad
                   </h2>
                   <span
                     className={`rounded-full px-3 py-1 text-xs font-medium ${VERIFICATION_COPY[profile.verificationStatus].className}`}
@@ -380,7 +382,7 @@ export default function Profile() {
                   </span>
                 </div>
 
-                <div className="mt-3 rounded-[10px] border border-line bg-white p-6">
+                <div className="mt-3 rounded-xl border border-line bg-white p-6">
                   <p className="text-sm text-ink-muted">
                     {VERIFICATION_COPY[profile.verificationStatus].hint}
                   </p>
@@ -395,8 +397,8 @@ export default function Profile() {
                   {profile.verificationStatus !== "VERIFIED" &&
                     profile.verificationStatus !== "PENDING" && (
                       <form onSubmit={handleVerificationSubmit} className="mt-4">
-                        <label className="text-[13px] text-ink-soft" htmlFor="taxId">
-                          dni o cuit
+                        <label className="field-label" htmlFor="taxId">
+                          Dni o cuit
                         </label>
                         <input
                           id="taxId"
@@ -432,8 +434,8 @@ export default function Profile() {
             {user.role === "CARRIER" && profile && (
               <section className="mt-10">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <h2 className="font-display text-[17px] font-medium">
-                    cuenta de cobro (Mercado Pago)
+                  <h2 className="font-display text-xl font-semibold">
+                    Cuenta de cobro (Mercado Pago)
                   </h2>
                   {profile.mpConnected ? (
                     <span className="inline-flex items-center rounded-full bg-success-soft text-success-deep px-3 py-1 text-xs font-medium">
@@ -445,7 +447,7 @@ export default function Profile() {
                     </span>
                   )}
                 </div>
-                <div className="mt-3 rounded-[10px] border border-line bg-white p-6">
+                <div className="mt-3 rounded-xl border border-line bg-white p-6">
                   {profile.mpConnected ? (
                     <p className="text-sm text-ink-muted">
                       tu cuenta de Mercado Pago está conectada. Los pagos se dividen
@@ -483,7 +485,7 @@ export default function Profile() {
 
             {user.role === "CARRIER" && (
               <section className="mt-10">
-                <h2 className="font-display text-[17px] font-medium">mis viajes</h2>
+                <h2 className="font-display text-xl font-semibold">Mis viajes</h2>
                 {myTrips.isLoading && (
                   <p className="mt-2 text-sm text-ink-muted">cargando tus viajes…</p>
                 )}
@@ -504,7 +506,7 @@ export default function Profile() {
                             fuera porque un link no puede contener otro link. */}
                         <Link
                           to={`/viajes/${trip.id}`}
-                          className="block rounded-[10px] hover:text-brand focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-strong"
+                          className="block rounded-xl hover:text-brand focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-strong"
                         >
                           <TripCard
                             trip={trip}
@@ -522,7 +524,7 @@ export default function Profile() {
 
             {user.role === "COMPANY" && (
               <section className="mt-10">
-                <h2 className="font-display text-[17px] font-medium">mis cargas</h2>
+                <h2 className="font-display text-xl font-semibold">Mis cargas</h2>
                 {myCargoItems.isLoading && (
                   <p className="mt-2 text-sm text-ink-muted">cargando tus cargas…</p>
                 )}
@@ -540,7 +542,7 @@ export default function Profile() {
                       <li key={item.id}>
                         <Link
                           to={`/viajes/${item.tripId}`}
-                          className="flex items-center justify-between gap-4 rounded-[10px] border border-line bg-white p-4 hover:text-brand focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-strong"
+                          className="flex items-center justify-between gap-4 rounded-xl border border-line bg-white p-4 hover:text-brand focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-strong"
                         >
                           <div className="flex items-center gap-3">
                             <Truck className="h-5 w-5 text-ink-muted" aria-hidden />

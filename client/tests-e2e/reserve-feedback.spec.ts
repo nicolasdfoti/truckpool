@@ -48,7 +48,7 @@ test("al reservar: aviso en la fila nueva y la fila a la vista", async ({ page }
   await expect(row.getByRole("status")).toHaveText(
     "listo, reservaste tu lugar. pagá la seña para confirmarlo."
   );
-  await expect(row.getByRole("button", { name: /^pagar seña/ })).toBeInViewport();
+  await expect(row.getByRole("button", { name: /^pagar seña/i })).toBeInViewport();
   // el formulario quedó vacío para otra carga
   await expect(page.getByLabel("qué mandás")).toHaveValue("");
 });

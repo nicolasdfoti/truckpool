@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="es-AR">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>TruckPool — Hero 1: buscador con pestañas</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="../a-plano/estilos.css" />
+<link rel="stylesheet" href="landing.css" />
+<style>
+  .h1-hero { background: var(--paper); }
+  .h1-grid { display: grid; grid-template-columns: 6fr 6fr; gap: var(--s7); align-items: center; padding-top: var(--s7); padding-bottom: var(--s7); }
+  .h1-hero h1 { font-size: clamp(34px, 4.4vw, 52px); }
+  .h1-hero .lead { font-size: 18px; color: var(--ink-soft); margin-top: var(--s4); max-width: 44ch; }
+  .tabcard { margin-top: var(--s6); border: 1px solid var(--rule); border-radius: 12px; background: var(--paper); box-shadow: 0 16px 40px -28px rgba(11, 61, 92, 0.55); }
+  .tabs { display: grid; grid-template-columns: 1fr 1fr; border-bottom: 1px solid var(--rule); }
+  .tabs button { font: 500 15px var(--body); min-height: 52px; padding: 0 var(--s3); background: #f6f9fb; border: 0; color: var(--ink-soft); cursor: pointer; border-radius: 12px 12px 0 0; }
+  .tabs button[aria-selected="true"] { background: var(--paper); color: var(--navy); font-weight: 600; box-shadow: inset 0 -3px var(--navy); }
+  .tabpanel { padding: var(--s5); }
+  .tabpanel[hidden] { display: none; }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s3); }
+  .row3 { display: grid; grid-template-columns: 1fr auto; gap: var(--s3); align-items: end; }
+  .row3 .field { min-width: 0; }
+  .hint { font-size: 14px; color: var(--ink-soft); margin-top: var(--s3); }
+  .tabpanel p.say { color: var(--ink-soft); margin-bottom: var(--s4); }
+  .illo { position: relative; }
+  .illo > svg { display: block; width: 100%; height: auto; }
+  .float .v svg { flex: none; }
+  .float { position: absolute; right: -8px; top: 26px; width: 250px; background: var(--paper); border: 1px solid var(--rule); border-radius: 12px; padding: var(--s4); box-shadow: 0 18px 40px -24px rgba(11, 61, 92, 0.6); }
+  .float .r { font: 600 18px var(--display); }
+  .float .d { font-size: 14px; color: var(--ink-soft); }
+  .float .n { display: flex; justify-content: space-between; align-items: baseline; margin-top: var(--s3); }
+  .float .n b { font: 600 20px var(--display); color: var(--navy); }
+  .float .v { display: flex; gap: 6px; align-items: center; margin-top: var(--s3); padding-top: var(--s3); border-top: 1px solid var(--rule); font-size: 13px; color: var(--success); font-weight: 500; }
+  .g-band { border-top: 1px solid var(--rule); background: var(--paper); }
+  @media (max-width: 960px) {
+    .h1-grid { grid-template-columns: 1fr; gap: var(--s6); padding-top: var(--s6); padding-bottom: var(--s6); }
+    .float { right: 12px; top: 12px; }
+  }
+  @media (max-width: 560px) {
+    .row2, .row3 { grid-template-columns: 1fr; }
+    .tabpanel { padding: var(--s4); }
+    .tabs button { font-size: 14px; }
+    .float { position: static; width: auto; margin-top: var(--s3); box-shadow: none; }
+  }
+</style>
+
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <a class="logo" href="#"><svg width="28" height="20" viewBox="0 0 28 20" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="2" width="16" height="12" rx="1"/><path d="M17 6h5l4 4v4h-9"/><circle cx="6" cy="16" r="2.5" fill="#fff"/><circle cx="21" cy="16" r="2.5" fill="#fff"/></svg>TruckPool</a>
+    <nav class="nav" aria-label="principal"><a href="#">Viajes</a><a href="#">Fleteros</a><a href="#">Rastrear un envío</a><a href="#">Nosotros</a></nav>
+    <div class="top-actions">
+      <a class="btn btn-quiet hide-sm" href="#">Ingresar</a>
+      <a class="btn btn-solid hide-sm" href="#">Crear cuenta</a>
+      <button class="menu-btn" aria-label="abrir menú"><svg width="20" height="20" viewBox="0 0 20 20" stroke="currentColor" stroke-width="2"><path d="M3 5h14M3 10h14M3 15h14"/></svg></button>
+    </div>
+  </div>
+</header>
+<main>
+  <section class="h1-hero">
+    <div class="wrap h1-grid">
+      <div>
+        <h1>Mandá tu carga en camiones que ya viajan.</h1>
+        <p class="lead">Reservás los m³ que necesitás a precio fijo, con fleteros verificados y pago por Mercado Pago.</p>
+
+        <div class="tabcard">
+          <div class="tabs" role="tablist" aria-label="qué querés hacer">
+            <button role="tab" id="t1" aria-selected="true" aria-controls="p1">Busco lugar para mi carga</button>
+            <button role="tab" id="t2" aria-selected="false" aria-controls="p2" tabindex="-1">Tengo un camión con lugar</button>
+          </div>
+          <form class="tabpanel search" role="tabpanel" id="p1" aria-labelledby="t1" onsubmit="return false">
+            <div class="row2">
+              <label class="field"><span>Origen</span><input placeholder="Ej.: Córdoba" autocomplete="off" /></label>
+              <label class="field"><span>Destino</span><input placeholder="Ej.: Mendoza" autocomplete="off" /></label>
+            </div>
+            <div class="row3">
+              <label class="field"><span>Desde el</span><input type="date" value="2026-11-16" /></label>
+              <button class="btn btn-next btn-lg">Buscar viajes</button>
+            </div>
+            <p class="hint">O mirá <a href="#">todos los viajes publicados</a>.</p>
+          </form>
+          <div class="tabpanel" role="tabpanel" id="p2" aria-labelledby="t2" hidden>
+            <p class="say">Publicá el viaje con el espacio que te sobra. Las empresas reservan por m³ y cobrás en tu cuenta de Mercado Pago.</p>
+            <a class="btn btn-next btn-lg" href="#">Publicar mi viaje</a>
+            <p class="hint">Para publicar necesitás tu DNI o CUIT verificado y tu cuenta de Mercado Pago conectada.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="illo">
+        <svg viewBox="0 0 600 470" role="img" aria-label="ilustración: un semi en ruta de Córdoba a Mendoza, con parte de la caja ocupada y 16 m³ libres">
+          <defs>
+            <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse"><path d="M24 0H0V24" fill="none" stroke="#dfe7ee" stroke-width="1"/></pattern>
+            <pattern id="hatch" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="7" height="7" fill="#d6e3ec"/><line x1="0" y1="0" x2="0" y2="7" stroke="#0b3d5c" stroke-width="2"/></pattern>
+            <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#0b3d5c"/></marker>
+          </defs>
+          <rect x="0" y="0" width="600" height="470" rx="16" fill="#eef3f7"/>
+          <rect x="0" y="0" width="600" height="470" rx="16" fill="url(#grid)"/>
+          <!-- recorrido -->
+          <path d="M70 176 C 120 110, 190 90, 250 120" fill="none" stroke="#0b3d5c" stroke-width="2.5" stroke-dasharray="8 8"/>
+          <g fill="#0b3d5c"><path d="M70 152a14 14 0 0 1 14 14c0 11-14 24-14 24s-14-13-14-24a14 14 0 0 1 14-14z"/><path d="M250 96a14 14 0 0 1 14 14c0 11-14 24-14 24s-14-13-14-24a14 14 0 0 1 14-14z"/></g>
+          <g fill="#fff"><circle cx="70" cy="166" r="5"/><circle cx="250" cy="110" r="5"/></g>
+          <text x="70" y="216" text-anchor="middle" font-family="Inter" font-weight="500" font-size="17" fill="#15222e">Mendoza</text>
+          <text x="250" y="160" text-anchor="middle" font-family="Inter" font-weight="500" font-size="17" fill="#15222e">Córdoba</text>
+          <!-- camión -->
+          <rect x="40" y="262" width="380" height="110" fill="#fff" stroke="#0b3d5c" stroke-width="2.5"/>
+          <rect x="41.5" y="263.5" width="49" height="107" fill="#0b3d5c"/>
+          <rect x="93" y="263.5" width="124" height="107" fill="url(#hatch)"/>
+          <line x1="226" y1="317" x2="412" y2="317" stroke="#0b3d5c" stroke-width="1.5" marker-start="url(#arr)" marker-end="url(#arr)"/>
+          <rect x="246" y="300" width="146" height="34" fill="#fff"/>
+          <text x="319" y="325" text-anchor="middle" font-family="Space Grotesk" font-weight="600" font-size="24" fill="#0b3d5c">16 m³ libres</text>
+          <rect x="40" y="372" width="380" height="9" fill="#0b3d5c"/>
+          <path d="M432 300H490L526 336V381H432Z" fill="#fff" stroke="#0b3d5c" stroke-width="2.5"/>
+          <path d="M474 310H487L514 336H474Z" fill="#d6e3ec"/>
+          <rect x="426" y="372" width="104" height="9" fill="#0b3d5c"/>
+          <g fill="#0b3d5c"><circle cx="300" cy="396" r="14"/><circle cx="334" cy="396" r="14"/><circle cx="368" cy="396" r="14"/><circle cx="460" cy="396" r="14"/><circle cx="506" cy="396" r="14"/></g>
+          <g fill="#fff"><circle cx="300" cy="396" r="5"/><circle cx="334" cy="396" r="5"/><circle cx="368" cy="396" r="5"/><circle cx="460" cy="396" r="5"/><circle cx="506" cy="396" r="5"/></g>
+          <line x1="20" y1="412" x2="580" y2="412" stroke="#9fb3c3" stroke-width="2"/>
+          <g stroke="#9fb3c3" stroke-width="2"><line x1="40" y1="432" x2="80" y2="432"/><line x1="120" y1="432" x2="160" y2="432"/><line x1="200" y1="432" x2="240" y2="432"/><line x1="280" y1="432" x2="320" y2="432"/><line x1="360" y1="432" x2="400" y2="432"/><line x1="440" y1="432" x2="480" y2="432"/><line x1="520" y1="432" x2="560" y2="432"/></g>
+        </svg>
+        <a class="float" href="#" style="text-decoration:none;color:inherit" aria-label="viaje de Córdoba a Mendoza, 16 m³ libres">
+          <div class="r">Córdoba → Mendoza</div>
+          <div class="d">dom 22 nov, sale 08:00</div>
+          <div class="n"><b>16 m³ libres</b><span>$ 100 por m³</span></div>
+          <div class="v"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z"/><path d="M9 12l2 2 4-4"/></svg>Transportes Flete, verificado</div>
+        </a>
+      </div>
+    </div>
+    <div class="g-band"><div class="wrap"><ul class="guarantees" aria-label="garantías">
+  <li><span class="ico"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M3 10h18M7 15h4"/></svg></span><div><strong>Pagás con Mercado Pago</strong><p>La seña y el saldo se pagan por Mercado Pago.</p></div></li>
+  <li><span class="ico"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z"/><path d="M9 12l2 2 4-4"/></svg></span><div><strong>Fleteros verificados</strong><p>Antes de publicar, revisamos el DNI o CUIT de cada fletero.</p></div></li>
+  <li><span class="ico"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 1 0 2.4-5.7"/><path d="M4 4v4h4"/><path d="M12 8.5v7M14 10c-.4-.6-1.1-1-2-1-1.1 0-2 .6-2 1.4 0 2 4 1 4 3 0 .8-.9 1.4-2 1.4-.9 0-1.6-.4-2-1"/></svg></span><div><strong>Si el viaje no sale, te devolvemos la seña</strong><p>Si el viaje se cancela, la seña vuelve completa.</p></div></li>
+  <li><span class="ico"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-6-5.5-6-11a6 6 0 0 1 12 0c0 5.5-6 11-6 11z"/><circle cx="12" cy="10" r="2.2"/></svg></span><div><strong>Seguí tu carga en el mapa</strong><p>Mientras el fletero comparte su ubicación, ves dónde va el camión.</p></div></li>
+</ul>
+</div></div>
+  </section>
+  <section class="sec">
+    <div class="wrap">
+      <div class="sec-top">
+        <div>
+          <h2 class="sec-title">Próximas salidas con lugar</h2>
+          <p class="sec-lead">Viajes publicados por fleteros verificados. El precio es por m³ y lo ves antes de reservar.</p>
+        </div>
+        <a href="#">Ver todos los viajes</a>
+      </div>
+      <ul class="trips">
+        <li><a class="trip" href="#">
+          <div class="r">Buenos Aires → Bahía Blanca</div>
+          <div class="d">lun 23 nov, sale 22:00. Chasis de 18 m³</div>
+          <div class="mini" aria-hidden="true"><span style="width:50%"></span></div>
+          <div class="nums"><span class="free">9 m³ libres</span><span class="price">$ 70 por m³</span></div>
+          <div class="who"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z"/><path d="M9 12l2 2 4-4"/></svg>Transportes del Sur, verificado</div>
+        </a></li>
+        <li><a class="trip" href="#">
+          <div class="r">Rosario → Mendoza</div>
+          <div class="d">mar 24 nov, sale 06:00. Semi de 30 m³</div>
+          <div class="mini" aria-hidden="true"><span style="width:23%"></span></div>
+          <div class="nums"><span class="free">23 m³ libres</span><span class="price">$ 85 por m³</span></div>
+          <div class="who"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z"/><path d="M9 12l2 2 4-4"/></svg>Transportes Andes, verificado</div>
+        </a></li>
+        <li><a class="trip" href="#">
+          <div class="r">Santa Fe → Tucumán</div>
+          <div class="d">jue 26 nov, sale 05:30. Semi de 30 m³</div>
+          <div class="mini" aria-hidden="true"><span style="width:60%"></span></div>
+          <div class="nums"><span class="free">12 m³ libres</span><span class="price">$ 95 por m³</span></div>
+          <div class="who"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z"/><path d="M9 12l2 2 4-4"/></svg>Fletes Litoral, verificado</div>
+        </a></li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="sec">
+    <div class="wrap">
+      <div class="sec-top"><h2 class="sec-title">Cómo funciona</h2></div>
+      <ol class="steps">
+        <li><h3>Buscá un viaje</h3><p>Filtrá por origen, destino y fecha. Cada viaje muestra cuánto lugar le queda y el precio por m³.</p></li>
+        <li><h3>Reservá y pagá la seña</h3><p>Elegís los m³ que necesitás y dejás la dirección de retiro. El lugar es tuyo por 24 h hasta que pagás la seña.</p></li>
+        <li><h3>Seguí tu carga</h3><p>El fletero confirma, pasa a retirar y sale. Con el código de seguimiento ves en qué está tu envío.</p></li>
+      </ol>
+    </div>
+  </section>
+
+  <section class="sec">
+    <div class="wrap">
+      <div class="sec-top">
+        <div>
+          <h2 class="sec-title">Qué pasa con tu plata</h2>
+          <p class="sec-lead">Pagás en dos partes y siempre sabés cuánto se devuelve si cambiás de planes.</p>
+        </div>
+      </div>
+      <div class="money">
+        <div>
+          <h3>Así se reparte el pago</h3>
+          <p class="example">Ejemplo: 4 m³ a $ 100 por m³ son $ 400.</p>
+          <div class="split" role="img" aria-label="seña de $ 80, el 20 %, y saldo de $ 320, el 80 %">
+            <div><div class="what">Seña, 20 %</div><div class="amt">$ 80</div><div class="when">dentro de las 24 h de reservar</div></div>
+            <div><div class="what">Saldo</div><div class="amt">$ 320</div><div class="when">cuando sale el viaje</div></div>
+          </div>
+        </div>
+        <div>
+          <h3>Si retirás tu carga</h3>
+          <table>
+            <tbody>
+              <tr><th scope="row">Más de 48 h antes de la salida</th><td>te devolvemos toda la seña</td></tr>
+              <tr><th scope="row">Entre 24 y 48 h antes</th><td>la mitad</td></tr>
+              <tr><th scope="row">Menos de 24 h antes</th><td>no hay devolución</td></tr>
+              <tr><th scope="row">Si el viaje se cancela</th><td>toda la seña</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="carrier-band">
+    <div class="wrap">
+      <div>
+        <h2 class="sec-title">¿Tenés un camión que sale con lugar?</h2>
+        <p>Publicá el viaje con el espacio que te sobra. Las empresas reservan por m³ y cobrás en tu cuenta de Mercado Pago.</p>
+        <a class="btn btn-line" href="#">Publicar mi viaje</a>
+      </div>
+      <ol>
+        <li><strong>Publicás</strong><span>el recorrido, la fecha y el precio. Te sugerimos uno según los km.</span></li>
+        <li><strong>Confirmás</strong><span>cada carga antes de salir y ordenás las paradas de retiro.</span></li>
+        <li><strong>Cobrás</strong><span>la seña cuando reservan y el saldo cuando salís.</span></li>
+      </ol>
+    </div>
+  </section>
+
+  <section class="sec">
+    <div class="wrap faq">
+      <div>
+        <h2 class="sec-title">Preguntas frecuentes</h2>
+        <p class="sec-lead">Las reglas de TruckPool, en corto.</p>
+      </div>
+      <div>
+        <details open><summary>¿Cómo sé que el fletero es confiable?</summary><p>Solo pueden publicar fleteros con el DNI o CUIT revisado por nuestro equipo. En el perfil de cada uno ves las reseñas de las empresas que ya viajaron con él.</p></details>
+        <details><summary>¿Qué pasa si el viaje no sale?</summary><p>Si el fletero cancela, o si no sale dentro de las 24 h siguientes a la hora de salida, el viaje se cancela y te devolvemos toda la seña.</p></details>
+        <details><summary>¿Puedo retirar mi carga después de reservar?</summary><p>Sí. Con más de 48 h de anticipación te devolvemos toda la seña; entre 24 y 48 h, la mitad; con menos de 24 h, no hay devolución. Antes de confirmar ves cuánto te devolvemos.</p></details>
+        <details><summary>¿Cuánto pago en total?</summary><p>El precio por m³ del viaje por los m³ que reservás. Lo pagás en dos partes por Mercado Pago: la seña al reservar y el saldo cuando sale el viaje.</p></details>
+        <details><summary>¿Cómo sigo mi carga?</summary><p>Con el código de seguimiento, en «Rastrear un envío». Si tenés cuenta, en el mapa del viaje ves dónde va el camión mientras el fletero comparte su ubicación.</p></details>
+      </div>
+    </div>
+  </section>
+  <div class="end-gap"></div>
+</main>
+<footer class="footer">
+  <div class="wrap">
+    <a class="logo" href="#" style="color:#fff">TruckPool</a>
+    <nav aria-label="pie"><a href="#">Viajes</a><a href="#">Fleteros</a><a href="#">Rastrear un envío</a><a href="#">Preguntas frecuentes</a><a href="#">Nosotros</a></nav>
+    <span>© 2026 TruckPool</span>
+  </div>
+</footer>
+<script>
+  // maqueta: pestañas accesibles (flechas y clic)
+  const tabs = [...document.querySelectorAll('[role="tab"]')];
+  function sel(t) {
+    tabs.forEach((x) => { const on = x === t; x.setAttribute("aria-selected", on); x.tabIndex = on ? 0 : -1; document.getElementById(x.getAttribute("aria-controls")).hidden = !on; });
+    t.focus();
+  }
+  tabs.forEach((t, i) => {
+    t.addEventListener("click", () => sel(t));
+    t.addEventListener("keydown", (e) => { if (e.key === "ArrowRight" || e.key === "ArrowLeft") sel(tabs[(i + (e.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length]); });
+  });
+</script>
+
+</body>
+</html>

@@ -4,8 +4,7 @@ import { useTripMessages } from "../hooks/useTripMessages";
 import { useSendMessage } from "../hooks/useSendMessage";
 import { useMarkMessagesRead } from "../hooks/useMarkMessagesRead";
 
-const inputClass =
-  "mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm placeholder:text-ink-muted focus:border-brand";
+const inputClass = "input mt-1.5";
 
 type MessageThreadProps = {
   tripId: string;
@@ -110,11 +109,11 @@ export function MessageThread({ tripId, currentUserId }: MessageThreadProps) {
   }
 
   return (
-    <section className="rounded-[10px] border border-line bg-white p-6">
+    <section className="rounded-xl border border-line bg-white p-5 sm:p-6">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="font-display text-[17px] font-medium">mensajes</h2>
+        <h2 className="font-display text-xl font-semibold">Mensajes</h2>
         {unreadOnOpen > 0 && (
-          <span className="rounded-full bg-accent px-3 py-1 text-xs font-medium text-accent-ink">
+          <span className="rounded-full bg-brand-tint px-3 py-1 text-xs font-medium text-brand">
             {unreadOnOpen} sin leer
           </span>
         )}
@@ -167,12 +166,12 @@ export function MessageThread({ tripId, currentUserId }: MessageThreadProps) {
                 className={`flex ${mine ? "justify-end" : "justify-start"}`}
               >
                 <div
-                  className={`max-w-[85%] rounded-[10px] px-3 py-2 ${
+                  className={`max-w-[85%] rounded-xl px-3 py-2 ${
                     mine ? "bg-brand text-white" : "bg-canvas text-ink-soft"
                   }`}
                 >
                   {!mine && (
-                    <p className="text-[11px] font-medium uppercase tracking-wide text-ink-muted">
+                    <p className="text-xs font-medium text-ink-soft">
                       {message.fromName}
                     </p>
                   )}
@@ -210,7 +209,11 @@ export function MessageThread({ tripId, currentUserId }: MessageThreadProps) {
             className={inputClass}
           />
         </div>
-        <Button type="submit" disabled={sendMessage.isPending || !selectedId}>
+        <Button
+          type="submit"
+          variant="dark"
+          disabled={sendMessage.isPending || !selectedId}
+        >
           {sendMessage.isPending ? "enviando…" : "enviar"}
         </Button>
       </form>

@@ -201,7 +201,7 @@ export default function TrackTrip() {
           {trip.origin} → {trip.destination}
         </p>
 
-        <div className="mt-8 rounded-[10px] border border-line bg-white p-6">
+        <div className="mt-8 rounded-xl border border-line bg-white p-6">
           {isSharing ? (
             <div className="flex items-center gap-3">
               <span className="relative flex h-2.5 w-2.5">
@@ -248,7 +248,7 @@ export default function TrackTrip() {
 
         <section className="mt-8">
           <div className="flex items-baseline justify-between gap-4">
-            <h2 className="font-display text-[17px] font-medium">recorrido</h2>
+            <h2 className="font-display text-xl font-semibold">recorrido</h2>
             {lastSent && (
               <p className="text-[13px] text-ink-muted">
                 último envío {formatTime(lastSent.at.toISOString())}

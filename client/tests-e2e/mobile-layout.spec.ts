@@ -112,7 +112,7 @@ test.describe("RD3 / QW13: la fila de la carga en mobile", () => {
     const deposit = (await row.getByText(/^seña de \$/).boundingBox())!;
     expect(deposit.width).toBeGreaterThan(card.width * 0.6);
 
-    for (const name of ["retirar carga", /^pagar seña/]) {
+    for (const name of ["retirar carga", /^pagar seña/i]) {
       const box = (await row.getByRole("button", { name }).boundingBox())!;
       expect(box.x).toBeGreaterThanOrEqual(card.x);
       expect(box.x + box.width).toBeLessThanOrEqual(card.x + card.width);
@@ -142,5 +142,24 @@ test.describe("RD9: /rastrear con un resultado", () => {
       .getByRole("link", { name: "← volver al inicio" })
       .boundingBox())!;
     expect(back.height).toBeLessThan(30);
+  });
+});
+
+test.describe("Repaso del gate (rediseño A)", () => {
+  // la campana no está pegada al borde: un panel de 320 px anclado a ella se
+  // salía 74 px por la izquierda y los avisos quedaban cortados
+  test("el panel de avisos entra en la pantalla", async ({ page }) => {
+    await loginAs(page, "company");
+    await page.goto("/viajes");
+    const bell = page
+      .getByRole("button", { name: /^notificaciones/ })
+      .locator("visible=true");
+    await bell.click();
+    const panelId = await bell.getAttribute("aria-controls");
+    const panel = page.locator(`[id="${panelId}"]`);
+    await expect(panel).toBeVisible();
+    await expectInsideViewport(panel);
+    await expectInsideViewport(panel.getByText("notificaciones", { exact: true }));
+    expect(await pageWidth(page)).toBeLessThanOrEqual(WIDTH);
   });
 });

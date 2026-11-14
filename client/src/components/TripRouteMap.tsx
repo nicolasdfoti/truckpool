@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useRef } from "react";
 import L from "leaflet";
-import { MapContainer, Marker, Polyline, TileLayer, Tooltip, useMap } from "react-leaflet";
+import {
+  MapContainer,
+  Marker,
+  Polyline,
+  TileLayer,
+  Tooltip,
+  useMap,
+} from "react-leaflet";
 import type { LatLngBoundsExpression } from "leaflet";
 import type { RoutePoint, TripRoute } from "../types/trip";
 
@@ -24,7 +31,8 @@ const DEFAULT_ZOOM = 4;
  * rompe con los bundlers y este usa la paleta de la app.
  */
 function numberedIcon(kind: RoutePoint["kind"], order: number) {
-  const color = kind === "DEPARTURE" ? "#0b3d5c" : kind === "DESTINATION" ? "#f58220" : "#7a3fb5";
+  const color =
+    kind === "DEPARTURE" ? "#0b3d5c" : kind === "DESTINATION" ? "#f58220" : "#7a3fb5";
   return L.divIcon({
     className: "",
     html: `<div style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:9999px;background:${color};color:#fff;font-size:12px;font-weight:700;border:3px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.45)">${order}</div>`,
@@ -38,7 +46,13 @@ function numberedIcon(kind: RoutePoint["kind"], order: number) {
  * si el fletero reordena las paradas el recorrido cambia y tiene que volver a
  * encuadrar, pero un re-render cualquiera no le roba el zoom al usuario.
  */
-function FitToRoute({ routeKey, points }: { routeKey: string; points: [number, number][] }) {
+function FitToRoute({
+  routeKey,
+  points,
+}: {
+  routeKey: string;
+  points: [number, number][];
+}) {
   const map = useMap();
   const lastKey = useRef<string | null>(null);
 
@@ -75,7 +89,7 @@ export function TripRouteMap({ route, geometry, className = "" }: TripRouteMapPr
   if (points.length === 0) {
     return (
       <div
-        className={`flex items-center justify-center rounded-[10px] border border-dashed border-line-strong bg-soft px-4 py-10 text-center text-[13px] text-ink-muted ${className}`}
+        className={`flex items-center justify-center rounded-xl border border-dashed border-line-dashed bg-soft px-4 py-10 text-center text-[13px] text-ink-muted ${className}`}
       >
         este viaje todavía no tiene puntos en el mapa.
       </div>
@@ -83,9 +97,10 @@ export function TripRouteMap({ route, geometry, className = "" }: TripRouteMapPr
   }
 
   // GeoJSON viene como [lng, lat]; Leaflet quiere [lat, lng].
-  const realLine = geometry && geometry.length > 1
-    ? geometry.map(([lng, lat]) => [lat, lng] as [number, number])
-    : null;
+  const realLine =
+    geometry && geometry.length > 1
+      ? geometry.map(([lng, lat]) => [lat, lng] as [number, number])
+      : null;
   // fallback: la recta entre los puntos, en orden de recorrido
   const straightLine = points.length > 1 ? points : null;
 
@@ -94,7 +109,7 @@ export function TripRouteMap({ route, geometry, className = "" }: TripRouteMapPr
   const routeKey = route.points.map((p) => p.cargoItemId ?? p.kind).join("|");
 
   return (
-    <div className={`isolate overflow-hidden rounded-[10px] border border-line ${className}`}>
+    <div className={`isolate overflow-hidden rounded-xl border border-line ${className}`}>
       <MapContainer
         center={points[0]}
         zoom={points.length > 1 ? 11 : DEFAULT_ZOOM}
@@ -130,7 +145,9 @@ export function TripRouteMap({ route, geometry, className = "" }: TripRouteMapPr
             icon={numberedIcon(point.kind, point.order)}
           >
             <Tooltip direction="top" offset={[0, -10]}>
-              <strong>{point.order}. {point.label}</strong>
+              <strong>
+                {point.order}. {point.label}
+              </strong>
               <br />
               {point.address}
             </Tooltip>

@@ -118,8 +118,8 @@ function RespondForm({
         </p>
 
         <div>
-          <label className="text-[13px] text-ink-soft" htmlFor="truckType">
-            vehículo
+          <label className="field-label" htmlFor="truckType">
+            Vehículo
           </label>
           <select
             id="truckType"
@@ -127,7 +127,7 @@ function RespondForm({
             onChange={(e) =>
               setTripDetails({ ...tripDetails, truckType: e.target.value })
             }
-            className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm placeholder:text-ink-muted focus:border-brand"
+            className="input mt-1.5"
           >
             {["Semi", "Chasis", "Tráiler", "Camión"].map((type) => (
               <option key={type} value={type}>
@@ -139,8 +139,8 @@ function RespondForm({
 
         <div className="grid gap-4 sm:grid-cols-4">
           <div>
-            <label className="text-[13px] text-ink-soft" htmlFor="capacityTotal">
-              capacidad (m³)
+            <label className="field-label" htmlFor="capacityTotal">
+              Capacidad (m³)
             </label>
             <input
               id="capacityTotal"
@@ -150,12 +150,12 @@ function RespondForm({
               }
               placeholder="ej: 30"
               inputMode="decimal"
-              className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm placeholder:text-ink-muted focus:border-brand"
+              className="input mt-1.5"
             />
           </div>
           <div>
-            <label className="text-[13px] text-ink-soft" htmlFor="price">
-              precio del viaje
+            <label className="field-label" htmlFor="price">
+              Precio del viaje
             </label>
             <input
               id="price"
@@ -163,12 +163,12 @@ function RespondForm({
               onChange={(e) => setTripDetails({ ...tripDetails, price: e.target.value })}
               placeholder="ej: 1500"
               inputMode="decimal"
-              className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm placeholder:text-ink-muted focus:border-brand"
+              className="input mt-1.5"
             />
           </div>
           <div>
-            <label className="text-[13px] text-ink-soft" htmlFor="depositPercent">
-              seña (%)
+            <label className="field-label" htmlFor="depositPercent">
+              Seña (%)
             </label>
             <input
               id="depositPercent"
@@ -178,12 +178,12 @@ function RespondForm({
               }
               placeholder="20"
               inputMode="numeric"
-              className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm placeholder:text-ink-muted focus:border-brand"
+              className="input mt-1.5"
             />
           </div>
           <div>
-            <label className="text-[13px] text-ink-soft" htmlFor="departureTime">
-              hora de salida
+            <label className="field-label" htmlFor="departureTime">
+              Hora de salida
             </label>
             <input
               id="departureTime"
@@ -193,7 +193,7 @@ function RespondForm({
                 setTripDetails({ ...tripDetails, departureTime: e.target.value })
               }
               required
-              className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm placeholder:text-ink-muted focus:border-brand"
+              className="input mt-1.5"
             />
             <p className="mt-1 text-xs text-ink-muted">
               los plazos para retirar una carga se cuentan desde esta hora.
@@ -335,7 +335,9 @@ function CreateTripRequestForm({
       {
         onSuccess: () => onClose(),
         onError: (err: unknown): void => {
-          setFormError(err instanceof Error ? err.message : "no se pudo enviar la solicitud.");
+          setFormError(
+            err instanceof Error ? err.message : "no se pudo enviar la solicitud."
+          );
           setIsSubmitting(false);
         },
       }
@@ -349,35 +351,35 @@ function CreateTripRequestForm({
       </p>
 
       <div>
-        <label className="text-[13px] text-ink-soft" htmlFor="origin">
-          origen
+        <label className="field-label" htmlFor="origin">
+          Origen
         </label>
         <input
           id="origin"
           value={formData.origin}
           onChange={(e) => setFormData({ ...formData, origin: e.target.value })}
           placeholder="ej: Córdoba, Argentina"
-          className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm placeholder:text-ink-muted focus:border-brand"
+          className="input mt-1.5"
         />
       </div>
 
       <div>
-        <label className="text-[13px] text-ink-soft" htmlFor="destination">
-          destino
+        <label className="field-label" htmlFor="destination">
+          Destino
         </label>
         <input
           id="destination"
           value={formData.destination}
           onChange={(e) => setFormData({ ...formData, destination: e.target.value })}
           placeholder="ej: Buenos Aires, Argentina"
-          className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm placeholder:text-ink-muted focus:border-brand"
+          className="input mt-1.5"
         />
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2">
         <div>
-          <label className="text-[13px] text-ink-soft" htmlFor="desiredDate">
-            fecha deseada
+          <label className="field-label" htmlFor="desiredDate">
+            Fecha deseada
           </label>
           <input
             id="desiredDate"
@@ -385,12 +387,12 @@ function CreateTripRequestForm({
             value={formData.desiredDate}
             onChange={(e) => setFormData({ ...formData, desiredDate: e.target.value })}
             min={new Date().toISOString().split("T")[0]}
-            className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm placeholder:text-ink-muted focus:border-brand"
+            className="input mt-1.5"
           />
         </div>
         <div>
-          <label className="text-[13px] text-ink-soft" htmlFor="estimatedVolume">
-            volumen estimado (m³)
+          <label className="field-label" htmlFor="estimatedVolume">
+            Volumen estimado (m³)
           </label>
           <input
             id="estimatedVolume"
@@ -398,17 +400,19 @@ function CreateTripRequestForm({
             step="0.1"
             min="0.1"
             value={formData.estimatedVolume}
-            onChange={(e) => setFormData({ ...formData, estimatedVolume: e.target.value })}
+            onChange={(e) =>
+              setFormData({ ...formData, estimatedVolume: e.target.value })
+            }
             placeholder="ej: 25"
             inputMode="decimal"
-            className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm placeholder:text-ink-muted focus:border-brand"
+            className="input mt-1.5"
           />
         </div>
       </div>
 
       <div>
-        <label className="text-[13px] text-ink-soft" htmlFor="note">
-          nota (opcional)
+        <label className="field-label" htmlFor="note">
+          Nota (opcional)
         </label>
         <textarea
           id="note"
@@ -416,7 +420,7 @@ function CreateTripRequestForm({
           onChange={(e) => setFormData({ ...formData, note: e.target.value })}
           placeholder="detalles adicionales: tipo de carga, requerimientos especiales, etc."
           rows={3}
-          className="mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm placeholder:text-ink-muted focus:border-brand"
+          className="input mt-1.5"
         />
       </div>
 
@@ -448,7 +452,7 @@ function ReceivedRequestItem({
   // sí, y es la forma de sacarla de la lista
   const expired = request.status === "PENDING" && isDateReached(request.desiredDate);
   return (
-    <li className="rounded-[10px] border border-line bg-white p-5">
+    <li className="rounded-xl border border-line bg-white p-5">
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div className="flex-1 min-w-[200px]">
           <p className="font-display text-lg font-medium">
@@ -512,7 +516,7 @@ function SentRequestItem({ request }: { request: TripRequest }): React.ReactElem
   // QW18: el transportista ya no puede aceptarla
   const expired = request.status === "PENDING" && isDateReached(request.desiredDate);
   return (
-    <li className="rounded-[10px] border border-line bg-white p-5">
+    <li className="rounded-xl border border-line bg-white p-5">
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div className="flex-1 min-w-[200px]">
           <p className="font-display text-lg font-medium">
@@ -587,7 +591,7 @@ export default function TripRequests(): React.ReactElement {
   const currentLoading = activeTab === "received" ? loadingReceived : loadingSent;
 
   /* eslint-disable react-hooks/set-state-in-effect */
-// Si venimos de /fleteros/:id?action=request, abrir el modal de crear solicitud
+  // Si venimos de /fleteros/:id?action=request, abrir el modal de crear solicitud
   useEffect(() => {
     if (searchParams.get("action") === "request") {
       const carrierId = searchParams.get("carrierId");
@@ -615,7 +619,7 @@ export default function TripRequests(): React.ReactElement {
             {[...Array(3)].map((_, i) => (
               <div
                 key={i}
-                className="animate-pulse rounded-[10px] border border-line bg-white p-5"
+                className="animate-pulse rounded-xl border border-line bg-white p-5"
               >
                 <div className="h-6 w-3/4 bg-canvas-line rounded" />
                 <div className="mt-2 h-4 w-1/2 bg-canvas-line rounded" />
@@ -625,7 +629,7 @@ export default function TripRequests(): React.ReactElement {
         )}
 
         {!currentLoading && currentData && currentData.length === 0 && (
-          <div className="mt-10 rounded-[10px] border border-line bg-white p-8 text-center">
+          <div className="mt-10 rounded-xl border border-line bg-white p-8 text-center">
             <p className="text-sm text-ink-muted">
               {activeTab === "received"
                 ? "no recibiste ninguna solicitud todavía."
@@ -660,7 +664,7 @@ export default function TripRequests(): React.ReactElement {
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
             {/* RD1: más alto que la pantalla en mobile; el panel scrollea para
                 llegar al título y a los botones */}
-            <div className="max-h-[calc(100dvh-2rem)] w-full max-w-xl overflow-y-auto rounded-[10px] bg-white p-6 shadow-xl">
+            <div className="max-h-[calc(100dvh-2rem)] w-full max-w-xl overflow-y-auto rounded-xl bg-white p-6 shadow-xl">
               {openModal.type === "create" ? (
                 <>
                   <h2 className="font-display text-xl font-semibold mb-4">

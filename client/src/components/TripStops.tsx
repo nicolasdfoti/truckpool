@@ -70,7 +70,7 @@ function SortableItem({ item, index }: SortableItemProps) {
     <li
       ref={setNodeRef}
       style={style}
-      className="flex items-center gap-3 rounded-[10px] border border-line bg-white p-3 transition-opacity"
+      className="flex items-center gap-3 rounded-xl border border-line bg-white p-3 transition-opacity"
     >
       <button
         {...attributes}
@@ -203,7 +203,7 @@ export function TripStops({
         {[...Array(3)].map((_, i) => (
           <li
             key={i}
-            className="flex items-center gap-3 rounded-[10px] border border-line bg-white p-3 animate-pulse"
+            className="flex items-center gap-3 rounded-xl border border-line bg-white p-3 animate-pulse"
           >
             <div className="w-6 h-6 rounded-full bg-canvas-line" />
             <div className="flex-1 space-y-1">
@@ -236,7 +236,7 @@ export function TripStops({
             stop.kind === "FULL" ? (
               <li
                 key={stop.cargoItemId}
-                className="flex items-center gap-3 rounded-[10px] border border-line bg-white p-3"
+                className="flex items-center gap-3 rounded-xl border border-line bg-white p-3"
               >
                 <StopNumber index={index} />
                 <FullStopBody item={stop} />
@@ -244,7 +244,7 @@ export function TripStops({
             ) : (
               <li
                 key={`otra-${stop.stopOrder}-${index}`}
-                className="flex items-center gap-3 rounded-[10px] border border-line bg-white p-3"
+                className="flex items-center gap-3 rounded-xl border border-line bg-white p-3"
               >
                 <StopNumber index={index} />
                 <p className="flex-1 text-[13px] text-ink-muted">

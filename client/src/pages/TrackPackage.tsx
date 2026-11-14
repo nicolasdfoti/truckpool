@@ -108,7 +108,7 @@ export default function TrackPackage() {
           >
             ← Buscar otro código
           </Link>
-          <div className="mt-8 rounded-[10px] border border-line bg-white p-6 text-center">
+          <div className="mt-8 rounded-xl border border-line bg-white p-6 text-center">
             <h2 className="font-display text-xl font-medium">
               {searchFailed ? "Algo falló" : "Código no encontrado"}
             </h2>
@@ -133,9 +133,18 @@ export default function TrackPackage() {
       <main className="mx-auto max-w-xl px-4 py-12">
         {/* RD9: en mobile la fila del buscador no entraba (473 px) y «limpiar»
             quedaba afuera: el volver va arriba y la fila se parte */}
-        <Link to="/" className="mb-3 inline-block text-sm text-brand underline">
-          ← volver al inicio
+        <Link
+          to="/"
+          className="mb-4 inline-block text-sm font-medium text-brand underline"
+        >
+          ← Volver al inicio
         </Link>
+        <h1 className="font-display text-[clamp(28px,3.4vw,36px)] leading-tight font-semibold">
+          Rastrear un envío
+        </h1>
+        <p className="mt-2 mb-6 text-[17px] text-ink-soft">
+          Pegá el código de seguimiento que te pasó la empresa o el fletero.
+        </p>
         <form onSubmit={handleSubmit} className="mb-8">
           <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap sm:gap-3">
             <label htmlFor="trackingCode" className="sr-only">
@@ -149,7 +158,7 @@ export default function TrackPackage() {
               placeholder="pegá el código que te pasaron"
               inputMode="text"
               autoComplete="off"
-              className="w-full min-w-0 rounded-md border border-line-strong px-3 py-2 text-sm placeholder:text-ink-muted focus:border-brand font-mono sm:w-auto sm:flex-1"
+              className="w-full min-w-0 input font-mono sm:w-auto sm:flex-1"
               disabled={isFetching}
             />
             <Button type="submit" size="md" disabled={!code.trim() || isFetching}>
@@ -165,15 +174,15 @@ export default function TrackPackage() {
 
         {tracking && (
           <div className="space-y-6">
-            <div className="rounded-[10px] border border-line bg-white p-6">
+            <div className="rounded-xl border border-line bg-white p-6">
               <div className="flex items-center justify-between gap-4 flex-wrap">
                 <div>
                   <p className="text-[12px] text-ink-muted font-mono break-all">
                     {tracking.trackingCode}
                   </p>
-                  <h1 className="mt-1 font-display text-xl font-medium">
+                  <h2 className="mt-1 font-display text-xl font-semibold">
                     {tracking.description}
-                  </h1>
+                  </h2>
                 </div>
                 <span
                   className={`inline-flex items-center rounded-full px-3 py-1 text-sm font-medium ${statusLabel(tracking.cargoStatus).className}`}
@@ -183,7 +192,7 @@ export default function TrackPackage() {
               </div>
             </div>
 
-            <div className="rounded-[10px] border border-line bg-white p-6">
+            <div className="rounded-xl border border-line bg-white p-6">
               <h2 className="font-display text-base font-medium">recorrido del viaje</h2>
               <div className="mt-3 flex items-center gap-2 text-sm text-ink-soft flex-wrap">
                 <span className="font-medium text-ink">{tracking.trip.origin}</span>
@@ -217,7 +226,7 @@ export default function TrackPackage() {
               </div>
             </div>
 
-            <div className="rounded-[10px] border border-line bg-white p-6">
+            <div className="rounded-xl border border-line bg-white p-6">
               <h2 className="font-display text-base font-medium">estado del viaje</h2>
               <div className="mt-3">
                 <span
@@ -228,7 +237,7 @@ export default function TrackPackage() {
               </div>
             </div>
 
-            <div className="rounded-[10px] border border-surface-line bg-surface p-6 text-center">
+            <div className="rounded-xl border border-surface-line bg-surface p-6 text-center">
               <p className="text-sm text-ink-muted">
                 este es un seguimiento público: no muestra direcciones exactas de retiro,
                 precios ni datos de la empresa.

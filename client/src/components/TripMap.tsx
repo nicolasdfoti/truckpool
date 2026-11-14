@@ -55,7 +55,7 @@ export function TripMap({ location, track, className = "" }: TripMapProps) {
   if (!location) {
     return (
       <div
-        className={`flex items-center justify-center rounded-[10px] border border-dashed border-line-strong bg-soft px-4 py-10 text-center text-[13px] text-ink-muted ${className}`}
+        className={`flex items-center justify-center rounded-xl border border-dashed border-line-dashed bg-soft px-4 py-10 text-center text-[13px] text-ink-muted ${className}`}
       >
         todavía no hay ubicación compartida.
       </div>
@@ -66,7 +66,7 @@ export function TripMap({ location, track, className = "" }: TripMapProps) {
   const fitPoints = path.length > 0 ? track! : [location];
 
   return (
-    <div className={`isolate overflow-hidden rounded-[10px] border border-line ${className}`}>
+    <div className={`isolate overflow-hidden rounded-xl border border-line ${className}`}>
       <MapContainer
         center={[location.lat, location.lng]}
         zoom={12}

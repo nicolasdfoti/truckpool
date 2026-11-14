@@ -5,13 +5,17 @@
   --font-sans: "Inter", sans-serif;
   --font-display: "Space Grotesk", sans-serif;
 
+  /* Dirección A (rediseño, docs/review/rediseno): navy para la estructura y un
+     solo naranja por pantalla, para la próxima acción del usuario. */
   --color-brand: #0b3d5c;
   --color-brand-hover: #08304a;
-  --color-brand-deep: #042c53;
+  --color-brand-deep: #072a40;
   --color-brand-light: #6fa0bf;
+  /* fondo de chips «abierto» y del rayado de las cargas ajenas */
+  --color-brand-tint: #d6e3ec;
   --color-accent: #f58220;
   --color-accent-hover: #e17516;
-  --color-accent-ink: #4a1b0c;
+  --color-accent-ink: #3a1606;
   /* mismo naranja, pero legible sobre fondos claros: los usos de accent
      (íconos, estrellas, títulos) necesitan >=3:1 y accent sólo da 2.3-2.6 */
   --color-accent-strong: #c25f0d;
@@ -19,20 +23,25 @@
   --color-accent-text: #a35209;
   --color-surface: #fff6ec;
   --color-surface-line: #f6d9b8;
-  --color-canvas: #eaf1f7;
+  --color-canvas: #eef3f7;
   --color-canvas-line: #d3e1ec;
-  --color-soft: #fdf8f0;
-  --color-line: #e2e6ea;
-  --color-line-strong: #d9dee3;
-  --color-line-dashed: #c7cdd4;
-  --color-ink: #1a2733;
-  --color-ink-soft: #4b5563;
-  --color-ink-muted: #646e7a;
+  --color-soft: #f7fafc;
+  /* bordes de hojas y separadores */
+  --color-line: #d5dee6;
+  /* borde de inputs y controles: >=3:1 contra el blanco (QW15; antes 1.35:1) */
+  --color-line-strong: #6b7a88;
+  --color-line-dashed: #9fb3c3;
+  --color-ink: #15222e;
+  --color-ink-soft: #4a5866;
+  --color-ink-muted: #5d6874;
   --color-success: #1f7a48;
-  --color-success-soft: #e1f5ee;
+  --color-success-soft: #e3f2e9;
   --color-success-deep: #085041;
-  --color-success-bg: #dff0e5;
-  --color-danger: #c0392b;
+  --color-success-bg: #e3f2e9;
+  --color-danger: #b3261e;
+  --color-danger-bg: #fbeae8;
+  /* chip neutro (pendiente): ink-soft encima da 6.5:1 */
+  --color-wait-bg: #e7ebef;
   --color-step-1: #fdeedd;
   --color-step-2: #dce9f3;
   --color-step-3: #dff0e5;
@@ -46,9 +55,70 @@
     outline: 2px solid var(--color-accent-strong);
     outline-offset: 2px;
   }
+
+  /* en Chromium, con el foco en el ícono del calendario de un campo de fecha
+     u hora, el campo no matchea ni :focus-visible ni :focus (el foco está en
+     su shadow DOM) y no se veía nada: lleva el anillo mientras tenga el foco
+     en cualquiera de sus partes */
+  input[type="date"]:focus-within,
+  input[type="time"]:focus-within {
+    outline: 2px solid var(--color-accent-strong);
+    outline-offset: 2px;
+  }
+
+  /* el header es fijo (64 px): lo que recibe el foco, o el destino de un
+     ancla, no queda tapado debajo (WCAG 2.4.11) */
+  html {
+    scroll-padding-top: 5rem;
+  }
+
+  /* la plata y los m³ se alinean en columnas */
+  body {
+    font-feature-settings: "tnum" 1;
+  }
+
+  h1,
+  h2,
+  h3 {
+    letter-spacing: -0.01em;
+  }
 }
 
 @layer components {
+  /* campo de texto de la dirección A: 44 px de alto y borde >=3:1 */
+  .input {
+    width: 100%;
+    min-height: 2.75rem;
+    padding: 0.5rem 0.75rem;
+    border: 1.5px solid var(--color-line-strong);
+    border-radius: 0.5rem;
+    background-color: var(--color-white);
+    color: var(--color-ink);
+    font-size: 0.9375rem;
+  }
+
+  .input::placeholder {
+    color: var(--color-ink-muted);
+  }
+
+  .input:focus {
+    border-color: var(--color-brand);
+  }
+
+  .input:disabled {
+    background-color: var(--color-soft);
+    color: var(--color-ink-soft);
+  }
+
+  /* etiqueta de un campo, arriba del input */
+  .field-label {
+    display: block;
+    margin-bottom: 0.375rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--color-ink);
+  }
+
   /* El checkbox nativo con accent-color dibuja la caja sin marcar con un borde
      de ~1.35:1 contra el blanco: no se ve. Lo dibujamos nosotros para que el
      borde llegue a 5.18:1 y el tilde tenga 11.44:1. */
@@ -83,4 +153,14 @@
     outline: 2px solid var(--color-accent-strong);
     outline-offset: 2px;
   }
+}
+
+/* el rayado de las cargas ajenas (plano del camión, mini barras y leyendas) */
+@utility bg-hatch {
+  background-color: var(--color-brand-tint);
+  background-image: repeating-linear-gradient(
+    45deg,
+    var(--color-brand) 0 1.5px,
+    transparent 1.5px 5px
+  );
 }

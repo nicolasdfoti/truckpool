@@ -14,8 +14,7 @@ import type { TripFeature } from "../types/trip";
 
 const TRUCK_TYPES = ["Semi", "Chasis", "Tráiler", "Camión"];
 
-const inputClass =
-  "mt-1 w-full rounded-md border border-line-strong px-3 py-2 text-sm placeholder:text-ink-muted focus:border-brand";
+const inputClass = "input mt-1.5";
 
 function parseDecimalInput(raw: string): number {
   return Number(raw.trim().replace(",", "."));
@@ -242,10 +241,12 @@ export default function PublishTrip() {
 
   return (
     <div className="bg-canvas font-sans text-ink">
-      <main className="mx-auto max-w-xl px-4 py-12 sm:px-6">
-        <h1 className="font-display text-3xl font-semibold">Publicar un viaje</h1>
-        <p className="mt-1 text-sm text-ink-soft">
-          contanos tu recorrido y el espacio libre que tenés en el camión.
+      <main className="mx-auto max-w-2xl px-4 py-10 sm:px-6 sm:py-12">
+        <h1 className="font-display text-[clamp(28px,3.4vw,36px)] leading-tight font-semibold">
+          Publicar un viaje
+        </h1>
+        <p className="mt-2 text-[17px] text-ink-soft">
+          Contanos tu recorrido y el espacio libre que tenés en el camión.
         </p>
 
         {authLoading && (
@@ -253,7 +254,7 @@ export default function PublishTrip() {
         )}
 
         {!authLoading && !canPublish && (
-          <div className="mt-8 rounded-[10px] border border-line bg-white p-6">
+          <div className="mt-8 rounded-xl border border-line bg-white p-6">
             <p className="text-sm text-ink-muted">
               para publicar un viaje necesitás una cuenta de fletero:{" "}
               <Link
@@ -275,11 +276,11 @@ export default function PublishTrip() {
         )}
 
         {!authLoading && canPublish && profile && isPendingVerification && (
-          <div className="mt-8 rounded-[10px] border border-line bg-white p-6">
-            <p className="text-sm font-medium text-ink">
+          <div className="mt-8 rounded-xl border border-line bg-white p-6">
+            <p className="font-display text-lg font-semibold text-ink">
               {profile.verificationStatus === "PENDING"
-                ? "estamos revisando tu identidad"
-                : "necesitás verificar tu identidad para publicar"}
+                ? "Estamos revisando tu identidad"
+                : "Necesitás verificar tu identidad para publicar"}
             </p>
             <p className="mt-2 text-sm text-ink-muted">
               {profile.verificationStatus === "PENDING"
@@ -287,31 +288,31 @@ export default function PublishTrip() {
                 : "cargá tu DNI o CUIT en tu perfil y esperá la aprobación para poder publicar viajes."}
             </p>
             {profile.verificationStatus === "REJECTED" && profile.verificationNote && (
-              <p className="mt-3 rounded-md bg-danger/10 px-3 py-2 text-[13px] text-danger">
+              <p className="mt-3 rounded-md bg-danger-bg px-3 py-2 text-[13px] text-danger">
                 motivo del rechazo: {profile.verificationNote}
               </p>
             )}
             <Button asChild variant="primary" size="sm" className="mt-4">
               <Link to="/perfil">
                 {profile.verificationStatus === "PENDING"
-                  ? "ver estado en mi perfil"
-                  : "verificar mi identidad"}
+                  ? "Ver el estado en mi perfil"
+                  : "Verificar mi identidad"}
               </Link>
             </Button>
           </div>
         )}
 
         {!authLoading && canPublish && profile && isVerified && !profile.mpConnected && (
-          <div className="mt-8 rounded-[10px] border border-line bg-white p-6">
-            <p className="text-sm font-medium text-ink">
-              para publicar viajes debés conectar tu cuenta de Mercado Pago
+          <div className="mt-8 rounded-xl border border-line bg-white p-6">
+            <p className="font-display text-lg font-semibold text-ink">
+              Para publicar viajes, conectá tu cuenta de Mercado Pago
             </p>
             <p className="mt-2 text-sm text-ink-muted">
               es necesario para recibir pagos con split automático: la plataforma retiene
               su comisión y vos recibís tu parte neta directamente.
             </p>
             <Button asChild variant="primary" size="sm" className="mt-4">
-              <Link to="/perfil">conectar Mercado Pago</Link>
+              <Link to="/perfil">Conectar Mercado Pago</Link>
             </Button>
           </div>
         )}
@@ -319,12 +320,12 @@ export default function PublishTrip() {
         {!authLoading && canPublish && profile && isVerified && profile.mpConnected && (
           <form
             onSubmit={handleSubmit}
-            className="mt-8 rounded-[10px] border border-line bg-white p-6"
+            className="mt-8 rounded-xl border border-line bg-white p-5 sm:p-8"
           >
             <div className="grid gap-4 sm:grid-cols-2">
               <div>
-                <label className="text-[13px] text-ink-soft" htmlFor="origin">
-                  origen
+                <label className="field-label" htmlFor="origin">
+                  Origen
                 </label>
                 <input
                   id="origin"
@@ -336,8 +337,8 @@ export default function PublishTrip() {
                 <PlaceHint place={originPlace} kind="origen" />
               </div>
               <div>
-                <label className="text-[13px] text-ink-soft" htmlFor="destination">
-                  destino
+                <label className="field-label" htmlFor="destination">
+                  Destino
                 </label>
                 <input
                   id="destination"
@@ -351,8 +352,8 @@ export default function PublishTrip() {
             </div>
 
             <div className="mt-4">
-              <label className="text-[13px] text-ink-soft" htmlFor="departureAddress">
-                punto exacto de salida
+              <label className="field-label" htmlFor="departureAddress">
+                Punto exacto de salida
               </label>
               <input
                 id="departureAddress"
@@ -388,8 +389,8 @@ export default function PublishTrip() {
 
             <div className="mt-4 grid gap-4 sm:grid-cols-4">
               <div>
-                <label className="text-[13px] text-ink-soft" htmlFor="date">
-                  fecha de salida
+                <label className="field-label" htmlFor="date">
+                  Fecha de salida
                 </label>
                 <input
                   id="date"
@@ -401,8 +402,8 @@ export default function PublishTrip() {
                 />
               </div>
               <div>
-                <label className="text-[13px] text-ink-soft" htmlFor="departureTime">
-                  hora de salida
+                <label className="field-label" htmlFor="departureTime">
+                  Hora de salida
                 </label>
                 <input
                   id="departureTime"
@@ -417,8 +418,8 @@ export default function PublishTrip() {
                 </p>
               </div>
               <div>
-                <label className="text-[13px] text-ink-soft" htmlFor="truckType">
-                  vehículo
+                <label className="field-label" htmlFor="truckType">
+                  Vehículo
                 </label>
                 <select
                   id="truckType"
@@ -434,8 +435,8 @@ export default function PublishTrip() {
                 </select>
               </div>
               <div>
-                <label className="text-[13px] text-ink-soft" htmlFor="capacityTotal">
-                  capacidad (m³)
+                <label className="field-label" htmlFor="capacityTotal">
+                  Capacidad (m³)
                 </label>
                 <input
                   id="capacityTotal"
@@ -448,42 +449,38 @@ export default function PublishTrip() {
               </div>
             </div>
 
-            <div className="mt-4">
-              <span className="text-[13px] text-ink-soft">servicios y extras</span>
-              <div className="mt-2 grid gap-2 sm:grid-cols-2">
+            <fieldset className="mt-5">
+              <legend className="field-label">Servicios y extras</legend>
+              <div className="mt-1 flex flex-wrap gap-2">
                 {TRIP_FEATURES.map((feature) => {
                   const { label, Icon } = FEATURE_META[feature];
                   const active = features.includes(feature);
                   return (
                     <label
                       key={feature}
-                      className={`flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm ${
+                      className={`flex min-h-10 cursor-pointer items-center gap-2 rounded-full border-[1.5px] px-3 text-sm has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-accent-strong ${
                         active
-                          ? "border-brand bg-canvas text-ink"
-                          : "border-line text-ink-soft"
+                          ? "border-brand bg-brand-tint font-medium text-brand"
+                          : "border-line bg-white text-ink-soft hover:border-brand"
                       }`}
                     >
                       <input
                         type="checkbox"
                         checked={active}
                         onChange={() => toggleFeature(feature)}
-                        className="checkbox"
+                        className="sr-only"
                       />
-                      <Icon
-                        size={16}
-                        aria-hidden
-                        className={active ? "text-brand" : ""}
-                      />
+                      <Icon size={16} aria-hidden />
                       {label}
                     </label>
                   );
                 })}
               </div>
-            </div>
+            </fieldset>
 
             <div className="mt-4">
-              <label className="text-[13px] text-ink-soft" htmlFor="price">
-                precio del viaje
+              <label className="field-label" htmlFor="price">
+                Precio del viaje
               </label>
               <input
                 id="price"
@@ -539,8 +536,8 @@ export default function PublishTrip() {
             </div>
 
             <div className="mt-4">
-              <label className="text-[13px] text-ink-soft" htmlFor="depositPercent">
-                seña que deja cada empresa (%)
+              <label className="field-label" htmlFor="depositPercent">
+                Seña que deja cada empresa (%)
               </label>
               <input
                 id="depositPercent"
@@ -561,7 +558,7 @@ export default function PublishTrip() {
             {formError && <p className="mt-4 text-[13px] text-danger">{formError}</p>}
 
             <Button type="submit" className="mt-6 w-full" disabled={createTrip.isPending}>
-              {createTrip.isPending ? "publicando…" : "publicar viaje"}
+              {createTrip.isPending ? "publicando…" : "Publicar viaje"}
             </Button>
           </form>
         )}

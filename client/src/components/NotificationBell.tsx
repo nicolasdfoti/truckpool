@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Bell, Check } from "./icons";
 import {
@@ -24,6 +24,8 @@ function relativeTime(iso: string): string {
 export function NotificationBell() {
   const [open, setOpen] = useState(false);
   const [pulse, setPulse] = useState(false);
+  // hay dos campanas montadas (header desktop y mobile): cada panel con su id
+  const panelId = `avisos-${useId().replace(/:/g, "")}`;
   const containerRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
 
@@ -74,12 +76,13 @@ export function NotificationBell() {
         onClick={() => setOpen((value) => !value)}
         aria-label={unread > 0 ? `notificaciones (${unread} sin leer)` : "notificaciones"}
         aria-expanded={open}
+        aria-controls={panelId}
         className="relative rounded-full p-2 text-ink-soft transition-colors hover:bg-canvas hover:text-brand"
       >
         <Bell size={22} />
         {unread > 0 && (
           <span
-            className={`absolute -right-0.5 -top-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-accent px-1 text-[11px] font-semibold text-white transition-transform duration-150 ${
+            className={`absolute -right-0.5 -top-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-danger px-1 text-[11px] font-semibold text-white transition-transform duration-150 ${
               pulse ? "animate-ping" : ""
             }`}
           >
@@ -89,7 +92,13 @@ export function NotificationBell() {
       </button>
 
       {open && (
-        <div className="absolute right-0 z-50 mt-2 w-80 overflow-hidden rounded-lg border border-line bg-white shadow-lg sm:w-96">
+        // en mobile la campana no está pegada al borde: un panel de 320 px
+        // anclado a ella se salía 74 px por la izquierda. Bajo sm va de lado a
+        // lado, debajo del header
+        <div
+          id={panelId}
+          className="fixed inset-x-4 top-[4.5rem] z-50 overflow-hidden rounded-lg border border-line bg-white shadow-lg sm:absolute sm:inset-x-auto sm:top-full sm:right-0 sm:mt-2 sm:w-96"
+        >
           <div className="flex items-center justify-between border-b border-line px-4 py-3">
             <span className="font-display text-sm font-semibold text-ink">
               notificaciones
