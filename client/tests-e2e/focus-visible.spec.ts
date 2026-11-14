@@ -51,3 +51,50 @@ test("un diálogo: el anillo en sus botones", async ({ page }) => {
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();
 });
+
+// Repaso del gate (rediseño A): en Chromium, con el foco en el ícono del
+// calendario el campo no matchea :focus-visible ni :focus, y no se veía nada
+test("un campo de fecha: el anillo en todas sus partes, calendario incluido", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const date = page.locator("input[name=desde]");
+  // como texto: los e2e compilan sin los tipos del DOM
+  const onDate = () =>
+    page.evaluate<boolean>("document.activeElement?.getAttribute('name') === 'desde'");
+  await date.focus();
+  let stops = 0;
+  // día, mes, año y el botón del calendario: el foco sigue en el mismo input
+  while (stops < 6 && (await onDate())) {
+    await expect(date).toHaveCSS("outline-style", "solid");
+    await expect(date).toHaveCSS("outline-color", ACCENT_STRONG);
+    stops++;
+    await page.keyboard.press("Tab");
+  }
+  expect(stops).toBeGreaterThanOrEqual(4);
+});
+
+// el header es fijo. En el detalle a dos columnas, el Tab sale de «enviar» (al
+// pie de la columna de la izquierda) y entra al panel «Tu carga», arriba a la
+// derecha. Si el botón ya asomaba cortado por arriba, el navegador lo bajaba
+// solo hasta el borde de la ventana, y ahí lo tapaba el header
+test("lo que se enfoca no queda tapado por el header fijo", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await loginAs(page, "company");
+  // el viaje de roles: ningún e2e lo hace salir ni retira la carga de empresa@
+  await page.goto(`/viajes/${E2E.rolesTripId}`);
+  const withdraw = page.getByRole("button", { name: /^retirar carga/i }).first();
+  await expect(withdraw).toBeVisible();
+  // como texto: los e2e compilan sin los tipos del DOM
+  await page.evaluate(`(() => {
+    const buttons = [...document.querySelectorAll("button")];
+    buttons.find((b) => b.textContent.trim() === "enviar").focus({ preventScroll: true });
+    const target = buttons.find((b) => /^retirar carga/i.test(b.textContent.trim()));
+    window.scrollTo(0, target.getBoundingClientRect().top + window.scrollY + 20);
+  })()`);
+  await page.keyboard.press("Tab");
+  await expect(withdraw).toBeFocused();
+  const header = await page.getByRole("banner").boundingBox();
+  const box = await withdraw.boundingBox();
+  expect(box!.y).toBeGreaterThanOrEqual(header!.y + header!.height);
+});

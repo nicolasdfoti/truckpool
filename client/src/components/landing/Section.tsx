@@ -18,11 +18,7 @@ export function Section({
   children: ReactNode;
 }) {
   return (
-    <section
-      aria-labelledby={`${id}-titulo`}
-      id={id}
-      className="scroll-mt-20 pt-16 sm:pt-24"
-    >
+    <section aria-labelledby={`${id}-titulo`} id={id} className="pt-16 sm:pt-24">
       <div
         className={`mx-auto max-w-6xl px-4 sm:px-6 ${
           split ? "grid gap-4 lg:grid-cols-[4fr_8fr] lg:gap-10" : ""

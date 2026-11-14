@@ -56,6 +56,22 @@
     outline-offset: 2px;
   }
 
+  /* en Chromium, con el foco en el ícono del calendario de un campo de fecha
+     u hora, el campo no matchea ni :focus-visible ni :focus (el foco está en
+     su shadow DOM) y no se veía nada: lleva el anillo mientras tenga el foco
+     en cualquiera de sus partes */
+  input[type="date"]:focus-within,
+  input[type="time"]:focus-within {
+    outline: 2px solid var(--color-accent-strong);
+    outline-offset: 2px;
+  }
+
+  /* el header es fijo (64 px): lo que recibe el foco, o el destino de un
+     ancla, no queda tapado debajo (WCAG 2.4.11) */
+  html {
+    scroll-padding-top: 5rem;
+  }
+
   /* la plata y los m³ se alinean en columnas */
   body {
     font-feature-settings: "tnum" 1;

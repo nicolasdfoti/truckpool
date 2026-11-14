@@ -144,3 +144,22 @@ test.describe("RD9: /rastrear con un resultado", () => {
     expect(back.height).toBeLessThan(30);
   });
 });
+
+test.describe("Repaso del gate (rediseño A)", () => {
+  // la campana no está pegada al borde: un panel de 320 px anclado a ella se
+  // salía 74 px por la izquierda y los avisos quedaban cortados
+  test("el panel de avisos entra en la pantalla", async ({ page }) => {
+    await loginAs(page, "company");
+    await page.goto("/viajes");
+    const bell = page
+      .getByRole("button", { name: /^notificaciones/ })
+      .locator("visible=true");
+    await bell.click();
+    const panelId = await bell.getAttribute("aria-controls");
+    const panel = page.locator(`[id="${panelId}"]`);
+    await expect(panel).toBeVisible();
+    await expectInsideViewport(panel);
+    await expectInsideViewport(panel.getByText("notificaciones", { exact: true }));
+    expect(await pageWidth(page)).toBeLessThanOrEqual(WIDTH);
+  });
+});
